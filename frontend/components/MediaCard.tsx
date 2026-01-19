@@ -63,7 +63,7 @@ export function MediaCard({ media, onVisible, onViewSource, mode = 'feed', class
           onVisible?.();
           // Record view after a short delay once media is visible
           setTimeout(() => {
-            viewMutation.mutate(media.id);
+            viewMutation.mutate({ mediaId: media.id, sourceId: media.sourceId });
           }, 1000);
         }
       },
@@ -85,17 +85,17 @@ export function MediaCard({ media, onVisible, onViewSource, mode = 'feed', class
 
   const handleLike = async () => {
     setCurrentLiked(!currentLiked);
-    await likeMutation.mutateAsync(media.id);
+    await likeMutation.mutateAsync({ mediaId: media.id, sourceId: media.sourceId });
   };
 
   const handleSave = async () => {
     setCurrentSaved(!currentSaved);
-    await saveMutation.mutateAsync(media.id);
+    await saveMutation.mutateAsync({ mediaId: media.id, sourceId: media.sourceId });
   };
 
   const handleHide = async () => {
     setCurrentHidden(!currentHidden);
-    await hideMutation.mutateAsync(media.id);
+    await hideMutation.mutateAsync({ mediaId: media.id, sourceId: media.sourceId });
   };
 
   // Get media source - use data URL if available, otherwise construct from API

@@ -163,13 +163,13 @@ export function Feed({ initialMode, onViewSource }: FeedProps) {
 
   const handleLike = useCallback(async () => {
     if (currentMedia) {
-      await likeMutation.mutateAsync(currentMedia.id);
+      await likeMutation.mutateAsync({ mediaId: currentMedia.id, sourceId: currentMedia.sourceId });
     }
   }, [currentMedia, likeMutation]);
 
   const handleSave = useCallback(async () => {
     if (currentMedia) {
-      await saveMutation.mutateAsync(currentMedia.id);
+      await saveMutation.mutateAsync({ mediaId: currentMedia.id, sourceId: currentMedia.sourceId });
     }
   }, [currentMedia, saveMutation]);
 
