@@ -4,11 +4,13 @@
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import fastifyStatic from '@fastify/static';
+import fastifyJwt from '@fastify/jwt';
 import { getDatabase, closeDatabase } from './db/index.js';
 import { config } from './config.js';
 import configRoutes from './routes/config.js';
 import indexingRoutes from './routes/indexing.js';
 import filesystemRoutes from './routes/filesystem.js';
+import authRoutes from './routes/auth.js';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
@@ -28,6 +30,20 @@ const fastify = Fastify({
 // Register CORS for LAN access
 await fastify.register(cors, {
   origin: true, // Allow all origins for local network
+});
+
+// Register JWT plugin
+await fastify.register(fastifyJwt, {
+  secret: process.env.JWT_SECRET || 'your-secret-key-change-this-in-production',
+});
+
+// Decorate fastify with authenticate method
+fastify.decorate('authenticate', async function (request: any, reply: any) {
+  try {
+    await request.jwtVerify();
+  } catch (err) {
+    reply.code(401).send({ error: 'Unauthorized' });
+  }
 });
 
 // Serve static frontend files if they exist
@@ -56,6 +72,7 @@ getDatabase();
 await initThumbnailService('./.thumbnails');
 
 // Register routes
+await fastify.register(authRoutes);
 await fastify.register(configRoutes);
 await fastify.register(indexingRoutes);
 await fastify.register(feedRoutes);
