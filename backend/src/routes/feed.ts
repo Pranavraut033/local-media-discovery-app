@@ -12,10 +12,16 @@ interface FeedQuery {
   page?: string;
   limit?: string;
   lastSourceId?: string;
+  sourceId?: string;
 }
 
 interface InteractionBody {
   mediaId: string;
+  sourceId: string;
+}
+
+interface AuthenticatedRequest extends FastifyRequest {
+  user: { userId: string };
 }
 
 export default async function feedRoutes(fastify: FastifyInstance): Promise<void> {
@@ -24,13 +30,18 @@ export default async function feedRoutes(fastify: FastifyInstance): Promise<void
   // Get paginated feed
   fastify.get<{ Querystring: FeedQuery }>(
     '/api/feed',
-    async (request: FastifyRequest<{ Querystring: FeedQuery }>, reply: FastifyReply) => {
+    {
+      onRequest: [fastify.authenticate as any],
+    },
+    async (request: AuthenticatedRequest & { Querystring: FeedQuery }, reply: FastifyReply) => {
       try {
         const page = parseInt(request.query.page || '0', 10);
         const limit = Math.min(parseInt(request.query.limit || '20', 10), 100); // Max 100
         const lastSourceId = request.query.lastSourceId;
+        const sourceId = request.query.sourceId;
+        const userId = request.user.userId;
 
-        const feedData = generatePaginatedFeed(db, page, limit, lastSourceId);
+        const feedData = generatePaginatedFeed(db, page, limit, lastSourceId, userId, sourceId);
 
         return {
           success: true,
@@ -126,31 +137,47 @@ export default async function feedRoutes(fastify: FastifyInstance): Promise<void
   // Like a media item
   fastify.post<{ Body: InteractionBody }>(
     '/api/like',
-    async (request: FastifyRequest<{ Body: InteractionBody }>, reply: FastifyReply) => {
-      const { mediaId } = request.body;
+    {
+      onRequest: [fastify.authenticate as any],
+    },
+    async (request: AuthenticatedRequest & { Body: InteractionBody }, reply: FastifyReply) => {
+      const { mediaId, sourceId } = request.body;
+      const userId = request.user.userId;
 
-      if (!mediaId || typeof mediaId !== 'string') {
-        return reply.code(400).send({ error: 'Invalid media ID' });
+      if (!mediaId || typeof mediaId !== 'string' || !sourceId) {
+        return reply.code(400).send({ error: 'Invalid media ID or source ID' });
       }
 
       try {
-        // Toggle like status
-        const media = db.prepare('SELECT liked FROM media WHERE id = ?').get(mediaId) as {
-          liked: number;
-        } | undefined;
+        // Check if interaction exists
+        const interaction = db.prepare(
+          'SELECT liked FROM user_interactions WHERE user_id = ? AND source_id = ? AND media_id = ?'
+        ).get(userId, sourceId, mediaId) as { liked: number } | undefined;
 
-        if (!media) {
-          return reply.code(404).send({ error: 'Media not found' });
+        if (interaction) {
+          // Toggle like status
+          const newLikedStatus = interaction.liked === 1 ? 0 : 1;
+          db.prepare(
+            'UPDATE user_interactions SET liked = ? WHERE user_id = ? AND source_id = ? AND media_id = ?'
+          ).run(newLikedStatus, userId, sourceId, mediaId);
+
+          return {
+            success: true,
+            mediaId,
+            liked: newLikedStatus === 1,
+          };
+        } else {
+          // Create new interaction with like
+          db.prepare(
+            'INSERT INTO user_interactions (user_id, source_id, media_id, liked) VALUES (?, ?, ?, 1)'
+          ).run(userId, sourceId, mediaId);
+
+          return {
+            success: true,
+            mediaId,
+            liked: true,
+          };
         }
-
-        const newLikedStatus = media.liked === 1 ? 0 : 1;
-        db.prepare('UPDATE media SET liked = ? WHERE id = ?').run(newLikedStatus, mediaId);
-
-        return {
-          success: true,
-          mediaId,
-          liked: newLikedStatus === 1,
-        };
       } catch (error) {
         console.error('Like error:', error);
         return reply.code(500).send({
@@ -164,31 +191,47 @@ export default async function feedRoutes(fastify: FastifyInstance): Promise<void
   // Save a media item
   fastify.post<{ Body: InteractionBody }>(
     '/api/save',
-    async (request: FastifyRequest<{ Body: InteractionBody }>, reply: FastifyReply) => {
-      const { mediaId } = request.body;
+    {
+      onRequest: [fastify.authenticate as any],
+    },
+    async (request: AuthenticatedRequest & { Body: InteractionBody }, reply: FastifyReply) => {
+      const { mediaId, sourceId } = request.body;
+      const userId = request.user.userId;
 
-      if (!mediaId || typeof mediaId !== 'string') {
-        return reply.code(400).send({ error: 'Invalid media ID' });
+      if (!mediaId || typeof mediaId !== 'string' || !sourceId) {
+        return reply.code(400).send({ error: 'Invalid media ID or source ID' });
       }
 
       try {
-        // Toggle save status
-        const media = db.prepare('SELECT saved FROM media WHERE id = ?').get(mediaId) as {
-          saved: number;
-        } | undefined;
+        // Check if interaction exists
+        const interaction = db.prepare(
+          'SELECT saved FROM user_interactions WHERE user_id = ? AND source_id = ? AND media_id = ?'
+        ).get(userId, sourceId, mediaId) as { saved: number } | undefined;
 
-        if (!media) {
-          return reply.code(404).send({ error: 'Media not found' });
+        if (interaction) {
+          // Toggle save status
+          const newSavedStatus = interaction.saved === 1 ? 0 : 1;
+          db.prepare(
+            'UPDATE user_interactions SET saved = ? WHERE user_id = ? AND source_id = ? AND media_id = ?'
+          ).run(newSavedStatus, userId, sourceId, mediaId);
+
+          return {
+            success: true,
+            mediaId,
+            saved: newSavedStatus === 1,
+          };
+        } else {
+          // Create new interaction with save
+          db.prepare(
+            'INSERT INTO user_interactions (user_id, source_id, media_id, saved) VALUES (?, ?, ?, 1)'
+          ).run(userId, sourceId, mediaId);
+
+          return {
+            success: true,
+            mediaId,
+            saved: true,
+          };
         }
-
-        const newSavedStatus = media.saved === 1 ? 0 : 1;
-        db.prepare('UPDATE media SET saved = ? WHERE id = ?').run(newSavedStatus, mediaId);
-
-        return {
-          success: true,
-          mediaId,
-          saved: newSavedStatus === 1,
-        };
       } catch (error) {
         console.error('Save error:', error);
         return reply.code(500).send({
@@ -202,21 +245,39 @@ export default async function feedRoutes(fastify: FastifyInstance): Promise<void
   // Record a view
   fastify.post<{ Body: InteractionBody }>(
     '/api/view',
-    async (request: FastifyRequest<{ Body: InteractionBody }>, reply: FastifyReply) => {
-      const { mediaId } = request.body;
+    {
+      onRequest: [fastify.authenticate as any],
+    },
+    async (request: AuthenticatedRequest & { Body: InteractionBody }, reply: FastifyReply) => {
+      const { mediaId, sourceId } = request.body;
+      const userId = request.user.userId;
 
-      if (!mediaId || typeof mediaId !== 'string') {
-        return reply.code(400).send({ error: 'Invalid media ID' });
+      if (!mediaId || typeof mediaId !== 'string' || !sourceId) {
+        return reply.code(400).send({ error: 'Invalid media ID or source ID' });
       }
 
       try {
         const now = Math.floor(Date.now() / 1000);
-        db.prepare(
-          `UPDATE media SET 
-           view_count = view_count + 1,
-           last_viewed = ?
-           WHERE id = ?`
-        ).run(now, mediaId);
+        
+        // Check if interaction exists
+        const interaction = db.prepare(
+          'SELECT view_count FROM user_interactions WHERE user_id = ? AND source_id = ? AND media_id = ?'
+        ).get(userId, sourceId, mediaId);
+
+        if (interaction) {
+          // Update existing interaction
+          db.prepare(
+            `UPDATE user_interactions SET 
+             view_count = view_count + 1,
+             last_viewed = ?
+             WHERE user_id = ? AND source_id = ? AND media_id = ?`
+          ).run(now, userId, sourceId, mediaId);
+        } else {
+          // Create new interaction with view
+          db.prepare(
+            'INSERT INTO user_interactions (user_id, source_id, media_id, view_count, last_viewed) VALUES (?, ?, ?, 1, ?)'
+          ).run(userId, sourceId, mediaId, now);
+        }
 
         return {
           success: true,
@@ -302,124 +363,142 @@ export default async function feedRoutes(fastify: FastifyInstance): Promise<void
   );
 
   // Get all saved items
-  fastify.get('/api/saved', async (request: FastifyRequest, reply: FastifyReply) => {
-    try {
-      const savedMedia = db
-        .prepare(
-          `
-        SELECT 
-          m.id,
-          m.path,
-          m.type,
-          m.source_id as sourceId,
-          m.liked,
-          m.saved,
-          m.view_count as viewCount,
-          m.last_viewed as lastViewed,
-          s.display_name as displayName,
-          s.avatar_seed as avatarSeed
-        FROM media m
-        JOIN sources s ON m.source_id = s.id
-        WHERE m.saved = 1
-        ORDER BY m.last_viewed DESC
-      `
-        )
-        .all() as Array<{
-          id: string;
-          path: string;
-          type: string;
-          sourceId: string;
-          liked: number;
-          saved: number;
-          viewCount: number;
-          lastViewed: number | null;
-          displayName: string;
-          avatarSeed: string;
-        }>;
+  fastify.get(
+    '/api/saved',
+    {
+      onRequest: [fastify.authenticate as any],
+    },
+    async (request: AuthenticatedRequest, reply: FastifyReply) => {
+      const userId = request.user.userId;
+      
+      try {
+        const savedMedia = db
+          .prepare(
+            `
+          SELECT 
+            m.id,
+            m.path,
+            m.type,
+            m.source_id as sourceId,
+            ui.liked,
+            ui.saved,
+            ui.view_count as viewCount,
+            ui.last_viewed as lastViewed,
+            s.display_name as displayName,
+            s.avatar_seed as avatarSeed
+          FROM media m
+          JOIN sources s ON m.source_id = s.id
+          JOIN user_interactions ui ON m.id = ui.media_id AND m.source_id = ui.source_id
+          WHERE ui.user_id = ? AND ui.saved = 1
+          ORDER BY ui.last_viewed DESC
+        `
+          )
+          .all(userId) as Array<{
+            id: string;
+            path: string;
+            type: string;
+            sourceId: string;
+            liked: number;
+            saved: number;
+            viewCount: number;
+            lastViewed: number | null;
+            displayName: string;
+            avatarSeed: string;
+          }>;
 
-      return {
-        success: true,
-        savedMedia: savedMedia.map((m) => ({
-          id: m.id,
-          path: m.path,
-          type: m.type,
-          sourceId: m.sourceId,
-          displayName: m.displayName,
-          avatarSeed: m.avatarSeed,
-          liked: m.liked === 1,
-          saved: m.saved === 1,
-          viewCount: m.viewCount,
-          lastViewed: m.lastViewed,
-        })),
-      };
-    } catch (error) {
-      console.error('Get saved error:', error);
-      return reply.code(500).send({
-        error: 'Failed to get saved media',
-        message: error instanceof Error ? error.message : 'Unknown error',
-      });
+        return {
+          success: true,
+          savedMedia: savedMedia.map((m) => ({
+            id: m.id,
+            path: m.path,
+            type: m.type,
+            sourceId: m.sourceId,
+            displayName: m.displayName,
+            avatarSeed: m.avatarSeed,
+            liked: m.liked === 1,
+            saved: m.saved === 1,
+            viewCount: m.viewCount,
+            lastViewed: m.lastViewed,
+          })),
+        };
+      } catch (error) {
+        console.error('Get saved error:', error);
+        return reply.code(500).send({
+          error: 'Failed to get saved media',
+          message: error instanceof Error ? error.message : 'Unknown error',
+        });
+      }
     }
-  });
+  );
 
   // Get all liked items
-  fastify.get('/api/liked', async (request: FastifyRequest, reply: FastifyReply) => {
-    try {
-      const likedMedia = db
-        .prepare(
-          `
-        SELECT 
-          m.id,
-          m.path,
-          m.type,
-          m.source_id as sourceId,
-          m.liked,
-          m.saved,
-          m.view_count as viewCount,
-          m.last_viewed as lastViewed,
-          s.display_name as displayName,
-          s.avatar_seed as avatarSeed
-        FROM media m
-        JOIN sources s ON m.source_id = s.id
-        WHERE m.liked = 1
-        ORDER BY m.last_viewed DESC
-      `
-        )
-        .all() as Array<{
-          id: string;
-          path: string;
-          type: string;
-          sourceId: string;
-          liked: number;
-          saved: number;
-          viewCount: number;
-          lastViewed: number | null;
-          displayName: string;
-          avatarSeed: string;
-        }>;
+  fastify.get(
+    '/api/liked',
+    {
+      onRequest: [fastify.authenticate as any],
+    },
+    async (request: AuthenticatedRequest, reply: FastifyReply) => {
+      const userId = request.user.userId;
+      
+      try {
+        const likedMedia = db
+          .prepare(
+            `
+          SELECT 
+            m.id,
+            m.path,
+            m.type,
+            m.source_id as sourceId,
+            ui.liked,
+            ui.saved,
+            ui.view_count as viewCount,
+            ui.last_viewed as lastViewed,
+            s.display_name as displayName,
+            s.avatar_seed as avatarSeed
+          FROM media m
+          JOIN sources s ON m.source_id = s.id
+          JOIN user_interactions ui ON m.id = ui.media_id AND m.source_id = ui.source_id
+          WHERE ui.user_id = ? AND ui.liked = 1
+          ORDER BY ui.last_viewed DESC
+        `
+          )
+          .all(userId) as Array<{
+            id: string;
+            path: string;
+            type: string;
+            sourceId: string;
+            liked: number;
+            saved: number;
+            viewCount: number;
+            lastViewed: number | null;
+            displayName: string;
+            avatarSeed: string;
+          }>;
 
-      return {
-        success: true,
-        likedMedia: likedMedia.map((m) => ({
-          id: m.id,
-          path: m.path,
-          type: m.type,
-          sourceId: m.sourceId,
-          displayName: m.displayName,
-          avatarSeed: m.avatarSeed,
-          liked: m.liked === 1,
-          saved: m.saved === 1,
-          viewCount: m.viewCount,
-          lastViewed: m.lastViewed,
-        })),
-      };
-    } catch (error) {
-      console.error('Get liked error:', error);
-      return reply.code(500).send({
-        error: 'Failed to get liked media',
-        message: error instanceof Error ? error.message : 'Unknown error',
-      });
+        return {
+          success: true,
+          likedMedia: likedMedia.map((m) => ({
+            id: m.id,
+            path: m.path,
+            type: m.type,
+            sourceId: m.sourceId,
+            displayName: m.displayName,
+            avatarSeed: m.avatarSeed,
+            liked: m.liked === 1,
+            saved: m.saved === 1,
+            viewCount: m.viewCount,
+            lastViewed: m.lastViewed,
+          })),
+        };
+      } catch (error) {
+        console.error('Get liked error:', error);
+        return reply.code(500).send({
+          error: 'Failed to get liked media',
+          message: error instanceof Error ? error.message : 'Unknown error',
+        });
+      }
     }
-  });
+  );
 
   // Serve media file with streaming support
   fastify.get<{ Params: { id: string } }>(
@@ -515,31 +594,47 @@ export default async function feedRoutes(fastify: FastifyInstance): Promise<void
   // Hide/unhide a media item
   fastify.post<{ Body: InteractionBody }>(
     '/api/hide',
-    async (request: FastifyRequest<{ Body: InteractionBody }>, reply: FastifyReply) => {
-      const { mediaId } = request.body;
+    {
+      onRequest: [fastify.authenticate as any],
+    },
+    async (request: AuthenticatedRequest & { Body: InteractionBody }, reply: FastifyReply) => {
+      const { mediaId, sourceId } = request.body;
+      const userId = request.user.userId;
 
-      if (!mediaId || typeof mediaId !== 'string') {
-        return reply.code(400).send({ error: 'Invalid media ID' });
+      if (!mediaId || typeof mediaId !== 'string' || !sourceId) {
+        return reply.code(400).send({ error: 'Invalid media ID or source ID' });
       }
 
       try {
-        // Toggle hide status
-        const media = db.prepare('SELECT hidden FROM media WHERE id = ?').get(mediaId) as {
-          hidden: number;
-        } | undefined;
+        // Check if interaction exists
+        const interaction = db.prepare(
+          'SELECT hidden FROM user_interactions WHERE user_id = ? AND source_id = ? AND media_id = ?'
+        ).get(userId, sourceId, mediaId) as { hidden: number } | undefined;
 
-        if (!media) {
-          return reply.code(404).send({ error: 'Media not found' });
+        if (interaction) {
+          // Toggle hide status
+          const newHiddenStatus = interaction.hidden === 1 ? 0 : 1;
+          db.prepare(
+            'UPDATE user_interactions SET hidden = ? WHERE user_id = ? AND source_id = ? AND media_id = ?'
+          ).run(newHiddenStatus, userId, sourceId, mediaId);
+
+          return {
+            success: true,
+            mediaId,
+            hidden: newHiddenStatus === 1,
+          };
+        } else {
+          // Create new interaction with hidden
+          db.prepare(
+            'INSERT INTO user_interactions (user_id, source_id, media_id, hidden) VALUES (?, ?, ?, 1)'
+          ).run(userId, sourceId, mediaId);
+
+          return {
+            success: true,
+            mediaId,
+            hidden: true,
+          };
         }
-
-        const newHiddenStatus = media.hidden === 1 ? 0 : 1;
-        db.prepare('UPDATE media SET hidden = ? WHERE id = ?').run(newHiddenStatus, mediaId);
-
-        return {
-          success: true,
-          mediaId,
-          hidden: newHiddenStatus === 1,
-        };
       } catch (error) {
         console.error('Hide error:', error);
         return reply.code(500).send({
@@ -553,7 +648,12 @@ export default async function feedRoutes(fastify: FastifyInstance): Promise<void
   // Get hidden media items
   fastify.get(
     '/api/hidden',
-    async (request: FastifyRequest, reply: FastifyReply) => {
+    {
+      onRequest: [fastify.authenticate as any],
+    },
+    async (request: AuthenticatedRequest, reply: FastifyReply) => {
+      const userId = request.user.userId;
+      
       try {
         const hiddenMedia = db
           .prepare(
@@ -563,20 +663,21 @@ export default async function feedRoutes(fastify: FastifyInstance): Promise<void
             m.path,
             m.type,
             m.source_id as sourceId,
-            m.liked,
-            m.saved,
-            m.view_count as viewCount,
-            m.last_viewed as lastViewed,
+            ui.liked,
+            ui.saved,
+            ui.view_count as viewCount,
+            ui.last_viewed as lastViewed,
             m.depth,
             s.display_name as displayName,
             s.avatar_seed as avatarSeed
           FROM media m
           JOIN sources s ON m.source_id = s.id
-          WHERE m.hidden = 1
-          ORDER BY m.last_viewed DESC NULLS LAST, m.created_at DESC
+          JOIN user_interactions ui ON m.id = ui.media_id AND m.source_id = ui.source_id
+          WHERE ui.user_id = ? AND ui.hidden = 1
+          ORDER BY ui.last_viewed DESC NULLS LAST, m.created_at DESC
         `
           )
-          .all() as Array<{
+          .all(userId) as Array<{
             id: string;
             path: string;
             type: string;
