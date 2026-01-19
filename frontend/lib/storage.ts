@@ -9,6 +9,8 @@ const STORAGE_KEYS = {
   SCROLL_POSITION: 'app_scroll_position',
   PREFERENCES: 'app_preferences',
   RECENT_FOLDERS: 'app_recent_folders',
+  ROOT_FOLDER: 'app_root_folder',
+  AUTH_TOKEN: 'app_auth_token',
 } as const;
 
 export type ViewMode = 'reels' | 'feed';
@@ -192,5 +194,61 @@ export const clearRecentFolders = (): void => {
     localStorage.removeItem(STORAGE_KEYS.RECENT_FOLDERS);
   } catch (error) {
     console.warn('Failed to clear recent folders:', error);
+  }
+};
+
+// Get/Set Root Folder (for privacy - stored locally, not on backend)
+export const getRootFolder = (): string | null => {
+  if (typeof window === 'undefined') return null;
+  try {
+    return localStorage.getItem(STORAGE_KEYS.ROOT_FOLDER);
+  } catch {
+    return null;
+  }
+};
+
+export const setRootFolder = (path: string): void => {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(STORAGE_KEYS.ROOT_FOLDER, path);
+  } catch (error) {
+    console.warn('Failed to save root folder:', error);
+  }
+};
+
+export const clearRootFolder = (): void => {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.removeItem(STORAGE_KEYS.ROOT_FOLDER);
+  } catch (error) {
+    console.warn('Failed to clear root folder:', error);
+  }
+};
+
+// Auth Token Management
+export const getStoredToken = (): string | null => {
+  if (typeof window === 'undefined') return null;
+  try {
+    return localStorage.getItem(STORAGE_KEYS.AUTH_TOKEN);
+  } catch {
+    return null;
+  }
+};
+
+export const storeToken = (token: string): void => {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(STORAGE_KEYS.AUTH_TOKEN, token);
+  } catch (error) {
+    console.warn('Failed to store auth token:', error);
+  }
+};
+
+export const removeToken = (): void => {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.removeItem(STORAGE_KEYS.AUTH_TOKEN);
+  } catch (error) {
+    console.warn('Failed to remove auth token:', error);
   }
 };
