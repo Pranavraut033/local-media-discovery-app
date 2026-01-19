@@ -5,9 +5,9 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Settings as SettingsIcon, ArrowLeft, RotateCw, Eye } from 'lucide-react';
-import { getPreferences, setPreferences, ViewMode } from '@/lib/storage';
-import { getApiBase } from '@/lib/api';
+import { Settings as SettingsIcon, ArrowLeft, RotateCw, Eye, LogOut } from 'lucide-react';
+import { getPreferences, setPreferences, ViewMode, clearRecentFolders, getRootFolder, clearRootFolder } from '@/lib/storage';
+import { getApiBase, authenticatedFetch } from '@/lib/api';
 
 interface AppStats {
   totalMedia: number;
@@ -30,6 +30,7 @@ export function Settings({ onBack, onViewHidden }: SettingsProps) {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [isResetting, setIsResetting] = useState(false);
 
   // Load preferences and stats on mount
   useEffect(() => {
@@ -42,14 +43,13 @@ export function Settings({ onBack, onViewHidden }: SettingsProps) {
         const prefs = getPreferences();
         setLocalPreferences(prefs);
 
+        // Get root folder from localStorage (stored locally for privacy)
+        const rootFolder = getRootFolder();
+
         // Load stats from API
         const statsResponse = await fetch(`${API_URL}/api/admin/stats`);
         if (statsResponse.ok) {
           const statsData = await statsResponse.json();
-
-          // Get root folder
-          const folderResponse = await fetch(`${API_URL}/api/config/root-folder`);
-          const folderData = await folderResponse.json();
 
           // Get hidden count
           const hiddenResponse = await fetch(`${API_URL}/api/hidden`);
@@ -61,7 +61,7 @@ export function Settings({ onBack, onViewHidden }: SettingsProps) {
             likedCount: statsData.liked_count || 0,
             savedCount: statsData.saved_count || 0,
             hiddenCount: hiddenData.count || 0,
-            rootFolder: folderData.rootFolder || 'Not set',
+            rootFolder: rootFolder || 'Not set',
           });
         }
       } catch (err) {
@@ -100,6 +100,41 @@ export function Settings({ onBack, onViewHidden }: SettingsProps) {
     setLocalPreferences(updated);
     setPreferences({ showSourceBadge: !preferences.showSourceBadge });
     setTimeout(() => setIsSaving(false), 300);
+  };
+
+  const handleResetRootFolder = async () => {
+    if (!confirm('Are you sure you want to reset the root folder? This will clear all indexed media and you will need to select a folder again.')) {
+      return;
+    }
+
+    try {
+      setIsResetting(true);
+      setError(null);
+
+      // Call the API to clear the backend database
+      const response = await authenticatedFetch(`${API_URL}/api/config/root-folder`, {
+        method: 'DELETE',
+      });
+
+      if (response.ok) {
+        // Clear root folder from localStorage (where it's actually stored)
+        clearRootFolder();
+
+        // Clear recent folders from local storage
+        clearRecentFolders();
+
+        // Reload the page to return to folder selection
+        window.location.reload();
+      } else {
+        const errorData = await response.json();
+        setError(errorData.error || 'Failed to reset root folder');
+      }
+    } catch (err) {
+      console.error('Failed to reset root folder:', err);
+      setError('Failed to reset root folder');
+    } finally {
+      setIsResetting(false);
+    }
   };
 
   if (isLoading) {
@@ -217,11 +252,36 @@ export function Settings({ onBack, onViewHidden }: SettingsProps) {
         )}
 
         {/* Root Folder */}
-        <div className="mb-8 p-4 bg-gray-50 dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700">
-          <p className="text-sm text-gray-600 dark:text-gray-400 font-medium mb-2">Root Folder</p>
-          <p className="text-gray-900 dark:text-white font-mono text-sm break-all">
-            {stats?.rootFolder || 'Not set'}
-          </p>
+        <div className="mb-8">
+          <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Root Folder</h2>
+          <div className="p-4 bg-gray-50 dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700">
+            <div className="mb-3">
+              <p className="text-sm text-gray-600 dark:text-gray-400 font-medium mb-2">Current Folder</p>
+              <p className="text-gray-900 dark:text-white font-mono text-sm break-all">
+                {stats?.rootFolder || 'Not set'}
+              </p>
+            </div>
+            <button
+              onClick={handleResetRootFolder}
+              disabled={isResetting || !stats?.rootFolder || stats.rootFolder === 'Not set'}
+              className="w-full bg-red-600 hover:bg-red-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg transition-colors font-medium flex items-center justify-center gap-2"
+            >
+              {isResetting ? (
+                <>
+                  <RotateCw size={16} className="animate-spin" />
+                  Resetting...
+                </>
+              ) : (
+                <>
+                  <LogOut size={16} />
+                  Reset Root Folder
+                </>
+              )}
+            </button>
+            <p className="text-xs text-gray-500 dark:text-gray-500 mt-2">
+              This will clear all indexed media and return you to the folder selection screen.
+            </p>
+          </div>
         </div>
 
         {/* Display Preferences */}
