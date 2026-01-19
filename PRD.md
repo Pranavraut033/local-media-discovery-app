@@ -31,29 +31,77 @@ The application treats folders as **structural data only**, not semantic categor
 
 ### 2.2 Non-Goals
 
-* No real user accounts or authentication
 * No cloud sync or networking
 * No comments, followers, or messaging
 * No semantic interpretation of folder names
 
 ---
 
-## 3. Target Platform
+## 3. Authentication & User Management
+
+### 3.1 PIN-Based Authentication
+
+* **6-digit numeric PIN** for local user authentication
+* Long-lived JWT tokens (30-day validity)
+* Persistent sessions via localStorage
+* Secure PIN storage using bcrypt hashing
+
+### 3.2 User-Scoped Data
+
+* **Folders**: Each user has their own set of indexed folders
+* **Interactions**: Likes, saves, hidden items, and view counts are per-user and per-folder
+* **Privacy**: Users cannot see each other's data
+* **Multi-user support**: Multiple users can be created on the same system
+
+### 3.3 Initial Setup
+
+* CLI script for creating users: `npm run create-user <6-digit-pin>`
+* First-time login shows PIN entry screen
+* Default user created automatically for migration from previous versions
+
+---
+
+## 3. Authentication & User Management
+
+### 3.1 PIN-Based Authentication
+
+* **6-digit numeric PIN** for local user authentication
+* Long-lived JWT tokens (30-day validity)
+* Persistent sessions via localStorage
+* Secure PIN storage using bcrypt hashing
+
+### 3.2 User-Scoped Data
+
+* **Folders**: Each user has their own set of indexed folders
+* **Interactions**: Likes, saves, hidden items, and view counts are per-user and per-folder
+* **Privacy**: Users cannot see each other's data
+* **Multi-user support**: Multiple users can be created on the same system
+
+### 3.3 Initial Setup
+
+* CLI script for creating users: `npm run create-user <6-digit-pin>`
+* First-time login shows PIN entry screen
+* Default user created automatically for migration from previous versions
+
+---
+
+## 4. Target Platform
 
 * **Mobile-first (primary UX target)**
 * Desktop (host and secondary client)
 
-### 3.1 Mobile-First Principle
+### 4.1 Mobile-First Principle
 
 * All UX decisions must prioritize **mobile screens, touch input, and one-handed usage**
 * Desktop UI is an adaptive extension of the mobile UI, not a separate design
 * Reels-style vertical consumption is the default interaction model
 
-### 3.2 Access Model
+### 4.2 Access Model
 
 * Application runs as a **local service** on the host machine
 * Service is accessible via **URL over local network** (LAN)
-* Mobile devices (phone/tablet) access the app through a browser using the host’s IP address and port
+* Mobile devices (phone/tablet) access the app through a browser using the host's IP address and port
+* **Authentication required**: PIN login on first access
 
 Example:
 
@@ -61,7 +109,7 @@ Example:
 http://<local-ip>:<port>
 ```
 
-### 3.3 Supported Clients
+### 4.3 Supported Clients
 
 * Mobile browsers (iOS Safari, Android Chrome) — **primary**
 * Desktop browsers (Chrome, Firefox, Safari)
@@ -69,12 +117,13 @@ http://<local-ip>:<port>
 
 ---
 
-## 4. Functional Requirements
+## 5. Functional Requirements
 
-### 4.1 Media Indexing
+### 5.1 Media Indexing
 
-* User selects a **root folder**
+* User selects a **root folder** (after authentication)
 * System recursively scans all subfolders
+* **User-scoped indexing**: Folders are associated with the authenticated user
 * Supported media types:
 
   * Images (jpg, png, webp)
@@ -95,7 +144,7 @@ Indexing must:
 
 ---
 
-### 4.2 Source (Pseudo User) System
+### 5.2 Source (Pseudo User) System
 
 #### Definition
 
@@ -118,7 +167,7 @@ A **Source** is a deterministic, fictional identity representing a structural co
 
 ---
 
-### 4.3 Feed & Discovery Engine
+### 5.3 Feed & Discovery Engine
 
 #### Feed Modes
 
@@ -139,19 +188,22 @@ No semantic tags or categories are used.
 
 ---
 
-### 4.4 User Interactions
+### 5.4 User Interactions
 
-Supported interactions:
+Supported interactions (all user-scoped and folder-scoped):
 
-* Like (❤️)
-* Save (🔖)
-* View history tracking
+* Like (❤️) - per user, per folder, per media
+* Save (🔖) - per user, per folder, per media
+* Hide - per user, per folder, per media
+* View history tracking - per user, per folder, per media
 
-Stored locally and used to influence discovery ranking.
+All interactions stored in `user_interactions` table with composite key `(user_id, source_id, media_id)`.
+
+Stored locally and used to influence discovery ranking for that user.
 
 ---
 
-### 4.5 Navigation & Controls
+### 5.5 Navigation & Controls
 
 Mobile-first interaction rules:
 
@@ -175,9 +227,9 @@ Optional:
 
 ---
 
-## 5. Non-Functional Requirements
+## 6. Non-Functional Requirements
 
-### 5.1 Performance
+### 6.1 Performance
 
 * Optimized for **mobile browsers**
 * Lazy loading of media
@@ -186,16 +238,20 @@ Optional:
 * Aggressive memory management
 * Preloading next items with bandwidth awareness
 
-### 5.2 Reliability
+### 6.2 Reliability
 
 * No data loss on restart
 * Safe handling of deleted/moved files
 
-### 5.3 Privacy & Security
+### 6.3 Privacy & Security
 
 * No external network calls
 * No telemetry by default
 * All data stored locally
+* **PIN-based authentication** for user access control
+* **bcrypt hashing** for secure PIN storage
+* **JWT tokens** with 30-day expiration for session management
+* **User isolation**: Each user's data is completely separate
 
 ---
 

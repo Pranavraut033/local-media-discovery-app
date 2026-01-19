@@ -6,6 +6,7 @@ A local-first, web-based media discovery application that transforms your media 
 
 - 📱 **Mobile-first design** - Access from any device on your local network
 - 🔒 **100% local and private** - No internet required, all data stays on your machine
+- 🔐 **Privacy-first architecture** - Root folder path stored in browser localStorage, never on the backend
 - 🎬 **Media support** - Images (JPG, PNG, WebP, GIF) and videos (MP4, WebM, MOV, MKV)
 - 🎯 **Smart discovery algorithm** - Unseen priority, source diversity, like/save bias
 - ❤️ **Like and save** - Track your favorite media with optimistic updates
@@ -185,8 +186,8 @@ local-media-discovery-app/
 ## 📁 API Endpoints
 
 **Configuration:**
-- `GET /api/config/root-folder` - Get current root folder
-- `POST /api/config/root-folder` - Set root folder
+- `POST /api/config/root-folder` - Set root folder and trigger indexing (path sent from frontend, not stored on backend)
+- `DELETE /api/config/root-folder` - Clear database (root folder stored in browser localStorage)
 
 **Filesystem:**
 - `GET /api/filesystem/roots` - Get common root directories

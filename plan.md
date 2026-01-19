@@ -27,6 +27,8 @@ Served over HTTP on LAN (mobile browser primary). Tauri desktop app is optional 
 - ffmpeg-static + fluent-ffmpeg (video thumbnails)
 - nanoid or crypto (ID/hash generation)
 - fs/promises, path
+- **bcrypt** (PIN hashing)
+- **@fastify/jwt** (JWT authentication)
 
 
 **Frontend**
@@ -38,6 +40,7 @@ Served over HTTP on LAN (mobile browser primary). Tauri desktop app is optional 
 - lucide-react (icons)
 - @use-gesture/react (gesture handling)
 - react-player (video playback)
+- **react-hook-form** (PIN form handling)
 
 **Desktop Packaging**
 - Tauri
@@ -195,6 +198,107 @@ Served over HTTP on LAN (mobile browser primary). Tauri desktop app is optional 
 ---
 
 
+---
+
+## Phase 6: Authentication & User Management (COMPLETED ✅)
+
+1. **Database Schema Updates** ✅
+   - Added `users` table with hashed 6-digit PINs
+   - Added `user_folders` table to link users to folders
+   - Added `user_interactions` table with `(user_id, source_id, media_id)` composite key
+   - Implemented automatic migration of existing data to default user
+
+2. **PIN Authentication Backend** ✅
+   - Installed bcrypt and @fastify/jwt
+   - Created authentication routes:
+     - `POST /api/auth/login` - 6-digit PIN authentication
+     - `POST /api/auth/verify` - JWT token verification
+     - `GET /api/auth/check-setup` - Check if users exist
+   - Registered JWT plugin with authenticate middleware
+   - Created CLI script: `npm run create-user <pin>`
+
+3. **User-Scoped Operations** ✅
+   - Updated sources service to associate folders with users
+   - Updated indexing routes to require authentication
+   - Updated feed service to use `user_interactions` table
+   - All interactions now include `userId` and `sourceId`
+   - Query endpoints filter by authenticated user
+
+4. **Frontend Authentication** ✅
+   - Installed react-hook-form
+   - Created authentication context with JWT management
+   - Built PIN login screen with 6-digit input
+   - Updated main page to show login on unauthenticated access
+   - Implemented long-lived session storage (30 days)
+
+5. **API Client Updates** ✅
+   - Created `authenticatedFetch` wrapper for JWT tokens
+   - Updated all API hooks to use authenticated fetch
+   - Modified mutation hooks to accept `sourceId`
+   - Updated components to pass `sourceId` to mutations
+   - Automatic token refresh and 401 handling
+
+---
+
+## Backend API Endpoints (Explicit)
+
+**Authentication**
+- `POST /api/auth/login` - Authenticate with 6-digit PIN
+- `POST /api/auth/verify` - Verify JWT token
+- `GET /api/auth/check-setup` - Check if users exist
+
+**Feed & Media** (All require authentication)
+- `GET /api/feed?page=0&limit=20&sourceId=xyz` - Get paginated feed (user-scoped)
+- `POST /api/like` - Toggle like (requires mediaId + sourceId)
+- `POST /api/save` - Toggle save (requires mediaId + sourceId)
+- `POST /api/hide` - Toggle hide (requires mediaId + sourceId)
+- `POST /api/view` - Record view (requires mediaId + sourceId)
+- `GET /api/media/:id` - Get media metadata
+- `GET /api/media/file/:id` - Serve media file
+- `GET /api/saved` - Get saved items (user-scoped)
+- `GET /api/liked` - Get liked items (user-scoped)
+- `GET /api/hidden` - Get hidden items (user-scoped)
+
+**Sources & Indexing** (All require authentication)
+- `GET /api/sources` - Get user's folders
+- `POST /api/index` - Index root folder (user-scoped)
+
+REST API includes JWT validation, error handling. All endpoints are local-only, served over HTTP on LAN.
+
+---
+
+## Database Schema
+
+**users**
+- id (TEXT, PRIMARY KEY)
+- pin_hash (TEXT, bcrypt hashed)
+- created_at (INTEGER)
+
+**user_folders**
+- user_id (TEXT, FOREIGN KEY)
+- source_id (TEXT, FOREIGN KEY)
+- created_at (INTEGER)
+- PRIMARY KEY (user_id, source_id)
+
+**user_interactions**
+- user_id (TEXT, FOREIGN KEY)
+- source_id (TEXT, FOREIGN KEY)
+- media_id (TEXT, FOREIGN KEY)
+- liked (INTEGER, default 0)
+- saved (INTEGER, default 0)
+- hidden (INTEGER, default 0)
+- view_count (INTEGER, default 0)
+- last_viewed (INTEGER, nullable)
+- PRIMARY KEY (user_id, source_id, media_id)
+
+**sources** (unchanged)
+- id, folder_path, display_name, avatar_seed, created_at
+
+**media** (unchanged - interactions moved to user_interactions)
+- id, path, source_id, depth, type, created_at
+
+---
+
 ## Backend API Endpoints (Explicit)
 
 - `GET /feed` (Reels mode primary, Feed mode optional)
@@ -208,11 +312,35 @@ REST API must include validation and error handling. All endpoints are local-onl
 
 ---
 
-## Database Schema Additions
+## Database Schema
 
-- Add `created_at` to sources table.
-- Implement migration logic and indexes for performance.
-- Schema per PRD.md: sources (id, folder_path, display_name, avatar_seed), media (id, path, source_id, depth, type, liked, saved, view_count, last_viewed)
+**users**
+- id (TEXT, PRIMARY KEY)
+- pin_hash (TEXT, bcrypt hashed)
+- created_at (INTEGER)
+
+**user_folders**
+- user_id (TEXT, FOREIGN KEY)
+- source_id (TEXT, FOREIGN KEY)
+- created_at (INTEGER)
+- PRIMARY KEY (user_id, source_id)
+
+**user_interactions**
+- user_id (TEXT, FOREIGN KEY)
+- source_id (TEXT, FOREIGN KEY)
+- media_id (TEXT, FOREIGN KEY)
+- liked (INTEGER, default 0)
+- saved (INTEGER, default 0)
+- hidden (INTEGER, default 0)
+- view_count (INTEGER, default 0)
+- last_viewed (INTEGER, nullable)
+- PRIMARY KEY (user_id, source_id, media_id)
+
+**sources** (unchanged)
+- id, folder_path, display_name, avatar_seed, created_at
+
+**media** (unchanged - interactions moved to user_interactions)
+- id, path, source_id, depth, type, created_at
 
 ---
 
@@ -242,14 +370,33 @@ REST API must include validation and error handling. All endpoints are local-onl
 ---
 
 ## General Guidelines
-- **Prefer libraries**: Use chokidar, better-sqlite3, ffmpeg, Next.js, Tailwind, etc.
-- **DRY Principle**: Reuse logic for indexing, feed generation, and UI components.
+- **Prefer libraries**: Use chokidar, better-sqlite3, ffmpeg, Next.js, Tailwind, bcrypt, JWT, etc.
+- **DRY Principle**: Reuse logic for indexing, feed generation, authentication, and UI components.
 - **No external network calls**: All data and processing remain local.
 - **Single source of documentation**: Update PRD.md only for requirements/architecture, agents.md for agent automation. plan.md is for agent execution.
+- **User isolation**: All operations are scoped to authenticated users with user_id context.
+
+---
+
+## Implementation Status
+
+**Completed:**
+- ✅ Phase 1: Project Setup & Core Infrastructure
+- ✅ Phase 2: Media Indexing & Source System
+- ✅ Phase 3: Feed & Discovery Engine
+- ✅ Phase 4: Frontend Feed UI (Reels & Feed modes)
+- ✅ Phase 5: Interaction Tracking & Saved Items
+- ✅ Phase 6: Authentication & User Management
+
+**Remaining:**
+- Desktop packaging (Tauri - optional)
+- Advanced features (filters, search, etc.)
 
 ---
 
 ## Next Steps
-- Begin with Phase 1 and proceed sequentially.
+- Monitor performance with large libraries
+- Add desktop packaging if needed
+- Implement optional features as requested
 - After each phase, update PRD.md with implementation notes.
 - Use agents.md to clarify Copilot agent automation and boundaries.
