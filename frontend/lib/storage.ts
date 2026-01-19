@@ -1,17 +1,11 @@
 /**
- * LocalStorage utilities for persisting UI preferences
- * Handles view mode, scroll position, and resume state
+ * Storage Compatibility Layer
+ * Provides backward-compatible API using Zustand stores
+ * Gradually migrate to store hooks instead of these functions
  */
-
-const STORAGE_KEYS = {
-  VIEW_MODE: 'app_view_mode',
-  LAST_VIEWED_MEDIA: 'app_last_viewed_media',
-  SCROLL_POSITION: 'app_scroll_position',
-  PREFERENCES: 'app_preferences',
-  RECENT_FOLDERS: 'app_recent_folders',
-  ROOT_FOLDER: 'app_root_folder',
-  AUTH_TOKEN: 'app_auth_token',
-} as const;
+import { useUIStore } from './stores/ui.store';
+import { useFoldersStore } from './stores/folders.store';
+import { useAuthStore } from './stores/auth.store';
 
 export type ViewMode = 'reels' | 'feed';
 
@@ -33,222 +27,127 @@ export interface RecentFolder {
   timestamp: number;
 }
 
+interface LastViewedMedia {
+  mediaId: string;
+  timestamp: number;
+  scrollPosition?: number;
+}
+
+interface UserPreferences {
+  viewMode: ViewMode;
+  autoPlayVideos: boolean;
+  showSourceBadge: boolean;
+}
+
+// ============================================================================
+// View Mode (Deprecated: Use useUIStore)
+// ============================================================================
 export const getViewMode = (): ViewMode => {
-  if (typeof window === 'undefined') return 'reels';
-  try {
-    const mode = localStorage.getItem(STORAGE_KEYS.VIEW_MODE);
-    return (mode === 'feed' || mode === 'reels') ? mode : 'reels';
-  } catch {
-    return 'reels';
-  }
+  return useUIStore.getState().viewMode;
 };
 
 export const setViewMode = (mode: ViewMode): void => {
-  if (typeof window === 'undefined') return;
-  try {
-    localStorage.setItem(STORAGE_KEYS.VIEW_MODE, mode);
-  } catch (error) {
-    console.warn('Failed to save view mode:', error);
-  }
+  useUIStore.getState().setViewMode(mode);
 };
 
-// Get/Set Last Viewed Media (for resume functionality)
+// ============================================================================
+// Last Viewed Media (Deprecated: Use useUIStore)
+// ============================================================================
 export const getLastViewedMedia = (): LastViewedMedia | null => {
-  if (typeof window === 'undefined') return null;
-  try {
-    const data = localStorage.getItem(STORAGE_KEYS.LAST_VIEWED_MEDIA);
-    if (!data) return null;
-    return JSON.parse(data);
-  } catch {
-    return null;
-  }
+  const state = useUIStore.getState();
+  if (!state.lastViewedMediaId) return null;
+  return {
+    mediaId: state.lastViewedMediaId,
+    timestamp: state.lastViewedTimestamp || 0,
+    scrollPosition: state.lastViewedScrollPosition,
+  };
 };
 
 export const setLastViewedMedia = (mediaId: string, scrollPosition?: number): void => {
-  if (typeof window === 'undefined') return;
-  try {
-    const data: LastViewedMedia = {
-      mediaId,
-      timestamp: Date.now(),
-      scrollPosition,
-    };
-    localStorage.setItem(STORAGE_KEYS.LAST_VIEWED_MEDIA, JSON.stringify(data));
-  } catch (error) {
-    console.warn('Failed to save last viewed media:', error);
-  }
+  useUIStore.getState().setLastViewedMedia(mediaId, scrollPosition);
 };
 
 export const clearLastViewedMedia = (): void => {
-  if (typeof window === 'undefined') return;
-  try {
-    localStorage.removeItem(STORAGE_KEYS.LAST_VIEWED_MEDIA);
-  } catch (error) {
-    console.warn('Failed to clear last viewed media:', error);
-  }
+  useUIStore.getState().clearLastViewedMedia();
 };
 
-// Get/Set User Preferences
+// ============================================================================
+// User Preferences (Deprecated: Use useUIStore)
+// ============================================================================
 export const getPreferences = (): UserPreferences => {
-  if (typeof window === 'undefined') {
-    return {
-      viewMode: 'reels',
-      autoPlayVideos: true,
-      showSourceBadge: true,
-    };
-  }
-  try {
-    const data = localStorage.getItem(STORAGE_KEYS.PREFERENCES);
-    if (!data) {
-      return {
-        viewMode: 'reels',
-        autoPlayVideos: true,
-        showSourceBadge: true,
-      };
-    }
-    return { ...getDefaultPreferences(), ...JSON.parse(data) };
-  } catch {
-    return getDefaultPreferences();
-  }
+  return useUIStore.getState().preferences;
 };
 
 export const setPreferences = (preferences: Partial<UserPreferences>): void => {
-  if (typeof window === 'undefined') return;
-  try {
-    const current = getPreferences();
-    const updated = { ...current, ...preferences };
-    localStorage.setItem(STORAGE_KEYS.PREFERENCES, JSON.stringify(updated));
-  } catch (error) {
-    console.warn('Failed to save preferences:', error);
-  }
+  useUIStore.getState().setPreferences(preferences);
 };
 
-const getDefaultPreferences = (): UserPreferences => ({
-  viewMode: 'reels',
-  autoPlayVideos: true,
-  showSourceBadge: true,
-});
-
-// Get/Set Scroll Position
+// ============================================================================
+// Scroll Position (Deprecated: Use useUIStore)
+// ============================================================================
 export const getScrollPosition = (): number => {
-  if (typeof window === 'undefined') return 0;
-  try {
-    const pos = localStorage.getItem(STORAGE_KEYS.SCROLL_POSITION);
-    return pos ? parseInt(pos, 10) : 0;
-  } catch {
-    return 0;
-  }
+  return useUIStore.getState().scrollPosition;
 };
 
 export const setScrollPosition = (position: number): void => {
-  if (typeof window === 'undefined') return;
-  try {
-    localStorage.setItem(STORAGE_KEYS.SCROLL_POSITION, position.toString());
-  } catch (error) {
-    console.warn('Failed to save scroll position:', error);
-  }
+  useUIStore.getState().setScrollPosition(position);
 };
 
-// Get/Set Recent Folders
+// ============================================================================
+// Recent Folders (Deprecated: Use useFoldersStore)
+// ============================================================================
 export const getRecentFolders = (): RecentFolder[] => {
-  if (typeof window === 'undefined') return [];
-  try {
-    const data = localStorage.getItem(STORAGE_KEYS.RECENT_FOLDERS);
-    if (!data) return [];
-    return JSON.parse(data) as RecentFolder[];
-  } catch {
-    return [];
-  }
+  return useFoldersStore.getState().recentFolders;
 };
 
 export const addRecentFolder = (path: string, name: string): void => {
-  if (typeof window === 'undefined') return;
-  try {
-    const recent = getRecentFolders();
-    // Remove if already exists
-    const filtered = recent.filter((f) => f.path !== path);
-    // Add to front
-    const updated = [
-      { path, name, timestamp: Date.now() },
-      ...filtered,
-    ].slice(0, 10); // Keep only last 10
-    localStorage.setItem(STORAGE_KEYS.RECENT_FOLDERS, JSON.stringify(updated));
-  } catch (error) {
-    console.warn('Failed to save recent folder:', error);
-  }
+  useFoldersStore.getState().addRecentFolder(path, name);
 };
 
 export const removeRecentFolder = (path: string): void => {
-  if (typeof window === 'undefined') return;
-  try {
-    const recent = getRecentFolders();
-    const updated = recent.filter((f) => f.path !== path);
-    localStorage.setItem(STORAGE_KEYS.RECENT_FOLDERS, JSON.stringify(updated));
-  } catch (error) {
-    console.warn('Failed to remove recent folder:', error);
-  }
+  useFoldersStore.getState().removeRecentFolder(path);
 };
 
 export const clearRecentFolders = (): void => {
-  if (typeof window === 'undefined') return;
-  try {
-    localStorage.removeItem(STORAGE_KEYS.RECENT_FOLDERS);
-  } catch (error) {
-    console.warn('Failed to clear recent folders:', error);
-  }
+  useFoldersStore.getState().clearRecentFolders();
 };
 
-// Get/Set Root Folder (for privacy - stored locally, not on backend)
+// ============================================================================
+// Root Folder (Deprecated: Use useFoldersStore)
+// ============================================================================
 export const getRootFolder = (): string | null => {
-  if (typeof window === 'undefined') return null;
-  try {
-    return localStorage.getItem(STORAGE_KEYS.ROOT_FOLDER);
-  } catch {
-    return null;
-  }
+  return useFoldersStore.getState().rootFolder;
 };
 
 export const setRootFolder = (path: string): void => {
-  if (typeof window === 'undefined') return;
-  try {
-    localStorage.setItem(STORAGE_KEYS.ROOT_FOLDER, path);
-  } catch (error) {
-    console.warn('Failed to save root folder:', error);
-  }
+  useFoldersStore.getState().setRootFolder(path);
 };
 
 export const clearRootFolder = (): void => {
-  if (typeof window === 'undefined') return;
-  try {
-    localStorage.removeItem(STORAGE_KEYS.ROOT_FOLDER);
-  } catch (error) {
-    console.warn('Failed to clear root folder:', error);
-  }
+  useFoldersStore.getState().clearRootFolder();
 };
 
-// Auth Token Management
+// ============================================================================
+// Auth Token Management (Deprecated: Use useAuthStore)
+// ============================================================================
 export const getStoredToken = (): string | null => {
-  if (typeof window === 'undefined') return null;
-  try {
-    return localStorage.getItem(STORAGE_KEYS.AUTH_TOKEN);
-  } catch {
-    return null;
-  }
+  return useAuthStore.getState().token;
 };
 
 export const storeToken = (token: string): void => {
-  if (typeof window === 'undefined') return;
-  try {
-    localStorage.setItem(STORAGE_KEYS.AUTH_TOKEN, token);
-  } catch (error) {
-    console.warn('Failed to store auth token:', error);
+  // When storing a token, we need the userId from elsewhere
+  // This is called from login, so userId should be available
+  const userId = useAuthStore.getState().userId;
+  if (userId) {
+    useAuthStore.getState().storeToken(token, userId);
   }
 };
 
 export const removeToken = (): void => {
-  if (typeof window === 'undefined') return;
-  try {
-    localStorage.removeItem(STORAGE_KEYS.AUTH_TOKEN);
-  } catch (error) {
-    console.warn('Failed to remove auth token:', error);
-  }
+  useAuthStore.getState().removeToken();
 };
+
+// Export store hooks for modern usage
+export { useUIStore } from './stores/ui.store';
+export { useFoldersStore } from './stores/folders.store';
+export { useAuthStore } from './stores/auth.store';
