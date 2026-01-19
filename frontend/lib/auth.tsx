@@ -1,7 +1,7 @@
 'use client';
 
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import { getStoredToken, storeToken, removeToken } from '@/lib/storage';
+import { useAuthStore } from '@/lib/storage';
 import { getApiBase } from '@/lib/api';
 
 interface AuthContextType {
@@ -24,7 +24,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // Verify token on mount
   useEffect(() => {
     const verifyToken = async () => {
-      const storedToken = getStoredToken();
+      const storedToken = useAuthStore.getState().token;
       
       if (!storedToken) {
         setIsLoading(false);
@@ -46,11 +46,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           setIsAuthenticated(true);
         } else {
           // Token invalid, remove it
-          removeToken();
+          useAuthStore.getState().removeToken();
         }
       } catch (error) {
         console.error('Token verification failed:', error);
-        removeToken();
+        useAuthStore.getState().removeToken();
       } finally {
         setIsLoading(false);
       }
@@ -60,14 +60,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const login = useCallback((newToken: string, newUserId: string) => {
-    storeToken(newToken);
+    useAuthStore.getState().storeToken(newToken, newUserId);
     setToken(newToken);
     setUserId(newUserId);
     setIsAuthenticated(true);
   }, []);
 
   const logout = useCallback(() => {
-    removeToken();
+    useAuthStore.getState().removeToken();
     setToken(null);
     setUserId(null);
     setIsAuthenticated(false);
