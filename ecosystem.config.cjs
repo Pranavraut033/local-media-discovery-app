@@ -17,9 +17,9 @@ module.exports = {
     },
     {
       name: 'frontend',
-      script: 'node_modules/.bin/next',
-      args: 'start -p 3000',
-      cwd: './frontend',
+      script: 'pm2',
+      args: 'serve ./frontend/out 3000 --spa',
+      cwd: '.',
       instances: 1,
       autorestart: true,
       watch: false,
