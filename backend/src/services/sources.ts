@@ -88,10 +88,12 @@ async function getTopLevelFolders(rootFolder: string): Promise<string[]> {
 
 /**
  * Generate and store sources for top-level folders
+ * Associates folders with the authenticated user
  */
 export async function generateSources(
   db: Database.Database,
-  rootFolder: string
+  rootFolder: string,
+  userId?: string
 ): Promise<SourceInfo[]> {
   console.log(`Generating sources from: ${rootFolder}`);
 
@@ -103,6 +105,10 @@ export async function generateSources(
     INSERT OR IGNORE INTO sources (id, folder_path, display_name, avatar_seed)
     VALUES (?, ?, ?, ?)
   `);
+  
+  const insertUserFolderStmt = userId
+    ? db.prepare('INSERT OR IGNORE INTO user_folders (user_id, source_id) VALUES (?, ?)')
+    : null;
 
   for (const folderPath of topLevelFolders) {
     const sourceId = generateSourceId(folderPath);
@@ -110,6 +116,11 @@ export async function generateSources(
     const avatarSeed = generateAvatarSeed(folderPath);
 
     insertStmt.run(sourceId, folderPath, displayName, avatarSeed);
+    
+    // Associate folder with user if userId is provided
+    if (userId && insertUserFolderStmt) {
+      insertUserFolderStmt.run(userId, sourceId);
+    }
 
     sources.push({
       id: sourceId,
@@ -145,10 +156,24 @@ export function getSourceById(db: Database.Database, sourceId: string): SourceIn
 
 /**
  * Get all sources
+ * Optionally filter by user ID
  */
-export function getAllSources(db: Database.Database): SourceInfo[] {
-  const stmt = db.prepare('SELECT id, folder_path, display_name, avatar_seed FROM sources');
-  const results = stmt.all() as any[];
+export function getAllSources(db: Database.Database, userId?: string): SourceInfo[] {
+  let stmt;
+  let results;
+  
+  if (userId) {
+    stmt = db.prepare(`
+      SELECT s.id, s.folder_path, s.display_name, s.avatar_seed 
+      FROM sources s
+      INNER JOIN user_folders uf ON s.id = uf.source_id
+      WHERE uf.user_id = ?
+    `);
+    results = stmt.all(userId) as any[];
+  } else {
+    stmt = db.prepare('SELECT id, folder_path, display_name, avatar_seed FROM sources');
+    results = stmt.all() as any[];
+  }
 
   return results.map(r => ({
     id: r.id,

@@ -21,8 +21,8 @@ interface FeedOptions {
   limit?: number;
   offset?: number;
   lastSourceId?: string; // To avoid same source consecutively
-  userLikedIds?: Set<string>;
-  userSavedIds?: Set<string>;
+  userId?: string; // User ID for scoped interactions
+  sourceId?: string; // Optional source filtering
 }
 
 export function generateFeed(db: Database.Database, options: FeedOptions = {}): FeedItem[] {
@@ -30,46 +30,70 @@ export function generateFeed(db: Database.Database, options: FeedOptions = {}): 
     limit = 20,
     offset = 0,
     lastSourceId,
-    userLikedIds = new Set(),
-    userSavedIds = new Set(),
+    userId,
+    sourceId,
   } = options;
 
-  // Step 1: Fetch all media with interaction data
-  const allMedia = db
-    .prepare(
-      `
+  // Build query to join media with sources and user interactions
+  let query = `
     SELECT 
       m.id,
       m.path,
       m.type,
       m.source_id as sourceId,
-      m.liked,
-      m.saved,
-      m.view_count as viewCount,
-      m.last_viewed as lastViewed,
-      m.created_at as createdAt,
       m.depth,
+      m.created_at as createdAt,
       s.display_name as displayName,
-      s.avatar_seed as avatarSeed
+      s.avatar_seed as avatarSeed,
+      COALESCE(ui.liked, 0) as liked,
+      COALESCE(ui.saved, 0) as saved,
+      COALESCE(ui.hidden, 0) as hidden,
+      COALESCE(ui.view_count, 0) as viewCount,
+      ui.last_viewed as lastViewed
     FROM media m
     JOIN sources s ON m.source_id = s.id
-    ORDER BY m.created_at ASC
-  `
-    )
-    .all() as Array<{
-      id: string;
-      path: string;
-      type: string;
-      sourceId: string;
-      liked: number;
-      saved: number;
-      viewCount: number;
-      lastViewed: number | null;
-      createdAt: number;
-      depth: number;
-      displayName: string;
-      avatarSeed: string;
-    }>;
+    LEFT JOIN user_interactions ui ON m.id = ui.media_id 
+      AND m.source_id = ui.source_id
+      ${userId ? 'AND ui.user_id = ?' : ''}
+    WHERE COALESCE(ui.hidden, 0) = 0
+    ${sourceId ? 'AND m.source_id = ?' : ''}
+  `;
+  
+  if (userId) {
+    // Filter to user's folders
+    query += ` AND m.source_id IN (
+      SELECT source_id FROM user_folders WHERE user_id = ?
+    )`;
+  }
+  
+  query += ' ORDER BY m.created_at ASC';
+
+  const params: string[] = [];
+  if (userId) {
+    params.push(userId);
+    if (sourceId) {
+      params.push(sourceId);
+    }
+    params.push(userId);
+  } else if (sourceId) {
+    params.push(sourceId);
+  }
+
+  const allMedia = db.prepare(query).all(...params) as Array<{
+    id: string;
+    path: string;
+    type: string;
+    sourceId: string;
+    liked: number;
+    saved: number;
+    hidden: number;
+    viewCount: number;
+    lastViewed: number | null;
+    createdAt: number;
+    depth: number;
+    displayName: string;
+    avatarSeed: string;
+  }>;
 
   if (allMedia.length === 0) {
     return [];
@@ -157,7 +181,9 @@ export function generatePaginatedFeed(
   db: Database.Database,
   page: number = 0,
   itemsPerPage: number = 20,
-  lastSourceId?: string
+  lastSourceId?: string,
+  userId?: string,
+  sourceId?: string
 ): {
   items: FeedItem[];
   hasMore: boolean;
@@ -166,6 +192,8 @@ export function generatePaginatedFeed(
   const feed = generateFeed(db, {
     limit: itemsPerPage + 1, // Fetch one extra to determine hasMore
     lastSourceId,
+    userId,
+    sourceId,
   });
 
   const hasMore = feed.length > itemsPerPage;
