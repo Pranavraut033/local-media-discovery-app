@@ -1,0 +1,31 @@
+{
+  "name": "local-media-discovery-app",
+  "version": "0.1.0",
+  "description": "Local-first media discovery application",
+  "private": true,
+  "scripts": {
+    "install:all": "cd backend && npm install && cd ../frontend && npm install",
+    "dev:backend": "cd backend && npm run dev",
+    "dev:frontend": "cd frontend && npm run dev",
+    "build": "npm run build:backend && npm run build:frontend",
+    "build:backend": "cd backend && npm run build",
+    "build:frontend": "cd frontend && npm run build",
+    "start": "npm run build && pm2 start ecosystem.config.cjs",
+    "stop": "pm2 stop ecosystem.config.cjs",
+    "restart": "pm2 restart ecosystem.config.cjs",
+    "delete": "pm2 delete ecosystem.config.cjs",
+    "logs": "pm2 logs",
+    "status": "pm2 status"
+  },
+  "keywords": [
+    "media",
+    "discovery",
+    "local-first",
+    "privacy"
+  ],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "pm2": "^5.4.3"
+  }
+}

@@ -17,6 +17,7 @@ Served over HTTP on LAN (mobile browser primary). Tauri desktop app is optional 
 ## Tech Stack & Library Choices (Explicit)
 
 **Backend**
+- TypeScript 5.x
 - Node.js
 - Fastify (preferred) or Express
 - better-sqlite3 (sync, fast)
@@ -29,6 +30,7 @@ Served over HTTP on LAN (mobile browser primary). Tauri desktop app is optional 
 
 
 **Frontend**
+- TypeScript 5.x
 - Next.js (React framework)
 - Tailwind CSS (UI styling)
 - Headless UI (accessible components)
@@ -58,9 +60,9 @@ Served over HTTP on LAN (mobile browser primary). Tauri desktop app is optional 
 
 ---
 
-## Phase 2: Media Indexing & Source System
+## Phase 2: Media Indexing & Source System (COMPLETED ✅)
 
-1. **Recursive Media Indexing**
+1. **Recursive Media Indexing** ✅
    - Use chokidar to watch and index supported media files (images, videos; audio/text future).
    - Store metadata in SQLite: path, type, depth, parent hash, source_id.
    - Implement incremental indexing (detect add/remove, skip unchanged).
@@ -68,7 +70,7 @@ Served over HTTP on LAN (mobile browser primary). Tauri desktop app is optional 
    - Use fs/promises and path for recursive scanning.
    - Assign stable IDs using nanoid or crypto (path-based hash).
 
-2. **Source Generation**
+2. **Source Generation** ✅
    - Derive sources from top-level folders (never expose folder names).
    - Generate deterministic display names (adjective_noun, e.g. @quiet_river) and avatars (color/SVG, optional for MVP).
    - Store sources in SQLite: id (hash), folder_path, display_name, avatar_seed.
@@ -77,31 +79,54 @@ Served over HTTP on LAN (mobile browser primary). Tauri desktop app is optional 
 
 ---
 
-## Phase 3: Feed & Discovery Engine
+## Phase 3: Feed & Discovery Engine (COMPLETED ✅)
 
-1. **Feed API**
+1. **Feed API** ✅
    - Implement endpoints for fetching media feeds (Reels mode primary, Feed mode nice-to-have).
    - Apply discovery logic: unseen priority, source diversity, proximity, like/save bias, entropy.
    - Ensure no semantic folder interpretation.
    - Add rules: avoid same source consecutively, random folder walk, like-weighted resurfacing.
    - Feed output should be mode-agnostic (works for both Reels and Feed if both implemented).
+   - **Implemented Endpoints:**
+     - `GET /api/feed?page=0&limit=20&lastSourceId=xyz` - Paginated feed with source diversity
+     - `POST /api/like` - Toggle like status
+     - `POST /api/save` - Toggle save status
+     - `POST /api/view` - Record view event
+     - `GET /api/media/:id` - Fetch media metadata
+     - `GET /api/media/file/:id` - Serve media file
+     - `GET /api/saved` - List saved items
 
-2. **Frontend Feed UI**
+2. **Frontend Feed UI** ✅
    - Infinite scroll/swipe (gesture library, mobile-first).
    - Reels mode: full-screen, vertical navigation (primary).
    - Feed mode: card-based, mixed media (optional).
    - Switch modes instantly if both implemented.
-   - Use @use-gesture/react for swipe/gesture handling.
+   - Native touch swipe handling for mobile
    - Use react-player for video playback.
    - Use Tailwind CSS and lucide-react for UI and icons.
    - Implement MediaCard, VideoPlayer, ImageViewer, LikeButton, SaveButton, SourceBadge components.
    - Add mode switcher and media preloading.
+   - **Components Created:**
+     - Feed.tsx - Main feed container with Reels/Feed mode toggle
+     - MediaCard.tsx - Unified media display with auto view tracking
+     - ImageViewer.tsx - Optimized image display
+     - VideoPlayer.tsx - Native HTML5 video with controls
+     - InteractionButtons.tsx - Like/Save buttons with feedback
+     - SourceBadge.tsx - Source display with avatar
+     - MainLayout.tsx - App state management
+   - **Hooks Created:**
+     - useFeed() - Paginated feed with caching
+     - useMedia() - Individual media fetch
+     - useSavedItems() - Saved items list
+     - useLikeMutation() - Like with optimistic updates
+     - useSaveMutation() - Save with optimistic updates
+     - useViewMutation() - View tracking
 
 ---
 
-## Phase 4: User Interactions & Persistence
+## Phase 4: User Interactions & Persistence (COMPLETED ✅)
 
-1. **Like, Save, View Tracking**
+1. **Like, Save, View Tracking** ✅
    - Implement local like/save actions and view history.
    - Store interaction data in SQLite.
    - Use data to influence feed ranking.
@@ -110,14 +135,28 @@ Served over HTTP on LAN (mobile browser primary). Tauri desktop app is optional 
    - Use LocalStorage for UI preferences.
    - Implement optimistic updates and cache invalidation.
    - Add resume position logic (remember where user left off).
+   - **Implemented Features:**
+     - LocalStorage utilities for view mode, last viewed media, scroll position, and user preferences
+     - Resume position logic to restore user's last viewed media on app restart
+     - Automatic view mode persistence (Reels/Feed mode)
+     - View position tracking with automatic recovery
 
-2. **Saved Items & Navigation**
+2. **Saved Items & Navigation** ✅
    - UI for viewing saved items.
    - Optional: "More from this source", reveal file location.
+   - **Implemented Features:**
+     - SavedView component for browsing all saved items in a grid
+     - SourceView component to browse all media from a specific source
+     - NavigationBar component for switching between Feed, Saved, and Settings
+     - Clickable source badges to view "More from this source"
+     - Backend endpoint `GET /api/source/:sourceId/media` for fetching source-specific media
+     - Frontend hook `useSourceMedia()` for data fetching
+     - Empty states and loading states for all views
+     - Integrated navigation with persistent bottom bar
 
 ---
 
-## Phase 5: Performance, Reliability, and Packaging
+## Phase 5: Performance, Reliability, and Packaging (COMPLETED ✅)
 
 1. **Performance Optimizations**
    - Lazy load media, generate thumbnails, preload next items.
@@ -126,6 +165,8 @@ Served over HTTP on LAN (mobile browser primary). Tauri desktop app is optional 
    - Use sharp for image thumbnails, ffmpeg-static + fluent-ffmpeg for video thumbnails.
    - Generate thumbnails in background and cache them.
    - Serve thumbnails via API.
+   - Add thumbnail generation endpoints and workers.
+   - Implement thumbnail caching strategy.
 
 2. **Reliability**
    - Handle deleted/moved files gracefully.
@@ -133,13 +174,16 @@ Served over HTTP on LAN (mobile browser primary). Tauri desktop app is optional 
 
    - Add large library stress test, corrupt file handling, memory optimization.
    - Add reset/reindex option and "reveal file location" (advanced).
+   - Implement error boundaries and graceful degradation.
+   - Add file integrity checks.
 
 3. **Desktop Packaging (Optional)**
    - Integrate with Tauri for desktop app build (optional, not required for mobile/LAN usage).
+   - PWA manifest for installable web app.
 
 ---
 
-## Phase 6: Documentation & Maintenance
+## Phase 6: Large Library Optimization & Polish (NEXT)
 
 1. **Update PRD.md**
    - Document architecture, decisions, and changes in PRD.md only.
