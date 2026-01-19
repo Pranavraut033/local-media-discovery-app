@@ -1,10 +1,15 @@
+/**
+ * Folder Selection Component
+ * Allows users to browse and select a root folder for media indexing
+ * Privacy: Root folder path is stored in browser localStorage, not on the backend
+ */
 'use client';
 
 import { useState, useEffect } from 'react';
 import { Folder, ChevronRight, Home, HardDrive } from 'lucide-react';
-import { getApiBase } from '@/lib/api';
+import { getApiBase, authenticatedFetch } from '@/lib/api';
 import { RecentFolders } from './RecentFolders';
-import { addRecentFolder } from '@/lib/storage';
+import { addRecentFolder, setRootFolder } from '@/lib/storage';
 
 interface FolderSelectionProps {
   onFolderSelected?: () => void;
@@ -40,7 +45,7 @@ export default function FolderSelection({ onFolderSelected }: FolderSelectionPro
   const loadRoots = async () => {
     try {
       setIsLoading(true);
-      const response = await fetch(`${API_URL}/api/filesystem/roots`);
+      const response = await authenticatedFetch(`${API_URL}/api/filesystem/roots`);
       if (!response.ok) throw new Error('Failed to load roots');
       const data = await response.json();
       setRoots(data.roots || []);
@@ -55,7 +60,7 @@ export default function FolderSelection({ onFolderSelected }: FolderSelectionPro
     try {
       setIsLoading(true);
       setError('');
-      const response = await fetch(
+      const response = await authenticatedFetch(
         `${API_URL}/api/filesystem/list?${new URLSearchParams({ path })}`
       );
       if (!response.ok) throw new Error('Failed to load directory');
@@ -74,13 +79,21 @@ export default function FolderSelection({ onFolderSelected }: FolderSelectionPro
     try {
       setIsLoading(true);
       setError('');
-      const response = await fetch(`${API_URL}/api/config/root-folder`, {
+
+      // Store root folder in localStorage for privacy
+      setRootFolder(path);
+
+      // Trigger indexing on backend (send path in request, but backend won't store it)
+      const response = await authenticatedFetch(`${API_URL}/api/config/root-folder`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ path }),
       });
 
-      if (!response.ok) throw new Error('Failed to set root folder');
+      if (!response.ok) {
+        // If indexing fails, clear the stored folder
+        setRootFolder('');
+        throw new Error('Failed to set root folder');
+      }
 
       // Extract folder name from path
       const folderName = path.split('/').filter(Boolean).pop() || path;
