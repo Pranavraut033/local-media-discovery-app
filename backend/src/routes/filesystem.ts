@@ -11,9 +11,18 @@ interface ListDirectoryQuery {
   path?: string;
 }
 
+interface AuthenticatedRequest extends FastifyRequest {
+  user: { userId: string };
+}
+
 export default async function filesystemRoutes(fastify: FastifyInstance): Promise<void> {
   // Get common starting directories
-  fastify.get('/api/filesystem/roots', async (request: FastifyRequest, reply: FastifyReply) => {
+  fastify.get(
+    '/api/filesystem/roots',
+    {
+      onRequest: [fastify.authenticate as any],
+    },
+    async (request: AuthenticatedRequest, reply: FastifyReply) => {
     try {
       const homeDir = os.homedir();
       const platform = os.platform();
@@ -76,7 +85,10 @@ export default async function filesystemRoutes(fastify: FastifyInstance): Promis
   // List directory contents
   fastify.get<{ Querystring: ListDirectoryQuery }>(
     '/api/filesystem/list',
-    async (request: FastifyRequest<{ Querystring: ListDirectoryQuery }>, reply: FastifyReply) => {
+    {
+      onRequest: [fastify.authenticate as any],
+    },
+    async (request: AuthenticatedRequest & FastifyRequest<{ Querystring: ListDirectoryQuery }>, reply: FastifyReply) => {
       try {
         const dirPath = request.query.path;
 

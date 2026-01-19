@@ -13,22 +13,30 @@ interface IndexRequest {
   enableWatcher?: boolean;
 }
 
+interface AuthenticatedRequest extends FastifyRequest {
+  user: { userId: string };
+}
+
 export default async function indexingRoutes(fastify: FastifyInstance): Promise<void> {
   const db = getDatabase();
 
   // Trigger manual indexing
   fastify.post<{ Body: IndexRequest }>(
     '/api/index',
-    async (request: FastifyRequest<{ Body: IndexRequest }>, reply: FastifyReply) => {
+    {
+      onRequest: [fastify.authenticate as any],
+    },
+    async (request: AuthenticatedRequest, reply: FastifyReply) => {
       const { rootFolder, enableWatcher = true } = request.body;
+      const userId = request.user.userId;
 
       if (!rootFolder || typeof rootFolder !== 'string') {
         return reply.code(400).send({ error: 'Invalid root folder path' });
       }
 
       try {
-        // Generate sources first
-        const sources = await generateSources(db, rootFolder);
+        // Generate sources and associate with user
+        const sources = await generateSources(db, rootFolder, userId);
 
         // Then index media files
         const result = await indexMediaFiles(db, rootFolder);
@@ -84,26 +92,34 @@ export default async function indexingRoutes(fastify: FastifyInstance): Promise<
   });
 
   // Get all sources
-  fastify.get('/api/sources', async (request: FastifyRequest, reply: FastifyReply) => {
-    try {
-      const sources = getAllSources(db);
+  fastify.get(
+    '/api/sources',
+    {
+      onRequest: [fastify.authenticate as any],
+    },
+    async (request: AuthenticatedRequest, reply: FastifyReply) => {
+      const userId = request.user.userId;
+      
+      try {
+        const sources = getAllSources(db, userId);
 
-      return {
-        success: true,
-        sources: sources.map(s => ({
-          id: s.id,
-          displayName: s.displayName,
-          avatarSeed: s.avatarSeed,
-        })),
-      };
-    } catch (error) {
-      console.error('Sources error:', error);
-      return reply.code(500).send({
-        error: 'Failed to get sources',
-        message: error instanceof Error ? error.message : 'Unknown error',
-      });
+        return {
+          success: true,
+          sources: sources.map(s => ({
+            id: s.id,
+            displayName: s.displayName,
+            avatarSeed: s.avatarSeed,
+          })),
+        };
+      } catch (error) {
+        console.error('Sources error:', error);
+        return reply.code(500).send({
+          error: 'Failed to get sources',
+          message: error instanceof Error ? error.message : 'Unknown error',
+        });
+      }
     }
-  });
+  );
 
   // Get source by ID
   fastify.get<{ Params: { id: string } }>(
