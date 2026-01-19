@@ -7,7 +7,7 @@
 import { useState, useEffect } from 'react';
 import { FolderOpen, Trash2, Clock } from 'lucide-react';
 import { getRecentFolders, removeRecentFolder, clearRecentFolders, type RecentFolder, addRecentFolder } from '@/lib/storage';
-import { getApiBase } from '@/lib/api';
+import { getApiBase, authenticatedFetch } from '@/lib/api';
 
 interface RecentFoldersProps {
   onFolderSelect?: (path: string, name: string) => void;
@@ -25,9 +25,8 @@ export function RecentFolders({ onFolderSelect }: RecentFoldersProps) {
   const handleSelectFolder = async (path: string, name: string) => {
     try {
       setIsLoading(true);
-      const response = await fetch(`${API_URL}/api/config/root-folder`, {
+      const response = await authenticatedFetch(`${API_URL}/api/config/root-folder`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ path }),
       });
 

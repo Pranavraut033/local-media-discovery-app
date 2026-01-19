@@ -14,6 +14,7 @@ import { Settings } from '@/components/Settings';
 import { SourceView } from '@/components/SourceView';
 import { NavigationBar, type NavTab } from '@/components/NavigationBar';
 import { getApiBase } from '@/lib/api';
+import { getRootFolder } from '@/lib/storage';
 
 type AppView = 'feed' | 'saved' | 'liked' | 'hidden' | 'source' | 'settings';
 
@@ -30,13 +31,12 @@ export default function MainLayout() {
   const [currentView, setCurrentView] = useState<AppView>('feed');
   const [sourceViewState, setSourceViewState] = useState<SourceViewState | null>(null);
 
-  // Check if root folder is already set
+  // Check if root folder is already set (in localStorage for privacy)
   useEffect(() => {
-    const checkRootFolder = async () => {
+    const checkRootFolder = () => {
       try {
-        const response = await fetch(`${API_URL}/api/config/root-folder`);
-        const data = await response.json();
-        setRootFolderSet(!!data.rootFolder);
+        const rootFolder = getRootFolder();
+        setRootFolderSet(!!rootFolder);
       } catch (error) {
         console.error('Failed to check root folder:', error);
         setRootFolderSet(false);
