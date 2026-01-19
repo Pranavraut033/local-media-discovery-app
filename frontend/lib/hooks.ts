@@ -4,7 +4,7 @@
  */
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import React, { useEffect, useRef, useCallback } from 'react';
-import { getApiBase } from '@/lib/api';
+import { getApiBase, authenticatedFetch } from '@/lib/api';
 
 const API_BASE = getApiBase();
 
@@ -95,7 +95,7 @@ export const useFeed = (page: number = 0, limit: number = 20, lastSourceId?: str
         ...(lastSourceId && { lastSourceId }),
       });
 
-      const response = await fetch(`${API_BASE}/api/feed?${params}`);
+      const response = await authenticatedFetch(`${API_BASE}/api/feed?${params}`);
       if (!response.ok) {
         throw new Error('Failed to fetch feed');
       }
@@ -113,7 +113,7 @@ export const useMedia = (mediaId: string) => {
   return useQuery({
     queryKey: ['media', mediaId],
     queryFn: async (): Promise<MediaResponse> => {
-      const response = await fetch(`${API_BASE}/api/media/${mediaId}`);
+      const response = await authenticatedFetch(`${API_BASE}/api/media/${mediaId}`);
       if (!response.ok) {
         throw new Error('Failed to fetch media');
       }
@@ -132,7 +132,7 @@ export const useSavedItems = () => {
   return useQuery({
     queryKey: ['saved'],
     queryFn: async (): Promise<SavedResponse> => {
-      const response = await fetch(`${API_BASE}/api/saved`);
+      const response = await authenticatedFetch(`${API_BASE}/api/saved`);
       if (!response.ok) {
         throw new Error('Failed to fetch saved items');
       }
@@ -150,7 +150,7 @@ export const useLikedItems = () => {
   return useQuery({
     queryKey: ['liked'],
     queryFn: async (): Promise<LikedResponse> => {
-      const response = await fetch(`${API_BASE}/api/liked`);
+      const response = await authenticatedFetch(`${API_BASE}/api/liked`);
       if (!response.ok) {
         throw new Error('Failed to fetch liked items');
       }
@@ -172,7 +172,7 @@ export const useSourceMedia = (sourceId: string, limit: number = 50) => {
         limit: limit.toString(),
       });
 
-      const response = await fetch(`${API_BASE}/api/source/${sourceId}/media?${params}`);
+      const response = await authenticatedFetch(`${API_BASE}/api/source/${sourceId}/media?${params}`);
       if (!response.ok) {
         throw new Error('Failed to fetch source media');
       }
@@ -195,18 +195,17 @@ export const useLikeMutation = () => {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async (mediaId: string): Promise<InteractionResponse> => {
-      const response = await fetch(`${API_BASE}/api/like`, {
+    mutationFn: async ({ mediaId, sourceId }: { mediaId: string; sourceId: string }): Promise<InteractionResponse> => {
+      const response = await authenticatedFetch(`${API_BASE}/api/like`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mediaId }),
+        body: JSON.stringify({ mediaId, sourceId }),
       });
       if (!response.ok) {
         throw new Error('Failed to like media');
       }
       return response.json();
     },
-    onMutate: async (mediaId) => {
+    onMutate: async ({ mediaId }) => {
       await queryClient.cancelQueries({ queryKey: ['feed'] });
       const previousFeeds = queryClient.getQueriesData({ queryKey: ['feed'] });
 
@@ -222,12 +221,12 @@ export const useLikeMutation = () => {
 
       return { previousFeeds };
     },
-    onError: (err, mediaId, context: any) => {
+    onError: (err, { mediaId }, context: any) => {
       if (context?.previousFeeds) {
         queryClient.setQueriesData({ queryKey: ['feed'] }, context.previousFeeds);
       }
     },
-    onSuccess: (data, mediaId) => {
+    onSuccess: (data, { mediaId }) => {
       // Update cache with actual API response state
       if (data.liked !== undefined) {
         queryClient.setQueriesData({ queryKey: ['feed'] }, (old: any) => {
@@ -253,18 +252,17 @@ export const useSaveMutation = () => {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async (mediaId: string): Promise<InteractionResponse> => {
-      const response = await fetch(`${API_BASE}/api/save`, {
+    mutationFn: async ({ mediaId, sourceId }: { mediaId: string; sourceId: string }): Promise<InteractionResponse> => {
+      const response = await authenticatedFetch(`${API_BASE}/api/save`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mediaId }),
+        body: JSON.stringify({ mediaId, sourceId }),
       });
       if (!response.ok) {
         throw new Error('Failed to save media');
       }
       return response.json();
     },
-    onMutate: async (mediaId) => {
+    onMutate: async ({ mediaId }) => {
       await queryClient.cancelQueries({ queryKey: ['feed'] });
       const previousFeeds = queryClient.getQueriesData({ queryKey: ['feed'] });
 
@@ -280,12 +278,12 @@ export const useSaveMutation = () => {
 
       return { previousFeeds };
     },
-    onError: (err, mediaId, context: any) => {
+    onError: (err, { mediaId }, context: any) => {
       if (context?.previousFeeds) {
         queryClient.setQueriesData({ queryKey: ['feed'] }, context.previousFeeds);
       }
     },
-    onSuccess: (data, mediaId) => {
+    onSuccess: (data, { mediaId }) => {
       // Update cache with actual API response state
       if (data.saved !== undefined) {
         queryClient.setQueriesData({ queryKey: ['feed'] }, (old: any) => {
@@ -312,11 +310,10 @@ export const useViewMutation = () => {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async (mediaId: string): Promise<InteractionResponse> => {
-      const response = await fetch(`${API_BASE}/api/view`, {
+    mutationFn: async ({ mediaId, sourceId }: { mediaId: string; sourceId: string }): Promise<InteractionResponse> => {
+      const response = await authenticatedFetch(`${API_BASE}/api/view`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mediaId }),
+        body: JSON.stringify({ mediaId, sourceId }),
       });
       if (!response.ok) {
         throw new Error('Failed to record view');
@@ -333,11 +330,10 @@ export const useHideMutation = () => {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async (mediaId: string): Promise<InteractionResponse> => {
-      const response = await fetch(`${API_BASE}/api/hide`, {
+    mutationFn: async ({ mediaId, sourceId }: { mediaId: string; sourceId: string }): Promise<InteractionResponse> => {
+      const response = await authenticatedFetch(`${API_BASE}/api/hide`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mediaId }),
+        body: JSON.stringify({ mediaId, sourceId }),
       });
       if (!response.ok) {
         throw new Error('Failed to hide media');
@@ -358,7 +354,7 @@ export const useHiddenItems = () => {
   return useQuery({
     queryKey: ['hidden'],
     queryFn: async (): Promise<HiddenResponse> => {
-      const response = await fetch(`${API_BASE}/api/hidden`);
+      const response = await authenticatedFetch(`${API_BASE}/api/hidden`);
       if (!response.ok) {
         throw new Error('Failed to fetch hidden items');
       }
@@ -417,7 +413,7 @@ export const useMediaPreload = (mediaIds: string[], config: PreloadConfig = {}) 
           queryClient.prefetchQuery({
             queryKey: ['media', mediaId],
             queryFn: async () => {
-              const response = await fetch(`${API_BASE}/api/media/${mediaId}`);
+              const response = await authenticatedFetch(`${API_BASE}/api/media/${mediaId}`);
               if (!response.ok) throw new Error('Failed to fetch');
               return response.json();
             },
@@ -428,7 +424,7 @@ export const useMediaPreload = (mediaIds: string[], config: PreloadConfig = {}) 
           queryClient.prefetchQuery({
             queryKey: ['thumbnail', mediaId],
             queryFn: async () => {
-              const response = await fetch(`${API_BASE}/api/thumbnail/${mediaId}`, {
+              const response = await authenticatedFetch(`${API_BASE}/api/thumbnail/${mediaId}`, {
                 signal: AbortSignal.timeout(5000),
               });
               return response.ok;
@@ -471,9 +467,8 @@ export const useBatchThumbnailPreload = (mediaIds: string[], enabled: boolean = 
         const batch = idsToPreload.slice(i, i + batchSize);
 
         try {
-          await fetch(`${API_BASE}/api/thumbnails/batch`, {
+          await authenticatedFetch(`${API_BASE}/api/thumbnails/batch`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ ids: batch }),
             signal: AbortSignal.timeout(10000),
           });
