@@ -10,3 +10,4 @@ out/
 *.db-wal
 thumbnails/
 .DS_Store
+backend/media-discovery.db.backup-20260120-171723
