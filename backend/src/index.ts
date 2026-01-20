@@ -18,13 +18,23 @@ import { stopWatcher } from './services/watcher.js';
 import feedRoutes from './routes/feed.js';
 import thumbnailRoutes from './routes/thumbnails.js';
 import maintenanceRoutes from './routes/maintenance.js';
+import folderRoutes from './routes/folders.js';
 import { initThumbnailService } from './services/thumbnails.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const fastify = Fastify({
-  logger: true,
+  logger: {
+    transport: {
+      target: 'pino-pretty',
+      options: {
+        translateTime: 'HH:MM:ss',
+        ignore: 'pid,hostname',
+        colorize: true,
+      },
+    },
+  },
 });
 
 // Register CORS for LAN access
@@ -79,6 +89,7 @@ await fastify.register(feedRoutes);
 await fastify.register(thumbnailRoutes);
 await fastify.register(maintenanceRoutes);
 await fastify.register(filesystemRoutes);
+await fastify.register(folderRoutes, { prefix: '/api/folders' });
 
 // Health check
 fastify.get('/api/health', async () => {
