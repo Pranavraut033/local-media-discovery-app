@@ -5,9 +5,11 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Settings as SettingsIcon, ArrowLeft, RotateCw, Eye, LogOut } from 'lucide-react';
+import { Settings as SettingsIcon, ArrowLeft, RotateCw, Eye, LogOut, FolderTree } from 'lucide-react';
 import { getPreferences, setPreferences, ViewMode, clearRecentFolders, getRootFolder, clearRootFolder } from '@/lib/storage';
 import { getApiBase, authenticatedFetch } from '@/lib/api';
+import { useSources, useFolderTree, useHideFolderMutation } from '@/lib/hooks';
+import { FolderTreeView } from './FolderTreeView';
 
 interface AppStats {
   totalMedia: number;
@@ -31,6 +33,17 @@ export function Settings({ onBack, onViewHidden }: SettingsProps) {
   const [error, setError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [isResetting, setIsResetting] = useState(false);
+  // Fetch user sources
+  const { data: sources } = useSources();
+
+  // Automatically use the first source (current root folder)
+  const currentSource = sources && sources.length > 0 ? sources[0] : null;
+
+  // Fetch folder tree for current root folder
+  const { data: folderTree, isLoading: isTreeLoading } = useFolderTree(currentSource?.id || null);
+
+  // Mutation for hiding/showing folders
+  const hideFolderMutation = useHideFolderMutation();
 
   // Load preferences and stats on mount
   useEffect(() => {
@@ -281,6 +294,62 @@ export function Settings({ onBack, onViewHidden }: SettingsProps) {
             <p className="text-xs text-gray-500 dark:text-gray-500 mt-2">
               This will clear all indexed media and return you to the folder selection screen.
             </p>
+          </div>
+        </div>
+
+        {/* Folder Management */}
+        <div className="mb-8">
+          <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
+            <FolderTree size={20} />
+            Folder Management
+          </h2>
+          <div className="p-4 bg-gray-50 dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700">
+            {currentSource ? (
+              <>
+                <div className="mb-4">
+                  <p className="text-sm text-gray-600 dark:text-gray-400 mb-2">
+                    Manage subfolders in your root folder. Hidden subfolders will not appear in your feed.
+                  </p>
+                  <div className="p-3 bg-white dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-700">
+                    <p className="text-xs text-gray-500 dark:text-gray-400 font-medium mb-1">Current Root Folder</p>
+                    <p className="text-sm text-gray-900 dark:text-white font-mono break-all">
+                      {currentSource.folderPath}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Folder Tree */}
+                <div className="p-4 bg-white dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-700 max-h-96 overflow-y-auto">
+                  {isTreeLoading ? (
+                    <div className="text-center py-8">
+                      <div className="w-8 h-8 border-4 border-gray-300 dark:border-gray-600 border-t-gray-900 dark:border-t-gray-200 rounded-full animate-spin mx-auto mb-2"></div>
+                      <p className="text-sm text-gray-600 dark:text-gray-400">Loading folder tree...</p>
+                    </div>
+                  ) : folderTree ? (
+                    <FolderTreeView
+                      tree={folderTree}
+                      onToggleHide={(folderPath) => {
+                        hideFolderMutation.mutate({
+                          sourceId: currentSource.id,
+                          folderPath,
+                        });
+                      }}
+                      isLoading={hideFolderMutation.isPending}
+                    />
+                  ) : (
+                    <p className="text-sm text-gray-500 dark:text-gray-400 text-center py-4">
+                      No subfolders found
+                    </p>
+                  )}
+                </div>
+              </>
+            ) : (
+              <div className="text-center py-8">
+                <p className="text-sm text-gray-500 dark:text-gray-400">
+                  No root folder selected. Please select a folder from the folder selection screen.
+                </p>
+              </div>
+            )}
           </div>
         </div>
 
