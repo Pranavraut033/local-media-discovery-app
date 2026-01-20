@@ -184,6 +184,33 @@ export const useSourceMedia = (sourceId: string, limit: number = 50) => {
   });
 };
 
+interface Source {
+  id: string;
+  folderPath: string;
+  displayName: string;
+  avatarSeed: string;
+  createdAt: number;
+}
+
+/**
+ * Fetch all sources (folders) accessible by the user
+ */
+export const useSources = () => {
+  return useQuery({
+    queryKey: ['sources'],
+    queryFn: async (): Promise<Source[]> => {
+      const response = await authenticatedFetch(`${API_BASE}/api/sources`);
+      if (!response.ok) {
+        throw new Error('Failed to fetch sources');
+      }
+      const data = await response.json();
+      return data.sources || [];
+    },
+    staleTime: 5 * 60 * 1000,
+    gcTime: 10 * 60 * 1000,
+  });
+};
+
 // ============================================================================
 // Mutation Hooks
 // ============================================================================
@@ -561,4 +588,64 @@ export const useVirtualScrolling = (
     visibleItems: items.slice(visibleRange.start, visibleRange.end),
     visibleRange,
   };
+};
+
+// ============================================================================
+// Folder Management Hooks
+// ============================================================================
+
+import type { FolderNode } from '@/lib/api';
+import { getFolderTree, toggleFolderHide, getHiddenFolders } from '@/lib/api';
+
+/**
+ * Fetch folder tree for a source
+ */
+export const useFolderTree = (sourceId: string | null) => {
+  return useQuery({
+    queryKey: ['folderTree', sourceId],
+    queryFn: async (): Promise<FolderNode> => {
+      if (!sourceId) {
+        throw new Error('Source ID is required');
+      }
+      return getFolderTree(sourceId);
+    },
+    enabled: !!sourceId,
+    staleTime: 1000 * 60 * 5, // 5 minutes
+  });
+};
+
+/**
+ * Toggle folder hide status
+ */
+export const useHideFolderMutation = () => {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ sourceId, folderPath }: { sourceId: string; folderPath: string }) =>
+      toggleFolderHide(sourceId, folderPath),
+    onSuccess: (_, variables) => {
+      // Invalidate folder tree to refresh
+      queryClient.invalidateQueries({ queryKey: ['folderTree', variables.sourceId] });
+      // Invalidate feed to reflect hidden folder changes
+      queryClient.invalidateQueries({ queryKey: ['feed'] });
+      queryClient.invalidateQueries({ queryKey: ['sourceFeed'] });
+    },
+  });
+};
+
+/**
+ * Fetch hidden folders for a source
+ */
+export const useHiddenFolders = (sourceId: string | null) => {
+  return useQuery({
+    queryKey: ['hiddenFolders', sourceId],
+    queryFn: async (): Promise<Array<{ folder_path: string }>> => {
+      if (!sourceId) {
+        throw new Error('Source ID is required');
+      }
+      return getHiddenFolders(sourceId);
+    },
+    enabled: !!sourceId,
+    staleTime: 1000 * 60 * 5, // 5 minutes
+  });
 };
