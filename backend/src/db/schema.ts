@@ -5,6 +5,9 @@
 import type Database from 'better-sqlite3';
 
 export function initializeSchema(db: Database.Database): void {
+  // Temporarily disable foreign keys during schema setup
+  db.pragma('foreign_keys = OFF');
+
   // Users table - represents authenticated users with PIN
   db.exec(`
     CREATE TABLE IF NOT EXISTS users (
@@ -108,8 +111,29 @@ export function initializeSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_user_interactions_hidden ON user_interactions(hidden);
   `);
 
+  // User hidden folders - tracks which subfolders each user has hidden
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS user_hidden_folders (
+      user_id TEXT NOT NULL,
+      source_id TEXT NOT NULL,
+      folder_path TEXT NOT NULL,
+      hidden INTEGER NOT NULL DEFAULT 1,
+      created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+      PRIMARY KEY (user_id, source_id, folder_path),
+      FOREIGN KEY (user_id) REFERENCES users(id),
+      FOREIGN KEY (source_id) REFERENCES sources(id)
+    );
+    
+    CREATE INDEX IF NOT EXISTS idx_user_hidden_folders_user ON user_hidden_folders(user_id);
+    CREATE INDEX IF NOT EXISTS idx_user_hidden_folders_source ON user_hidden_folders(source_id);
+    CREATE INDEX IF NOT EXISTS idx_user_hidden_folders_path ON user_hidden_folders(folder_path);
+  `);
+
   // Migrate existing data to default user
   migrateToUserScoped(db);
+
+  // Re-enable foreign keys after schema setup
+  db.pragma('foreign_keys = ON');
 
   console.log('Database schema initialized');
 }
@@ -120,27 +144,27 @@ export function initializeSchema(db: Database.Database): void {
  */
 function migrateToUserScoped(db: Database.Database): void {
   const defaultUserId = 'default-user';
-  
+
   // Check if default user already exists
   const existingUser = db.prepare('SELECT id FROM users WHERE id = ?').get(defaultUserId);
-  
+
   if (!existingUser) {
     console.log('Migrating existing data to user-scoped model...');
-    
+
     // Create default user (with a placeholder hash that can be updated later)
     db.prepare('INSERT INTO users (id, pin_hash) VALUES (?, ?)').run(
       defaultUserId,
       '$2b$10$placeholder' // This should be updated via CLI script
     );
-    
+
     // Associate all existing sources with default user
     const sources = db.prepare('SELECT id FROM sources').all() as Array<{ id: string }>;
     const insertUserFolder = db.prepare('INSERT OR IGNORE INTO user_folders (user_id, source_id) VALUES (?, ?)');
-    
+
     for (const source of sources) {
       insertUserFolder.run(defaultUserId, source.id);
     }
-    
+
     // Migrate media interactions to user_interactions table
     const mediaItems = db.prepare(`
       SELECT id, source_id, liked, saved, hidden, view_count, last_viewed 
@@ -155,12 +179,12 @@ function migrateToUserScoped(db: Database.Database): void {
       view_count: number;
       last_viewed: number | null;
     }>;
-    
+
     const insertInteraction = db.prepare(`
       INSERT OR IGNORE INTO user_interactions (user_id, source_id, media_id, liked, saved, hidden, view_count, last_viewed)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `);
-    
+
     for (const media of mediaItems) {
       insertInteraction.run(
         defaultUserId,
@@ -173,7 +197,7 @@ function migrateToUserScoped(db: Database.Database): void {
         media.last_viewed
       );
     }
-    
+
     console.log(`Migrated ${sources.length} folders and ${mediaItems.length} interactions to default user`);
   }
 }

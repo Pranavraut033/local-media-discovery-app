@@ -19,6 +19,9 @@ export function getDatabase(): Database.Database {
     // Enable WAL mode for better concurrency
     db.pragma('journal_mode = WAL');
 
+    // Enable foreign key constraints
+    db.pragma('foreign_keys = ON');
+
     // Initialize schema
     initializeSchema(db);
   }
