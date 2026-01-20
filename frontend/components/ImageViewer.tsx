@@ -33,10 +33,11 @@ export function ImageViewer({ src, alt, mode = 'feed', className = '', onLoad }:
   // Use lazy image loading hook
   useLazyImage(imgElementRef, src);
 
-  const handleLoadingComplete = () => {
+  // Memoize the callback to prevent infinite loops
+  const handleLoadingComplete = useCallback(() => {
     setIsLoading(false);
     onLoad?.();
-  };
+  }, [onLoad]);
 
   const handleError = () => {
     setHasError(true);

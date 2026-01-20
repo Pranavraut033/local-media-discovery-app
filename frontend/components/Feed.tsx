@@ -45,6 +45,8 @@ export function Feed({ initialMode, onViewSource }: FeedProps) {
   // Refs to track which mutations have been processed to avoid infinite loops
   const processedLikeMutationRef = useRef<string | null>(null);
   const processedSaveMutationRef = useRef<string | null>(null);
+  const observerRef = useRef<IntersectionObserver | null>(null);
+  const lastItemRef = useRef<HTMLDivElement | null>(null);
 
   // Sync mutations back into allItems
   useEffect(() => {
@@ -81,20 +83,25 @@ export function Feed({ initialMode, onViewSource }: FeedProps) {
 
   // Load more when reaching near the end and sync updates from cache
   useEffect(() => {
-    if (feedData?.feed) {
+    if (feedData?.feed && feedData.feed.length > 0) {
       setAllItems((prev) => {
         const merged = [...prev];
+        let hasNewItems = false;
+
         feedData.feed.forEach((newItem) => {
           const existingIndex = merged.findIndex((p) => p.id === newItem.id);
           if (existingIndex !== -1) {
             // Update existing item (preserves all properties including liked/saved)
             merged[existingIndex] = newItem;
           } else {
-            // Add new item
+            // Add new item only if not already present
             merged.push(newItem);
+            hasNewItems = true;
           }
         });
-        return merged;
+
+        // Only update if there were actual changes
+        return hasNewItems ? merged : prev;
       });
 
       // Update last source ID for diversity
@@ -131,6 +138,38 @@ export function Feed({ initialMode, onViewSource }: FeedProps) {
       setPage((p) => p + 1);
     }
   }, [currentIndex, allItems.length, feedData?.hasMore, isFetching]);
+
+  // Set up intersection observer for infinite scroll in feed mode
+  useEffect(() => {
+    if (mode !== 'feed') return;
+
+    const handleIntersection = (entries: IntersectionObserverEntry[]) => {
+      const lastEntry = entries[0];
+      if (lastEntry.isIntersecting && feedData?.hasMore && !isFetching) {
+        setPage((p) => p + 1);
+      }
+    };
+
+    // Create observer if it doesn't exist
+    if (!observerRef.current) {
+      observerRef.current = new IntersectionObserver(handleIntersection, {
+        root: containerRef.current,
+        rootMargin: '200px',
+        threshold: 0.1,
+      });
+    }
+
+    // Observe the last item if it exists
+    if (lastItemRef.current && allItems.length > 0) {
+      observerRef.current.observe(lastItemRef.current);
+    }
+
+    return () => {
+      if (lastItemRef.current && observerRef.current) {
+        observerRef.current.unobserve(lastItemRef.current);
+      }
+    };
+  }, [mode, feedData?.hasMore, isFetching, allItems.length]);
 
   // Handle touch/swipe gestures
   const handleTouchStart = useCallback((e: React.TouchEvent) => {
@@ -347,9 +386,10 @@ export function Feed({ initialMode, onViewSource }: FeedProps) {
           className="flex -ml-4 w-auto"
           columnClassName="pl-4 bg-clip-padding"
         >
-          {allItems.map((item) => (
+          {allItems.map((item, index) => (
             <div
               key={item.id}
+              ref={index === allItems.length - 1 ? lastItemRef : null}
               className="mb-4 rounded-lg overflow-hidden shadow-sm hover:shadow-md transition-shadow"
             >
               <MediaCard
