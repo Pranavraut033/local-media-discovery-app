@@ -153,16 +153,28 @@ export async function indexMediaFiles(
 
   // Insert new files into database
   if (newFiles.length > 0) {
+    // Check which sources actually exist to validate foreign keys
+    const sourceCheckStmt = db.prepare('SELECT id FROM sources WHERE id = ?');
     const insertStmt = db.prepare(`
       INSERT OR IGNORE INTO media (id, path, source_id, depth, type)
       VALUES (?, ?, ?, ?, ?)
     `);
 
+    let validFiles = 0;
+    let skippedFiles = 0;
+
     for (const file of newFiles) {
-      insertStmt.run(file.id, file.path, file.sourceId, file.depth, file.type);
+      // Only insert if the source exists
+      if (sourceCheckStmt.get(file.sourceId)) {
+        insertStmt.run(file.id, file.path, file.sourceId, file.depth, file.type);
+        validFiles++;
+      } else {
+        console.warn(`Skipping file ${file.path} - source not found: ${file.sourceId}`);
+        skippedFiles++;
+      }
     }
 
-    console.log(`Added ${newFiles.length} new files to database`);
+    console.log(`Added ${validFiles} new files to database${skippedFiles > 0 ? ` (skipped ${skippedFiles} files with missing sources)` : ''}`);
   }
 
   // Count unique sources

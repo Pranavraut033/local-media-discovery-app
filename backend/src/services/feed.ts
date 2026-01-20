@@ -58,14 +58,23 @@ export function generateFeed(db: Database.Database, options: FeedOptions = {}): 
     WHERE COALESCE(ui.hidden, 0) = 0
     ${sourceId ? 'AND m.source_id = ?' : ''}
   `;
-  
+
   if (userId) {
     // Filter to user's folders
     query += ` AND m.source_id IN (
       SELECT source_id FROM user_folders WHERE user_id = ?
     )`;
+
+    // Exclude media from hidden subfolders
+    query += ` AND NOT EXISTS (
+      SELECT 1 FROM user_hidden_folders uhf
+      WHERE uhf.user_id = ?
+        AND uhf.source_id = m.source_id
+        AND uhf.hidden = 1
+        AND (m.path LIKE uhf.folder_path || '/%' OR m.path = uhf.folder_path)
+    )`;
   }
-  
+
   query += ' ORDER BY m.created_at ASC';
 
   const params: string[] = [];
@@ -75,6 +84,7 @@ export function generateFeed(db: Database.Database, options: FeedOptions = {}): 
       params.push(sourceId);
     }
     params.push(userId);
+    params.push(userId); // For hidden folders check
   } else if (sourceId) {
     params.push(sourceId);
   }
@@ -189,8 +199,10 @@ export function generatePaginatedFeed(
   hasMore: boolean;
   page: number;
 } {
+  const offset = page * itemsPerPage;
   const feed = generateFeed(db, {
     limit: itemsPerPage + 1, // Fetch one extra to determine hasMore
+    offset,
     lastSourceId,
     userId,
     sourceId,
