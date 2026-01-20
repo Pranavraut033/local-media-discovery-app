@@ -37,7 +37,7 @@ export async function authenticatedFetch(
   options: RequestInit = {}
 ): Promise<Response> {
   const token = getStoredToken();
-  
+
   const headers = {
     'Content-Type': 'application/json',
     ...options.headers,
@@ -65,4 +65,60 @@ export async function authenticatedFetch(
 export function getMediaUrl(mediaId: string): string {
   const base = getApiBase();
   return `${base}/api/media/file/${mediaId}`;
+}
+
+/**
+ * Folder tree API
+ */
+export interface FolderNode {
+  path: string;
+  name: string;
+  mediaCount: number;
+  hidden: boolean;
+  children: FolderNode[];
+}
+
+export async function getFolderTree(sourceId: string): Promise<FolderNode> {
+  const base = getApiBase();
+  const response = await authenticatedFetch(
+    `${base}/api/folders/tree?sourceId=${encodeURIComponent(sourceId)}`
+  );
+
+  if (!response.ok) {
+    throw new Error('Failed to fetch folder tree');
+  }
+
+  return response.json();
+}
+
+export async function toggleFolderHide(
+  sourceId: string,
+  folderPath: string
+): Promise<{ hidden: boolean }> {
+  const base = getApiBase();
+  const response = await authenticatedFetch(`${base}/api/folders/hide`, {
+    method: 'POST',
+    body: JSON.stringify({ sourceId, folderPath }),
+  });
+
+  if (!response.ok) {
+    throw new Error('Failed to toggle folder visibility');
+  }
+
+  return response.json();
+}
+
+export async function getHiddenFolders(
+  sourceId: string
+): Promise<Array<{ folder_path: string }>> {
+  const base = getApiBase();
+  const response = await authenticatedFetch(
+    `${base}/api/folders/hidden?sourceId=${encodeURIComponent(sourceId)}`
+  );
+
+  if (!response.ok) {
+    throw new Error('Failed to fetch hidden folders');
+  }
+
+  return response.json();
 }
