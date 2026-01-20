@@ -11,84 +11,81 @@ interface ListDirectoryQuery {
   path?: string;
 }
 
-interface AuthenticatedRequest extends FastifyRequest {
-  user: { userId: string };
-}
 
 export default async function filesystemRoutes(fastify: FastifyInstance): Promise<void> {
   // Get common starting directories
   fastify.get(
     '/api/filesystem/roots',
     {
-      onRequest: [fastify.authenticate as any],
+      onRequest: [fastify.authenticate],
     },
-    async (request: AuthenticatedRequest, reply: FastifyReply) => {
-    try {
-      const homeDir = os.homedir();
-      const platform = os.platform();
+    async (request, reply) => {
+      try {
+        const homeDir = os.homedir();
+        const platform = os.platform();
 
-      const roots = [
-        { path: homeDir, name: 'Home', type: 'home' },
-        { path: path.join(homeDir, 'Desktop'), name: 'Desktop', type: 'common' },
-        { path: path.join(homeDir, 'Documents'), name: 'Documents', type: 'common' },
-        { path: path.join(homeDir, 'Pictures'), name: 'Pictures', type: 'common' },
-        { path: path.join(homeDir, 'Downloads'), name: 'Downloads', type: 'common' },
-      ];
+        const roots = [
+          { path: homeDir, name: 'Home', type: 'home' },
+          { path: path.join(homeDir, 'Desktop'), name: 'Desktop', type: 'common' },
+          { path: path.join(homeDir, 'Documents'), name: 'Documents', type: 'common' },
+          { path: path.join(homeDir, 'Pictures'), name: 'Pictures', type: 'common' },
+          { path: path.join(homeDir, 'Downloads'), name: 'Downloads', type: 'common' },
+        ];
 
-      // Add platform-specific roots
-      if (platform === 'darwin') {
-        roots.push({ path: '/Volumes', name: 'Volumes', type: 'system' });
-      } else if (platform === 'win32') {
-        // Windows drives
-        for (let i = 65; i <= 90; i++) {
-          const drive = String.fromCharCode(i) + ':\\';
-          try {
-            await fs.access(drive);
-            roots.push({ path: drive, name: `Drive ${String.fromCharCode(i)}:`, type: 'system' });
-          } catch {
-            // Drive doesn't exist
-          }
-        }
-      } else {
-        // Linux/Unix
-        roots.push({ path: '/', name: 'Root', type: 'system' });
-      }
-
-      // Filter to only existing directories
-      const existingRoots = await Promise.all(
-        roots.map(async (root) => {
-          try {
-            const stats = await fs.stat(root.path);
-            if (stats.isDirectory()) {
-              return root;
+        // Add platform-specific roots
+        if (platform === 'darwin') {
+          roots.push({ path: '/Volumes', name: 'Volumes', type: 'system' });
+        } else if (platform === 'win32') {
+          // Windows drives
+          for (let i = 65; i <= 90; i++) {
+            const drive = String.fromCharCode(i) + ':\\';
+            try {
+              await fs.access(drive);
+              roots.push({ path: drive, name: `Drive ${String.fromCharCode(i)}:`, type: 'system' });
+            } catch {
+              // Drive doesn't exist
             }
-          } catch {
-            return null;
           }
-          return null;
-        })
-      );
+        } else {
+          // Linux/Unix
+          roots.push({ path: '/', name: 'Root', type: 'system' });
+        }
 
-      return {
-        success: true,
-        roots: existingRoots.filter((r) => r !== null),
-      };
-    } catch (error) {
-      console.error('Get roots error:', error);
-      return reply.code(500).send({
-        error: 'Failed to get root directories',
-        message: error instanceof Error ? error.message : 'Unknown error',
-      });
-    }
-  });
+        // Filter to only existing directories
+        const existingRoots = await Promise.all(
+          roots.map(async (root) => {
+            try {
+              const stats = await fs.stat(root.path);
+              if (stats.isDirectory()) {
+                return root;
+              }
+            } catch {
+              return null;
+            }
+            return null;
+          })
+        );
+
+        return {
+          success: true,
+          roots: existingRoots.filter((r) => r !== null),
+        };
+      } catch (error) {
+        console.error('Get roots error:', error);
+        return reply.code(500).send({
+          error: 'Failed to get root directories',
+          message: error instanceof Error ? error.message : 'Unknown error',
+        });
+      }
+    });
 
   // List directory contents
   fastify.get<{ Querystring: ListDirectoryQuery }>(
     '/api/filesystem/list',
     {
-      onRequest: [fastify.authenticate as any],
+      onRequest: [fastify.authenticate],
     },
-    async (request: AuthenticatedRequest & FastifyRequest<{ Querystring: ListDirectoryQuery }>, reply: FastifyReply) => {
+    async (request, reply) => {
       try {
         const dirPath = request.query.path;
 

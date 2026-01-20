@@ -20,9 +20,6 @@ interface InteractionBody {
   sourceId: string;
 }
 
-interface AuthenticatedRequest extends FastifyRequest {
-  user: { userId: string };
-}
 
 export default async function feedRoutes(fastify: FastifyInstance): Promise<void> {
   const db = getDatabase();
@@ -31,15 +28,15 @@ export default async function feedRoutes(fastify: FastifyInstance): Promise<void
   fastify.get<{ Querystring: FeedQuery }>(
     '/api/feed',
     {
-      onRequest: [fastify.authenticate as any],
+      onRequest: [fastify.authenticate],
     },
-    async (request: AuthenticatedRequest & { Querystring: FeedQuery }, reply: FastifyReply) => {
+    async (request, reply) => {
       try {
         const page = parseInt(request.query.page || '0', 10);
         const limit = Math.min(parseInt(request.query.limit || '20', 10), 100); // Max 100
         const lastSourceId = request.query.lastSourceId;
         const sourceId = request.query.sourceId;
-        const userId = request.user.userId;
+        const userId = request.user!.userId;
 
         const feedData = generatePaginatedFeed(db, page, limit, lastSourceId, userId, sourceId);
 
@@ -138,11 +135,11 @@ export default async function feedRoutes(fastify: FastifyInstance): Promise<void
   fastify.post<{ Body: InteractionBody }>(
     '/api/like',
     {
-      onRequest: [fastify.authenticate as any],
+      onRequest: [fastify.authenticate],
     },
-    async (request: AuthenticatedRequest & { Body: InteractionBody }, reply: FastifyReply) => {
+    async (request, reply) => {
       const { mediaId, sourceId } = request.body;
-      const userId = request.user.userId;
+      const userId = request.user!.userId;
 
       if (!mediaId || typeof mediaId !== 'string' || !sourceId) {
         return reply.code(400).send({ error: 'Invalid media ID or source ID' });
@@ -192,11 +189,11 @@ export default async function feedRoutes(fastify: FastifyInstance): Promise<void
   fastify.post<{ Body: InteractionBody }>(
     '/api/save',
     {
-      onRequest: [fastify.authenticate as any],
+      onRequest: [fastify.authenticate],
     },
-    async (request: AuthenticatedRequest & { Body: InteractionBody }, reply: FastifyReply) => {
+    async (request, reply) => {
       const { mediaId, sourceId } = request.body;
-      const userId = request.user.userId;
+      const userId = request.user!.userId;
 
       if (!mediaId || typeof mediaId !== 'string' || !sourceId) {
         return reply.code(400).send({ error: 'Invalid media ID or source ID' });
@@ -246,11 +243,11 @@ export default async function feedRoutes(fastify: FastifyInstance): Promise<void
   fastify.post<{ Body: InteractionBody }>(
     '/api/view',
     {
-      onRequest: [fastify.authenticate as any],
+      onRequest: [fastify.authenticate],
     },
-    async (request: AuthenticatedRequest & { Body: InteractionBody }, reply: FastifyReply) => {
+    async (request, reply) => {
       const { mediaId, sourceId } = request.body;
-      const userId = request.user.userId;
+      const userId = request.user!.userId;
 
       if (!mediaId || typeof mediaId !== 'string' || !sourceId) {
         return reply.code(400).send({ error: 'Invalid media ID or source ID' });
@@ -258,7 +255,7 @@ export default async function feedRoutes(fastify: FastifyInstance): Promise<void
 
       try {
         const now = Math.floor(Date.now() / 1000);
-        
+
         // Check if interaction exists
         const interaction = db.prepare(
           'SELECT view_count FROM user_interactions WHERE user_id = ? AND source_id = ? AND media_id = ?'
@@ -366,11 +363,11 @@ export default async function feedRoutes(fastify: FastifyInstance): Promise<void
   fastify.get(
     '/api/saved',
     {
-      onRequest: [fastify.authenticate as any],
+      onRequest: [fastify.authenticate],
     },
-    async (request: AuthenticatedRequest, reply: FastifyReply) => {
-      const userId = request.user.userId;
-      
+    async (request, reply) => {
+      const userId = request.user!.userId;
+
       try {
         const savedMedia = db
           .prepare(
@@ -435,11 +432,11 @@ export default async function feedRoutes(fastify: FastifyInstance): Promise<void
   fastify.get(
     '/api/liked',
     {
-      onRequest: [fastify.authenticate as any],
+      onRequest: [fastify.authenticate],
     },
-    async (request: AuthenticatedRequest, reply: FastifyReply) => {
-      const userId = request.user.userId;
-      
+    async (request, reply) => {
+      const userId = request.user!.userId;
+
       try {
         const likedMedia = db
           .prepare(
@@ -595,11 +592,11 @@ export default async function feedRoutes(fastify: FastifyInstance): Promise<void
   fastify.post<{ Body: InteractionBody }>(
     '/api/hide',
     {
-      onRequest: [fastify.authenticate as any],
+      onRequest: [fastify.authenticate],
     },
-    async (request: AuthenticatedRequest & { Body: InteractionBody }, reply: FastifyReply) => {
+    async (request, reply) => {
       const { mediaId, sourceId } = request.body;
-      const userId = request.user.userId;
+      const userId = request.user!.userId;
 
       if (!mediaId || typeof mediaId !== 'string' || !sourceId) {
         return reply.code(400).send({ error: 'Invalid media ID or source ID' });
@@ -649,11 +646,11 @@ export default async function feedRoutes(fastify: FastifyInstance): Promise<void
   fastify.get(
     '/api/hidden',
     {
-      onRequest: [fastify.authenticate as any],
+      onRequest: [fastify.authenticate],
     },
-    async (request: AuthenticatedRequest, reply: FastifyReply) => {
-      const userId = request.user.userId;
-      
+    async (request, reply) => {
+      const userId = request.user!.userId;
+
       try {
         const hiddenMedia = db
           .prepare(

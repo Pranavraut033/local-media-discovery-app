@@ -13,10 +13,6 @@ interface IndexRequest {
   enableWatcher?: boolean;
 }
 
-interface AuthenticatedRequest extends FastifyRequest {
-  user: { userId: string };
-}
-
 export default async function indexingRoutes(fastify: FastifyInstance): Promise<void> {
   const db = getDatabase();
 
@@ -24,11 +20,11 @@ export default async function indexingRoutes(fastify: FastifyInstance): Promise<
   fastify.post<{ Body: IndexRequest }>(
     '/api/index',
     {
-      onRequest: [fastify.authenticate as any],
+      onRequest: [fastify.authenticate],
     },
-    async (request: AuthenticatedRequest, reply: FastifyReply) => {
+    async (request, reply) => {
       const { rootFolder, enableWatcher = true } = request.body;
-      const userId = request.user.userId;
+      const userId = request.user!.userId;
 
       if (!rootFolder || typeof rootFolder !== 'string') {
         return reply.code(400).send({ error: 'Invalid root folder path' });
@@ -95,11 +91,11 @@ export default async function indexingRoutes(fastify: FastifyInstance): Promise<
   fastify.get(
     '/api/sources',
     {
-      onRequest: [fastify.authenticate as any],
+      onRequest: [fastify.authenticate],
     },
-    async (request: AuthenticatedRequest, reply: FastifyReply) => {
-      const userId = request.user.userId;
-      
+    async (request, reply) => {
+      const userId = request.user!.userId;
+
       try {
         const sources = getAllSources(db, userId);
 

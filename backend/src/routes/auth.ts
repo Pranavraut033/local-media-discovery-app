@@ -38,7 +38,7 @@ export default async function authRoutes(fastify: FastifyInstance): Promise<void
       // Try to match PIN with any user
       for (const user of users) {
         const isValid = await bcrypt.compare(pin, user.pin_hash);
-        
+
         if (isValid) {
           // Generate long-lived JWT token (30 days)
           const token = fastify.jwt.sign(
@@ -57,7 +57,7 @@ export default async function authRoutes(fastify: FastifyInstance): Promise<void
       // No matching user found
       return reply.code(401).send({ error: 'Invalid PIN' });
     } catch (error) {
-      fastify.log.error('Login error:', error);
+      fastify.log.error({ err: error }, 'Login error');
       return reply.code(500).send({ error: 'Authentication failed' });
     }
   });
@@ -75,10 +75,10 @@ export default async function authRoutes(fastify: FastifyInstance): Promise<void
 
     try {
       const decoded = fastify.jwt.verify(token) as { userId: string };
-      
+
       // Check if user still exists
       const user = db.prepare('SELECT id FROM users WHERE id = ?').get(decoded.userId);
-      
+
       if (!user) {
         return reply.code(401).send({ error: 'User not found' });
       }
@@ -99,13 +99,13 @@ export default async function authRoutes(fastify: FastifyInstance): Promise<void
   fastify.get('/api/auth/check-setup', async (request, reply) => {
     try {
       const users = db.prepare('SELECT COUNT(*) as count FROM users').get() as { count: number };
-      
+
       return reply.send({
         hasUsers: users.count > 0,
         requiresSetup: users.count === 0,
       });
     } catch (error) {
-      fastify.log.error('Check setup error:', error);
+      fastify.log.error({ err: error }, 'Check setup error');
       return reply.code(500).send({ error: 'Failed to check setup status' });
     }
   });

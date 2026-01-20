@@ -14,10 +14,6 @@ interface SetFolderBody {
   autoIndex?: boolean;
 }
 
-interface AuthenticatedRequest extends FastifyRequest {
-  user: { userId: string };
-}
-
 export default async function configRoutes(fastify: FastifyInstance): Promise<void> {
   // Note: Root folder path is NOT stored on backend for privacy
   // It's stored in frontend localStorage
@@ -27,11 +23,11 @@ export default async function configRoutes(fastify: FastifyInstance): Promise<vo
   fastify.post<{ Body: SetFolderBody }>(
     '/api/config/root-folder',
     {
-      onRequest: [fastify.authenticate as any],
+      onRequest: [fastify.authenticate],
     },
-    async (request: AuthenticatedRequest & { Body: SetFolderBody }, reply: FastifyReply) => {
+    async (request, reply) => {
       const { path, autoIndex = true } = request.body;
-      const userId = request.user.userId;
+      const userId = request.user!.userId;
 
       if (!path || typeof path !== 'string') {
         return reply.code(400).send({ error: 'Invalid folder path' });
@@ -64,16 +60,16 @@ export default async function configRoutes(fastify: FastifyInstance): Promise<vo
             const insertUserFolderStmt = db.prepare(
               'INSERT OR IGNORE INTO user_folders (user_id, source_id) VALUES (?, ?)'
             );
-            
+
             for (const source of existingSources) {
               insertUserFolderStmt.run(userId, source.id);
             }
           }
 
-          // Generate sources and associate with user
+          // Generate sources BEFORE indexing to ensure all source_id references exist
           const sources = await generateSources(db, path, userId);
 
-          // Then index media files
+          // Index media files AFTER sources are created
           const result = await indexMediaFiles(db, path);
 
           // Start file watcher
@@ -106,26 +102,26 @@ export default async function configRoutes(fastify: FastifyInstance): Promise<vo
   fastify.delete(
     '/api/config/root-folder',
     {
-      onRequest: [fastify.authenticate as any],
+      onRequest: [fastify.authenticate],
     },
-    async (request: AuthenticatedRequest, reply: FastifyReply) => {
-    try {
-      const db = getDatabase();
+    async (request, reply) => {
+      try {
+        const db = getDatabase();
 
-      // Stop the file watcher if running
-      stopWatcher();
+        // Stop the file watcher if running
+        stopWatcher();
 
-      // Clear all data from the database
-      db.prepare('DELETE FROM media').run();
-      db.prepare('DELETE FROM sources').run();
+        // Clear all data from the database
+        db.prepare('DELETE FROM media').run();
+        db.prepare('DELETE FROM sources').run();
 
-      return { success: true, message: 'Database cleared successfully' };
-    } catch (error) {
-      console.error('Failed to clear database:', error);
-      return reply.code(500).send({
-        error: 'Failed to clear database',
-        message: error instanceof Error ? error.message : 'Unknown error',
-      });
-    }
-  });
+        return { success: true, message: 'Database cleared successfully' };
+      } catch (error) {
+        console.error('Failed to clear database:', error);
+        return reply.code(500).send({
+          error: 'Failed to clear database',
+          message: error instanceof Error ? error.message : 'Unknown error',
+        });
+      }
+    });
 }
