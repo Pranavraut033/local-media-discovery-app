@@ -9,7 +9,8 @@ module.exports = {
       watch: false,
       max_memory_restart: '1G',
       env: {
-        NODE_ENV: 'production'
+        NODE_ENV: 'production',
+        PORT: 3001
       },
       error_file: './logs/backend-error.log',
       out_file: './logs/backend-out.log',
@@ -17,15 +18,17 @@ module.exports = {
     },
     {
       name: 'frontend',
-      script: 'pm2',
-      args: 'serve ./frontend/out 3000 --spa',
-      cwd: '.',
+      script: 'npx',
+      args: 'serve -s ./out -l 3000',
+      cwd: './frontend',
       instances: 1,
       autorestart: true,
       watch: false,
       max_memory_restart: '1G',
       env: {
-        NODE_ENV: 'production'
+        NODE_ENV: 'production',
+        PORT: 3000,
+        API_PORT: 3001
       },
       error_file: './logs/frontend-error.log',
       out_file: './logs/frontend-out.log',

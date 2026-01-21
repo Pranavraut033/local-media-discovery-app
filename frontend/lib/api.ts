@@ -1,15 +1,17 @@
-import { getStoredToken } from './storage';
+import { getRootFolder, getStoredToken, useUIStore } from './storage';
 
 export function getApiBase(): string {
   if (process.env.NEXT_PUBLIC_API_URL) {
     return process.env.NEXT_PUBLIC_API_URL;
   }
 
+  const port = process.env.API_PORT || '3001';
+
   if (typeof window !== 'undefined' && window.location?.hostname) {
-    return `http://${window.location.hostname}:3001`;
+    return `http://${window.location.hostname}:${port}`;
   }
 
-  return 'http://localhost:3001';
+  return `http://localhost:${port}`;
 }
 
 /**
@@ -77,25 +79,43 @@ export interface FolderNode {
   hidden: boolean;
   children: FolderNode[];
 }
+const base = getApiBase();
 
-export async function getFolderTree(sourceId: string): Promise<FolderNode> {
-  const base = getApiBase();
-  const response = await authenticatedFetch(
-    `${base}/api/folders/tree?sourceId=${encodeURIComponent(sourceId)}`
-  );
+export async function getFolderTree(sourceIds: string[]): Promise<FolderNode> {
 
-  if (!response.ok) {
-    throw new Error('Failed to fetch folder tree');
-  }
+  const responses = await Promise.all(
+    sourceIds.map((sourceId) =>
+      authenticatedFetch(`${base}/api/folders/tree?sourceId=${encodeURIComponent(sourceId)}`)
+    )
+  ).then((responses) => {
+    if (!responses.every(response => response.ok)) {
+      throw new Error('Failed to fetch folder tree');
+    }
 
-  return response.json();
+    return Promise.all(responses.map((response) => response.json()));
+  });
+
+  const root = getRootFolder()!
+
+  const children = (responses as FolderNode[]).map((node) => ({
+    ...node,
+    mediaCount: node.mediaCount || node.children.reduce((sum, child) => sum + child.mediaCount, 0),
+  }))
+
+  return {
+    path: root,
+    name: 'Root',
+    mediaCount: children.reduce((sum, node) => sum + node.mediaCount, 0),
+    hidden: false,
+    children,
+  };
+
 }
 
 export async function toggleFolderHide(
   sourceId: string,
   folderPath: string
 ): Promise<{ hidden: boolean }> {
-  const base = getApiBase();
   const response = await authenticatedFetch(`${base}/api/folders/hide`, {
     method: 'POST',
     body: JSON.stringify({ sourceId, folderPath }),
@@ -111,7 +131,6 @@ export async function toggleFolderHide(
 export async function getHiddenFolders(
   sourceId: string
 ): Promise<Array<{ folder_path: string }>> {
-  const base = getApiBase();
   const response = await authenticatedFetch(
     `${base}/api/folders/hidden?sourceId=${encodeURIComponent(sourceId)}`
   );
