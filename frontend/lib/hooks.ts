@@ -600,16 +600,16 @@ import { getFolderTree, toggleFolderHide, getHiddenFolders } from '@/lib/api';
 /**
  * Fetch folder tree for a source
  */
-export const useFolderTree = (sourceId: string | null) => {
+export const useFolderTree = (sourceIds: string[]) => {
   return useQuery({
-    queryKey: ['folderTree', sourceId],
+    queryKey: ['folderTree', sourceIds],
     queryFn: async (): Promise<FolderNode> => {
-      if (!sourceId) {
+      if (!sourceIds?.length) {
         throw new Error('Source ID is required');
       }
-      return getFolderTree(sourceId);
+      return getFolderTree(sourceIds);
     },
-    enabled: !!sourceId,
+    enabled: !!sourceIds.length,
     staleTime: 1000 * 60 * 5, // 5 minutes
   });
 };

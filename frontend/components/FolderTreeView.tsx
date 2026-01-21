@@ -67,8 +67,8 @@ function FolderTreeNode({ node, onToggleHide, isLoading, level }: FolderTreeNode
         {/* Folder Icon */}
         <Folder
           className={`w-4 h-4 ${node.hidden
-              ? 'text-gray-400 dark:text-gray-600'
-              : 'text-blue-500 dark:text-blue-400'
+            ? 'text-gray-400 dark:text-gray-600'
+            : 'text-blue-500 dark:text-blue-400'
             }`}
         />
 
@@ -77,8 +77,8 @@ function FolderTreeNode({ node, onToggleHide, isLoading, level }: FolderTreeNode
           <div className="flex items-center gap-2">
             <span
               className={`text-sm font-medium ${node.hidden
-                  ? 'text-gray-500 dark:text-gray-500 line-through'
-                  : 'text-gray-900 dark:text-gray-100'
+                ? 'text-gray-500 dark:text-gray-500 line-through'
+                : 'text-gray-900 dark:text-gray-100'
                 }`}
             >
               {node.name}
@@ -94,8 +94,8 @@ function FolderTreeNode({ node, onToggleHide, isLoading, level }: FolderTreeNode
               onClick={() => onToggleHide(node.path)}
               disabled={isLoading}
               className={`p-1.5 rounded-lg transition-colors ${node.hidden
-                  ? 'bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-400'
-                  : 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 hover:bg-blue-200 dark:hover:bg-blue-900/50'
+                ? 'bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-400'
+                : 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 hover:bg-blue-200 dark:hover:bg-blue-900/50'
                 } disabled:opacity-50 disabled:cursor-not-allowed`}
               aria-label={node.hidden ? 'Show folder' : 'Hide folder'}
               title={node.hidden ? 'Show folder' : 'Hide folder'}

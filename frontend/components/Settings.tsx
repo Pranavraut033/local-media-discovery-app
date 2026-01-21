@@ -40,7 +40,7 @@ export function Settings({ onBack, onViewHidden }: SettingsProps) {
   const currentSource = sources && sources.length > 0 ? sources[0] : null;
 
   // Fetch folder tree for current root folder
-  const { data: folderTree, isLoading: isTreeLoading } = useFolderTree(currentSource?.id || null);
+  const { data: folderTree, isLoading: isTreeLoading } = useFolderTree(sources?.map(s => s.id) || []);
 
   // Mutation for hiding/showing folders
   const hideFolderMutation = useHideFolderMutation();
