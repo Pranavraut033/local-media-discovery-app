@@ -5,6 +5,99 @@ This plan provides phased, actionable steps for implementing the local-media-dis
 
 ---
 
+## Frontend Migration Plan to Schema v2 (Phase F2)
+
+Status: Planned
+Owner: Frontend
+Dependency: Backend Phase 2 v2 API compatibility
+
+### Objective
+Migrate frontend data flows and UI assumptions from legacy source/media semantics to schema v2-backed behavior while preserving UX contracts (mobile-first feed, reels flow, saved/liked/hidden views, and settings).
+
+### Constraints
+1. Keep 6-digit PIN auth and existing session model unchanged.
+2. Use existing Zustand stores in `frontend/lib/stores` and authenticated helpers in `frontend/lib/api.ts`.
+3. Preserve current route contracts where already stable; only update frontend where payload assumptions changed.
+4. No telemetry or cloud dependencies.
+
+### Workstreams
+
+#### F2-01 API Contract Audit and Mapping
+1. Inventory frontend API consumers across `frontend/components` and `frontend/lib/hooks.ts`.
+2. Map each call to v2 endpoint behavior (feed, interactions, media file serving, folder tree, indexing, settings).
+3. Document compatibility shims needed in API helpers for any field normalization.
+
+Deliverables:
+1. Updated request/response typings in `frontend/lib/api.ts`.
+2. A compatibility matrix of endpoint payload assumptions (in this file section).
+
+#### F2-02 Interaction and Feed State Alignment
+Status: In Progress (started 2026-04-01)
+
+1. Ensure feed item model is v2-safe (`id`, `fileKey`, active path semantics, source projection metadata).
+2. Align like/save/hide optimistic updates to v2 interaction tables via existing endpoints.
+3. Ensure hidden items are excluded consistently in feed, liked/saved/hidden tabs.
+
+Deliverables:
+1. Updated feed/interactions hooks in `frontend/lib/hooks.ts`.
+2. Stable optimistic UI behavior across Feed/Reels/Saved/Liked/Hidden views.
+
+#### F2-03 Folder Tree and Hide UX Alignment
+1. Align folder tree rendering with v2 folder/path semantics.
+2. Support deterministic file-level hide behavior from folder actions.
+3. Ensure hide/unhide flows correctly invalidate and refresh list queries.
+
+Deliverables:
+1. Updated folder components (`FolderSelection`, `FolderTreeView`, `HiddenView`).
+2. Query invalidation strategy documented in hooks.
+
+#### F2-04 Settings and Storage Mode UX
+1. Align settings flows with `user_storage_configs` semantics.
+2. Ensure local and rclone mode status display is accurate.
+3. Preserve existing setup/reindex/reset UX while using v2 backend behavior.
+
+Deliverables:
+1. Updated `Settings` and related configuration components.
+2. Correct status rendering for active storage mode and indexing state.
+
+#### F2-05 Media Playback and File Serving Validation
+1. Verify image/video playback for local and rclone-indexed entries.
+2. Ensure player components handle missing/deleted path states gracefully.
+3. Validate thumbnail and fallback behavior under v2 paths.
+
+Deliverables:
+1. Updated `MediaCard`, `ImageViewer`, `VideoPlayer` behavior where needed.
+2. UI error states for inaccessible media.
+
+#### F2-06 Regression Sweep and Hardening
+1. Run frontend lint and targeted manual smoke flows:
+   - login
+   - index folder
+   - browse feed/reels
+   - like/save/hide/unhide
+   - saved/liked/hidden views
+   - settings reindex/reset
+2. Fix contract mismatches and stale state bugs.
+
+Deliverables:
+1. Frontend migration completion checklist in this plan.
+2. Stable behavior parity with pre-v2 UX expectations.
+
+### Execution Order
+1. F2-01 API contract audit
+2. F2-02 feed and interactions
+3. F2-03 folders and hide
+4. F2-04 settings and storage mode
+5. F2-05 playback/media validation
+6. F2-06 regression sweep
+
+### Completion Criteria
+1. No frontend assumptions depend on dropped legacy tables or legacy-only fields.
+2. Feed, interactions, folder hide, and settings flows are functional against backend v2.
+3. Frontend lint passes and migration smoke checklist is complete.
+
+---
+
 ## High-Level Architecture
 
 
@@ -378,6 +471,86 @@ REST API must include validation and error handling. All endpoints are local-onl
 
 ---
 
+## Phase 7: UI Unification, Layout Stability & UX Polish (NEXT)
+
+### Goal
+Deliver a consistent mobile-first UI/UX across all pages, remove overlay collisions, and make grid behavior predictable on every screen.
+
+### 7.1 Shared UI Foundation
+1. **Create a unified page-shell pattern**
+   - Standardize page structure: `Header + Content + Bottom-safe spacing`.
+   - Reuse one header behavior for all pages (title, optional back button, optional actions).
+   - Keep sticky vs non-sticky headers consistent by page type.
+
+2. **Standardize states and spacing**
+   - Reuse common loading, empty, and error state patterns.
+   - Align typography scale, icon sizing, border radius, and spacing tokens.
+   - Ensure all pages reserve bottom space for the fixed navigation bar.
+
+3. **Extract shared grid configuration**
+   - Define one Masonry breakpoint config and one card container style.
+   - Reuse it in Feed (grid mode), Saved, Liked, Hidden, and Source views.
+
+### 7.2 Page-by-Page Unification Scope
+1. **Feed (Reels mode + Grid mode)**
+   - Fix right-side interaction buttons and lower navigation controls so they never overlap with bottom nav.
+   - Use safe-area aware offsets (`env(safe-area-inset-*)`) for top/bottom controls.
+   - Keep mode/fullscreen controls at a consistent position and z-index layer.
+
+2. **Saved / Liked / Hidden**
+   - Refactor duplicated layout blocks to shared wrappers.
+   - Ensure identical header behavior, item counters, empty states, and Masonry spacing.
+   - Keep scrolling area and bottom padding behavior uniform.
+
+3. **Source view**
+   - Replace custom square grid with the same shared Masonry/grid system used elsewhere.
+   - Match card styling and spacing with Feed/Saved/Liked/Hidden.
+
+4. **Settings / Folder selection / Login**
+   - Align visual language with the rest of the app (container width, spacing rhythm, card surfaces, button hierarchy).
+   - Remove isolated styling patterns that feel like separate apps.
+
+### 7.3 Overlay & Layering Fix Plan (Critical)
+1. **Define z-index contract**
+   - Navigation bar, page header, in-content media controls, and modal/overlay layers get fixed z-index rules.
+   - Remove ad-hoc z-index usage where possible.
+
+2. **Define safe-area + bottom-nav spacing contract**
+   - Introduce shared bottom inset utility (e.g., `pb-[calc(5rem+env(safe-area-inset-bottom))]`).
+   - Apply to every scroll container and reels overlay control region.
+
+3. **Regression checks for overlap**
+   - Verify no button collision in portrait mobile, landscape mobile, and desktop widths.
+   - Verify touch targets remain tappable and visible while scrolling.
+
+### 7.4 UX Quality Pass
+1. **Mobile-first interaction polish**
+   - Minimum tap target size (44x44).
+   - Consistent feedback for like/save/hide actions.
+   - Preserve one-handed reach for primary actions.
+
+2. **Accessibility pass**
+   - Keyboard/focus states visible on controls.
+   - Sufficient contrast in light/dark mode.
+   - ARIA labels validated for icon-only buttons.
+
+### 7.5 Implementation Sequence
+1. Build shared layout/grid utilities.
+2. Migrate Saved/Liked/Hidden to shared patterns.
+3. Migrate Source view to shared grid.
+4. Fix Feed overlay/layering collisions.
+5. Unify Settings, FolderSelection, Login styling.
+6. Final responsive/accessibility regression pass.
+
+### 7.6 Acceptance Criteria
+- All major pages use the same layout primitives and state patterns.
+- No overlay button collisions with bottom nav or headers on mobile.
+- Grid behavior is consistent across Feed, Saved, Liked, Hidden, and Source pages.
+- Login/FolderSelection/Settings visually match the app-wide design language.
+- No new markdown files created; updates remain in `plan.md`/`PRD.md`/`agents.md` only.
+
+---
+
 ## Implementation Status
 
 **Completed:**
@@ -389,6 +562,7 @@ REST API must include validation and error handling. All endpoints are local-onl
 - ✅ Phase 6: Authentication & User Management
 
 **Remaining:**
+- Phase 7: UI unification, overlay fixes, and cross-page UX polish
 - Desktop packaging (Tauri - optional)
 - Advanced features (filters, search, etc.)
 

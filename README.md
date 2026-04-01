@@ -85,6 +85,55 @@ To find your local IP:
 - macOS/Linux: `ifconfig | grep "inet "`
 - Windows: `ipconfig`
 
+## Android rclone Installation Guide (Termux)
+
+Use this guide when you want the app (running in a browser) to connect to an rclone daemon running on your Android phone.
+
+### 1. Install Termux
+
+- Install Termux from F-Droid (recommended build).
+- Open Termux once to initialize packages.
+
+### 2. Install and configure rclone
+
+```bash
+pkg update && pkg upgrade -y
+pkg install rclone -y
+rclone config
+```
+
+- In `rclone config`, create your base remote (SFTP/WebDAV/Drive/etc).
+- For encrypted storage, create a `crypt` remote that points to the base remote.
+
+### 3. Start rclone daemon on Android
+
+Quick start:
+
+```bash
+rclone rcd --rc-addr=0.0.0.0:5572 --rc-no-auth
+```
+
+Recommended for shared networks:
+
+```bash
+rclone rcd --rc-addr=0.0.0.0:5572 --rc-user=myuser --rc-pass=mypassword
+```
+
+### 4. Connect from the app
+
+- Open the app Settings.
+- Go to Remote Sources and select Android rclone (Termux).
+- Enter Android phone IP and port (default `5572`).
+- If using auth, enter username and password.
+- Click Test Connection, then Save Configuration.
+
+### 5. Troubleshooting
+
+- Ensure phone and app host are on the same Wi-Fi network.
+- Keep Termux session alive while scanning/indexing.
+- Verify port `5572` is reachable on the phone.
+- If connection fails after sleep, restart the rclone daemon command.
+
 ## Project Structure
 
 ```
