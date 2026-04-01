@@ -1,15 +1,18 @@
 /**
- * Database connection and initialization
+ * Database connection and initialization with Drizzle + SQL migrations
  */
 import Database from 'better-sqlite3';
-import { initializeSchema } from './schema.js';
+import { drizzle } from 'drizzle-orm/better-sqlite3';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { runMigrations } from './migrate.js';
+import * as schema from './schema.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 let db: Database.Database | null = null;
+let drizzleDb: ReturnType<typeof drizzle<typeof schema>> | null = null;
 
 export function getDatabase(): Database.Database {
   if (!db) {
@@ -22,16 +25,30 @@ export function getDatabase(): Database.Database {
     // Enable foreign key constraints
     db.pragma('foreign_keys = ON');
 
-    // Initialize schema
-    initializeSchema(db);
+    // Initialize typed ORM and run SQL migrations
+    drizzleDb = drizzle(db, { schema });
+    runMigrations(db);
   }
 
   return db;
+}
+
+export function getDrizzleDb(): ReturnType<typeof drizzle<typeof schema>> {
+  if (!drizzleDb) {
+    getDatabase();
+  }
+
+  if (!drizzleDb) {
+    throw new Error('Drizzle database failed to initialize');
+  }
+
+  return drizzleDb;
 }
 
 export function closeDatabase(): void {
   if (db) {
     db.close();
     db = null;
+    drizzleDb = null;
   }
 }

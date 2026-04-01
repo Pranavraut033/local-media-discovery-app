@@ -11,6 +11,8 @@ import configRoutes from './routes/config.js';
 import indexingRoutes from './routes/indexing.js';
 import filesystemRoutes from './routes/filesystem.js';
 import authRoutes from './routes/auth.js';
+import rcloneRoutes from './routes/rclone.js';
+import remoteRcloneConfigRoutes from './routes/rclone-remote-config.js';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
@@ -19,7 +21,9 @@ import feedRoutes from './routes/feed.js';
 import thumbnailRoutes from './routes/thumbnails.js';
 import maintenanceRoutes from './routes/maintenance.js';
 import folderRoutes from './routes/folders.js';
+import eventsRoutes from './routes/events.js';
 import { initThumbnailService } from './services/thumbnails.js';
+import { startIndexingWorker } from './workers/indexer.worker.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -40,6 +44,8 @@ const fastify = Fastify({
 // Register CORS for LAN access
 await fastify.register(cors, {
   origin: true, // Allow all origins for local network
+  methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
 });
 
 // Register JWT plugin
@@ -90,6 +96,12 @@ await fastify.register(thumbnailRoutes);
 await fastify.register(maintenanceRoutes);
 await fastify.register(filesystemRoutes);
 await fastify.register(folderRoutes, { prefix: '/api/folders' });
+await fastify.register(rcloneRoutes);
+await fastify.register(remoteRcloneConfigRoutes);
+await fastify.register(eventsRoutes);
+
+// Start BullMQ indexing worker (in-process)
+startIndexingWorker();
 
 // Health check
 fastify.get('/api/health', async () => {

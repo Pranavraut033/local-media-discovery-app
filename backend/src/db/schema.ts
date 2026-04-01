@@ -1,204 +1,221 @@
-/**
- * Database schema initialization
- * Creates tables for sources and media
- */
-import type Database from 'better-sqlite3';
+import { sql } from 'drizzle-orm';
+import {
+  check,
+  index,
+  integer,
+  sqliteTable,
+  text,
+  unique,
+} from 'drizzle-orm/sqlite-core';
 
-export function initializeSchema(db: Database.Database): void {
-  // Temporarily disable foreign keys during schema setup
-  db.pragma('foreign_keys = OFF');
+const nowEpoch = sql`(strftime('%s', 'now'))`;
 
-  // Users table - represents authenticated users with PIN
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS users (
-      id TEXT PRIMARY KEY,
-      pin_hash TEXT NOT NULL,
-      created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
-    );
-  `);
+export const users = sqliteTable('users', {
+  id: text('id').primaryKey(),
+  pinHash: text('pin_hash').notNull(),
+  name: text('name').notNull(),
+  createdAt: integer('created_at').notNull().default(nowEpoch),
+  updatedAt: integer('updated_at').notNull().default(nowEpoch),
+});
 
-  // Sources table - represents top-level folders as pseudo users
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS sources (
-      id TEXT PRIMARY KEY,
-      folder_path TEXT NOT NULL UNIQUE,
-      display_name TEXT NOT NULL,
-      avatar_seed TEXT NOT NULL,
-      created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
-    );
-    
-    CREATE INDEX IF NOT EXISTS idx_sources_folder ON sources(folder_path);
-  `);
+export const userStorageConfigs = sqliteTable(
+  'user_storage_configs',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    localRootPath: text('local_root_path').notNull(),
+    rcloneConfigEncrypted: text('rclone_config_encrypted'),
+    rcloneConfigNonce: text('rclone_config_nonce'),
+    rcloneConfigKdfSalt: text('rclone_config_kdf_salt'),
+    rcloneConfigVersion: integer('rclone_config_version').notNull().default(1),
+    createdAt: integer('created_at').notNull().default(nowEpoch),
+    updatedAt: integer('updated_at').notNull().default(nowEpoch),
+  },
+  (table) => [unique('ux_user_storage_configs_user').on(table.userId)]
+);
 
-  // Media table - all indexed media files - create table without the hidden column reference initially
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS media (
-      id TEXT PRIMARY KEY,
-      path TEXT NOT NULL UNIQUE,
-      source_id TEXT NOT NULL,
-      depth INTEGER NOT NULL,
-      type TEXT NOT NULL,
-      liked INTEGER NOT NULL DEFAULT 0,
-      saved INTEGER NOT NULL DEFAULT 0,
-      view_count INTEGER NOT NULL DEFAULT 0,
-      last_viewed INTEGER,
-      created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
-      FOREIGN KEY (source_id) REFERENCES sources(id)
-    );
-    
-    CREATE INDEX IF NOT EXISTS idx_media_path ON media(path);
-    CREATE INDEX IF NOT EXISTS idx_media_source ON media(source_id);
-    CREATE INDEX IF NOT EXISTS idx_media_type ON media(type);
-    CREATE INDEX IF NOT EXISTS idx_media_liked ON media(liked);
-    CREATE INDEX IF NOT EXISTS idx_media_saved ON media(saved);
-    CREATE INDEX IF NOT EXISTS idx_media_last_viewed ON media(last_viewed);
-  `);
+export const folders = sqliteTable(
+  'folders',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    parentFolderId: text('parent_folder_id').references((): any => folders.id, {
+      onDelete: 'set null',
+    }),
+    storageMode: text('storage_mode').notNull(),
+    absolutePath: text('absolute_path').notNull(),
+    relativePathFromRoot: text('relative_path_from_root').notNull(),
+    name: text('name').notNull(),
+    createdAt: integer('created_at').notNull().default(nowEpoch),
+    updatedAt: integer('updated_at').notNull().default(nowEpoch),
+  },
+  (table) => [
+    unique('ux_folders_user_mode_relpath').on(
+      table.userId,
+      table.storageMode,
+      table.relativePathFromRoot
+    ),
+    index('idx_folders_user_parent').on(table.userId, table.parentFolderId),
+    check('chk_folders_storage_mode', sql`${table.storageMode} IN ('local', 'rclone')`),
+  ]
+);
 
-  // Migration: Add hidden column if it doesn't exist (for existing databases)
-  try {
-    db.prepare('ALTER TABLE media ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0').run();
-  } catch (error: any) {
-    // Column already exists, ignore error
-    if (!error.message.includes('duplicate column')) {
-      throw error;
-    }
-  }
+export const files = sqliteTable(
+  'files',
+  {
+    id: text('id').primaryKey(),
+    fileKey: text('file_key').notNull(),
+    contentHash: text('content_hash').notNull(),
+    sizeBytes: integer('size_bytes').notNull(),
+    mimeType: text('mime_type'),
+    extension: text('extension'),
+    mediaKind: text('media_kind').notNull().default('other'),
+    createdAt: integer('created_at').notNull().default(nowEpoch),
+    updatedAt: integer('updated_at').notNull().default(nowEpoch),
+  },
+  (table) => [
+    unique('ux_files_file_key').on(table.fileKey),
+    unique('ux_files_content_hash').on(table.contentHash),
+    index('idx_files_media_kind').on(table.mediaKind),
+    check('chk_files_media_kind', sql`${table.mediaKind} IN ('image', 'video', 'other')`),
+  ]
+);
 
-  // Create hidden index
-  try {
-    db.prepare('CREATE INDEX IF NOT EXISTS idx_media_hidden ON media(hidden)').run();
-  } catch (error: any) {
-    // Index might already exist, ignore
-  }
+export const filePaths = sqliteTable(
+  'file_paths',
+  {
+    id: text('id').primaryKey(),
+    fileId: text('file_id')
+      .notNull()
+      .references(() => files.id, { onDelete: 'cascade' }),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    folderId: text('folder_id').references(() => folders.id, { onDelete: 'set null' }),
+    storageMode: text('storage_mode').notNull(),
+    fileName: text('file_name').notNull(),
+    absolutePath: text('absolute_path').notNull(),
+    relativePathFromRoot: text('relative_path_from_root').notNull(),
+    pathHash: text('path_hash'),
+    firstSeenAt: integer('first_seen_at').notNull().default(nowEpoch),
+    lastSeenAt: integer('last_seen_at').notNull().default(nowEpoch),
+    isPresent: integer('is_present').notNull().default(1),
+    status: text('status').notNull().default('ready'),
+    tempFileId: text('temp_file_id'),
+    createdAt: integer('created_at').notNull().default(nowEpoch),
+    updatedAt: integer('updated_at').notNull().default(nowEpoch),
+  },
+  (table) => [
+    unique('ux_file_paths_user_absolute_path').on(table.userId, table.absolutePath),
+    index('idx_file_paths_file').on(table.fileId),
+    index('idx_file_paths_user_file').on(table.userId, table.fileId),
+    check('chk_file_paths_storage_mode', sql`${table.storageMode} IN ('local', 'rclone')`),
+    check('chk_file_paths_is_present', sql`${table.isPresent} IN (0, 1)`),
+    check('chk_file_paths_status', sql`${table.status} IN ('pending', 'ready')`),
+  ]
+);
 
-  // User-folder associations - links folders to users
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS user_folders (
-      user_id TEXT NOT NULL,
-      source_id TEXT NOT NULL,
-      created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
-      PRIMARY KEY (user_id, source_id),
-      FOREIGN KEY (user_id) REFERENCES users(id),
-      FOREIGN KEY (source_id) REFERENCES sources(id)
-    );
-    
-    CREATE INDEX IF NOT EXISTS idx_user_folders_user ON user_folders(user_id);
-    CREATE INDEX IF NOT EXISTS idx_user_folders_source ON user_folders(source_id);
-  `);
+export const indexingJobs = sqliteTable(
+  'indexing_jobs',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    jobType: text('job_type').notNull(),
+    status: text('status').notNull().default('queued'),
+    totalFiles: integer('total_files').notNull().default(0),
+    processedFiles: integer('processed_files').notNull().default(0),
+    sourcePath: text('source_path').notNull(),
+    error: text('error'),
+    createdAt: integer('created_at').notNull().default(nowEpoch),
+    updatedAt: integer('updated_at').notNull().default(nowEpoch),
+  },
+  (table) => [
+    index('idx_indexing_jobs_user').on(table.userId, table.createdAt),
+  ]
+);
 
-  // User interactions - user-specific and folder-scoped interactions
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS user_interactions (
-      user_id TEXT NOT NULL,
-      source_id TEXT NOT NULL,
-      media_id TEXT NOT NULL,
-      liked INTEGER NOT NULL DEFAULT 0,
-      saved INTEGER NOT NULL DEFAULT 0,
-      hidden INTEGER NOT NULL DEFAULT 0,
-      view_count INTEGER NOT NULL DEFAULT 0,
-      last_viewed INTEGER,
-      PRIMARY KEY (user_id, source_id, media_id),
-      FOREIGN KEY (user_id) REFERENCES users(id),
-      FOREIGN KEY (source_id) REFERENCES sources(id),
-      FOREIGN KEY (media_id) REFERENCES media(id)
-    );
-    
-    CREATE INDEX IF NOT EXISTS idx_user_interactions_user ON user_interactions(user_id);
-    CREATE INDEX IF NOT EXISTS idx_user_interactions_source ON user_interactions(source_id);
-    CREATE INDEX IF NOT EXISTS idx_user_interactions_media ON user_interactions(media_id);
-    CREATE INDEX IF NOT EXISTS idx_user_interactions_liked ON user_interactions(liked);
-    CREATE INDEX IF NOT EXISTS idx_user_interactions_saved ON user_interactions(saved);
-    CREATE INDEX IF NOT EXISTS idx_user_interactions_hidden ON user_interactions(hidden);
-  `);
+export const userSavedFiles = sqliteTable(
+  'user_saved_files',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    fileId: text('file_id')
+      .notNull()
+      .references(() => files.id, { onDelete: 'cascade' }),
+    createdAt: integer('created_at').notNull().default(nowEpoch),
+    updatedAt: integer('updated_at').notNull().default(nowEpoch),
+  },
+  (table) => [unique('ux_user_saved_files_user_file').on(table.userId, table.fileId)]
+);
 
-  // User hidden folders - tracks which subfolders each user has hidden
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS user_hidden_folders (
-      user_id TEXT NOT NULL,
-      source_id TEXT NOT NULL,
-      folder_path TEXT NOT NULL,
-      hidden INTEGER NOT NULL DEFAULT 1,
-      created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
-      PRIMARY KEY (user_id, source_id, folder_path),
-      FOREIGN KEY (user_id) REFERENCES users(id),
-      FOREIGN KEY (source_id) REFERENCES sources(id)
-    );
-    
-    CREATE INDEX IF NOT EXISTS idx_user_hidden_folders_user ON user_hidden_folders(user_id);
-    CREATE INDEX IF NOT EXISTS idx_user_hidden_folders_source ON user_hidden_folders(source_id);
-    CREATE INDEX IF NOT EXISTS idx_user_hidden_folders_path ON user_hidden_folders(folder_path);
-  `);
+export const userLikedFiles = sqliteTable(
+  'user_liked_files',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    fileId: text('file_id')
+      .notNull()
+      .references(() => files.id, { onDelete: 'cascade' }),
+    createdAt: integer('created_at').notNull().default(nowEpoch),
+    updatedAt: integer('updated_at').notNull().default(nowEpoch),
+  },
+  (table) => [unique('ux_user_liked_files_user_file').on(table.userId, table.fileId)]
+);
 
-  // Migrate existing data to default user
-  migrateToUserScoped(db);
+export const userHiddenFiles = sqliteTable(
+  'user_hidden_files',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    fileId: text('file_id')
+      .notNull()
+      .references(() => files.id, { onDelete: 'cascade' }),
+    createdAt: integer('created_at').notNull().default(nowEpoch),
+    updatedAt: integer('updated_at').notNull().default(nowEpoch),
+  },
+  (table) => [unique('ux_user_hidden_files_user_file').on(table.userId, table.fileId)]
+);
 
-  // Re-enable foreign keys after schema setup
-  db.pragma('foreign_keys = ON');
+export const userPreferences = sqliteTable(
+  'user_preferences',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    themeMode: text('theme_mode').notNull().default('system'),
+    feedMode: text('feed_mode').notNull().default('reel'),
+    autoplayEnabled: integer('autoplay_enabled').notNull().default(1),
+    mutedByDefault: integer('muted_by_default').notNull().default(1),
+    showHiddenInAdminViews: integer('show_hidden_in_admin_views').notNull().default(0),
+    preloadNextMedia: integer('preload_next_media').notNull().default(1),
+    loopVideos: integer('loop_videos').notNull().default(0),
+    createdAt: integer('created_at').notNull().default(nowEpoch),
+    updatedAt: integer('updated_at').notNull().default(nowEpoch),
+  },
+  (table) => [
+    unique('ux_user_preferences_user').on(table.userId),
+    check('chk_user_preferences_theme_mode', sql`${table.themeMode} IN ('light', 'dark', 'system')`),
+    check('chk_user_preferences_feed_mode', sql`${table.feedMode} IN ('reel', 'grid')`),
+    check('chk_user_preferences_autoplay', sql`${table.autoplayEnabled} IN (0, 1)`),
+    check('chk_user_preferences_muted', sql`${table.mutedByDefault} IN (0, 1)`),
+    check('chk_user_preferences_show_hidden', sql`${table.showHiddenInAdminViews} IN (0, 1)`),
+    check('chk_user_preferences_preload', sql`${table.preloadNextMedia} IN (0, 1)`),
+    check('chk_user_preferences_loop', sql`${table.loopVideos} IN (0, 1)`),
+  ]
+);
 
-  console.log('Database schema initialized');
-}
-
-/**
- * Migrate existing data to user-scoped model
- * Creates a default user and associates all existing folders and interactions with it
- */
-function migrateToUserScoped(db: Database.Database): void {
-  const defaultUserId = 'default-user';
-
-  // Check if default user already exists
-  const existingUser = db.prepare('SELECT id FROM users WHERE id = ?').get(defaultUserId);
-
-  if (!existingUser) {
-    console.log('Migrating existing data to user-scoped model...');
-
-    // Create default user (with a placeholder hash that can be updated later)
-    db.prepare('INSERT INTO users (id, pin_hash) VALUES (?, ?)').run(
-      defaultUserId,
-      '$2b$10$placeholder' // This should be updated via CLI script
-    );
-
-    // Associate all existing sources with default user
-    const sources = db.prepare('SELECT id FROM sources').all() as Array<{ id: string }>;
-    const insertUserFolder = db.prepare('INSERT OR IGNORE INTO user_folders (user_id, source_id) VALUES (?, ?)');
-
-    for (const source of sources) {
-      insertUserFolder.run(defaultUserId, source.id);
-    }
-
-    // Migrate media interactions to user_interactions table
-    const mediaItems = db.prepare(`
-      SELECT id, source_id, liked, saved, hidden, view_count, last_viewed 
-      FROM media 
-      WHERE liked = 1 OR saved = 1 OR hidden = 1 OR view_count > 0
-    `).all() as Array<{
-      id: string;
-      source_id: string;
-      liked: number;
-      saved: number;
-      hidden: number;
-      view_count: number;
-      last_viewed: number | null;
-    }>;
-
-    const insertInteraction = db.prepare(`
-      INSERT OR IGNORE INTO user_interactions (user_id, source_id, media_id, liked, saved, hidden, view_count, last_viewed)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-
-    for (const media of mediaItems) {
-      insertInteraction.run(
-        defaultUserId,
-        media.source_id,
-        media.id,
-        media.liked,
-        media.saved,
-        media.hidden,
-        media.view_count,
-        media.last_viewed
-      );
-    }
-
-    console.log(`Migrated ${sources.length} folders and ${mediaItems.length} interactions to default user`);
-  }
-}
-
+export type StorageMode = 'local' | 'rclone';
+export type MediaKind = 'image' | 'video' | 'other';
