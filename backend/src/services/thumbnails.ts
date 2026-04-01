@@ -9,6 +9,8 @@ import { config } from '../config.js';
 import fs from 'fs/promises';
 import path from 'path';
 import crypto from 'crypto';
+import { Readable } from 'stream';
+import { readRemoteFile } from './rclone.js';
 
 // Set ffmpeg path for fluent-ffmpeg
 if (ffmpegStatic) {
@@ -75,13 +77,37 @@ class ThumbnailService {
   }
 
   /**
-   * Generate MD5 hash of file for cache validation
+   * Check if a path is a rclone path
+   */
+  private isRclonePath(mediaPath: string): boolean {
+    return mediaPath.startsWith('rclone:');
+  }
+
+  /**
+   * Fetch file from rclone or local filesystem
+   */
+  private async getFileBuffer(mediaPath: string): Promise<Buffer> {
+    if (this.isRclonePath(mediaPath)) {
+      return await readRemoteFile(mediaPath);
+    } else {
+      return await fs.readFile(mediaPath);
+    }
+  }
+
+  /**
+   * Generate MD5 hash of file for cache validation (handles both local and rclone)
    */
   private async getFileHash(filePath: string): Promise<string> {
     try {
-      const stats = await fs.stat(filePath);
-      // Use file size + modification time as quick hash
-      return `${stats.size}-${stats.mtimeMs}`;
+      if (this.isRclonePath(filePath)) {
+        // For rclone files, use file path as hash (since we can't easily get mtime)
+        // In production, consider using rclone's lsjson to get ModTime
+        return crypto.createHash('md5').update(filePath).digest('hex').substring(0, 16);
+      } else {
+        const stats = await fs.stat(filePath);
+        // Use file size + modification time as quick hash
+        return `${stats.size}-${stats.mtimeMs}`;
+      }
     } catch (error) {
       console.error(`Failed to hash file ${filePath}:`, error);
       throw error;
@@ -96,20 +122,33 @@ class ThumbnailService {
   }
 
   /**
-   * Generate thumbnail for image
+   * Generate thumbnail for image (handles both local and rclone paths)
    */
   private async generateImageThumbnail(
     mediaPath: string,
     thumbnailPath: string
   ): Promise<void> {
     try {
-      await sharp(mediaPath)
-        .resize(config.thumbnails.width, config.thumbnails.height, {
-          fit: 'cover',
-          position: 'center',
-        })
-        .webp({ quality: config.thumbnails.quality })
-        .toFile(thumbnailPath);
+      if (this.isRclonePath(mediaPath)) {
+        // For rclone paths, read buffer and pass to sharp
+        const buffer = await this.getFileBuffer(mediaPath);
+        await sharp(buffer)
+          .resize(config.thumbnails.width, config.thumbnails.height, {
+            fit: 'cover',
+            position: 'center',
+          })
+          .webp({ quality: config.thumbnails.quality })
+          .toFile(thumbnailPath);
+      } else {
+        // For local paths, use direct path
+        await sharp(mediaPath)
+          .resize(config.thumbnails.width, config.thumbnails.height, {
+            fit: 'cover',
+            position: 'center',
+          })
+          .webp({ quality: config.thumbnails.quality })
+          .toFile(thumbnailPath);
+      }
     } catch (error) {
       console.error(`Failed to generate image thumbnail for ${mediaPath}:`, error);
       throw error;
@@ -117,42 +156,57 @@ class ThumbnailService {
   }
 
   /**
-   * Generate thumbnail for video (extract first frame)
+   * Generate thumbnail for video (extract first frame) - handles both local and rclone paths
    */
   private async generateVideoThumbnail(
     mediaPath: string,
     thumbnailPath: string
   ): Promise<void> {
     return new Promise((resolve, reject) => {
-      ffmpeg(mediaPath)
-        .screenshots({
-          count: 1,
-          folder: this.thumbnailDir,
-          filename: `${path.basename(thumbnailPath, '.webp')}.png`,
-          size: `${config.thumbnails.width}x${config.thumbnails.height}`,
-          timestamps: ['1%'], // Get first frame (1% into video)
-        })
-        .on('end', async () => {
-          try {
-            // Convert PNG to WebP for consistency
-            const pngPath = path.join(
-              this.thumbnailDir,
-              `${path.basename(thumbnailPath, '.webp')}.png`
-            );
-            await sharp(pngPath)
-              .webp({ quality: config.thumbnails.quality })
-              .toFile(thumbnailPath);
-            // Clean up PNG
-            await fs.unlink(pngPath);
-            resolve();
-          } catch (error) {
+      const processVideo = (input: string | Readable) => {
+        ffmpeg(input)
+          .screenshots({
+            count: 1,
+            folder: this.thumbnailDir,
+            filename: `${path.basename(thumbnailPath, '.webp')}.png`,
+            size: `${config.thumbnails.width}x${config.thumbnails.height}`,
+            timestamps: ['1%'], // Get first frame (1% into video)
+          })
+          .on('end', async () => {
+            try {
+              // Convert PNG to WebP for consistency
+              const pngPath = path.join(
+                this.thumbnailDir,
+                `${path.basename(thumbnailPath, '.webp')}.png`
+              );
+              await sharp(pngPath)
+                .webp({ quality: config.thumbnails.quality })
+                .toFile(thumbnailPath);
+              // Clean up PNG
+              await fs.unlink(pngPath);
+              resolve();
+            } catch (error) {
+              reject(error);
+            }
+          })
+          .on('error', (error) => {
+            console.error(`FFmpeg error for ${mediaPath}:`, error);
             reject(error);
-          }
-        })
-        .on('error', (error) => {
-          console.error(`FFmpeg error for ${mediaPath}:`, error);
-          reject(error);
-        });
+          });
+      };
+
+      if (this.isRclonePath(mediaPath)) {
+        // For rclone paths, read buffer and convert to readable stream
+        this.getFileBuffer(mediaPath)
+          .then((buffer) => {
+            const stream = Readable.from(buffer);
+            processVideo(stream);
+          })
+          .catch(reject);
+      } else {
+        // For local paths, use path directly
+        processVideo(mediaPath);
+      }
     });
   }
 

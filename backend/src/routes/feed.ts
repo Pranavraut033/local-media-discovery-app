@@ -3,16 +3,19 @@
  * Handles feed generation, likes, saves, and view tracking
  */
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
-import { getDatabase } from '../db/index.js';
-import { generatePaginatedFeed } from '../services/feed.js';
+import { randomUUID } from 'crypto';
 import fs from 'fs/promises';
 import path from 'path';
+import { getDatabase } from '../db/index.js';
+import { generatePaginatedFeed } from '../services/feed.js';
+import { readRemoteFile } from '../services/rclone.js';
 
 interface FeedQuery {
   page?: string;
   limit?: string;
   lastSourceId?: string;
   sourceId?: string;
+  feedSeed?: string;
 }
 
 interface InteractionBody {
@@ -20,11 +23,101 @@ interface InteractionBody {
   sourceId: string;
 }
 
+interface MediaFileQuery {
+  token?: string;
+}
+
+interface MediaRow {
+  id: string;
+  path: string;
+  type: string;
+  sourceId: string;
+  liked: number;
+  saved: number;
+  depth: number;
+  viewCount: number;
+  lastViewed: number | null;
+}
+
+const latestPathsCte = `
+  WITH latest_paths AS (
+    SELECT fp.*
+    FROM file_paths fp
+    JOIN (
+      SELECT file_id, MAX(last_seen_at) AS max_seen
+      FROM file_paths
+      WHERE user_id = ? AND is_present = 1
+      GROUP BY file_id
+    ) latest
+      ON latest.file_id = fp.file_id
+     AND latest.max_seen = fp.last_seen_at
+    WHERE fp.user_id = ? AND fp.is_present = 1
+  )
+`;
+
+const sourceIdSql = `
+  CASE
+    WHEN instr(lp.relative_path_from_root, '/') = 0 THEN 'root'
+    ELSE substr(lp.relative_path_from_root, 1, instr(lp.relative_path_from_root, '/') - 1)
+  END
+`;
+
+const depthSql = `
+  CASE
+    WHEN lp.relative_path_from_root = '' THEN 0
+    ELSE LENGTH(lp.relative_path_from_root) - LENGTH(REPLACE(lp.relative_path_from_root, '/', ''))
+  END
+`;
+
+function buildMediaResponse(row: MediaRow) {
+  return {
+    id: row.id,
+    path: row.path,
+    type: row.type,
+    sourceId: row.sourceId,
+    displayName: row.sourceId === 'root' ? 'Root' : row.sourceId,
+    avatarSeed: row.sourceId,
+    liked: row.liked === 1,
+    saved: row.saved === 1,
+    viewCount: row.viewCount,
+    lastViewed: row.lastViewed,
+    depth: row.depth,
+  };
+}
+
+function assertUserHasFileAccess(db: ReturnType<typeof getDatabase>, userId: string, fileId: string): boolean {
+  const record = db
+    .prepare('SELECT 1 FROM file_paths WHERE user_id = ? AND file_id = ? AND is_present = 1 LIMIT 1')
+    .get(userId, fileId);
+  return Boolean(record);
+}
+
+function toggleUserFileFlag(
+  db: ReturnType<typeof getDatabase>,
+  tableName: 'user_liked_files' | 'user_saved_files' | 'user_hidden_files',
+  userId: string,
+  fileId: string
+): boolean {
+  const existing = db
+    .prepare(`SELECT id FROM ${tableName} WHERE user_id = ? AND file_id = ?`)
+    .get(userId, fileId) as { id: string } | undefined;
+
+  if (existing) {
+    db.prepare(`DELETE FROM ${tableName} WHERE user_id = ? AND file_id = ?`).run(userId, fileId);
+    return false;
+  }
+
+  db.prepare(`INSERT INTO ${tableName} (id, user_id, file_id) VALUES (?, ?, ?)`).run(
+    randomUUID(),
+    userId,
+    fileId
+  );
+  return true;
+}
 
 export default async function feedRoutes(fastify: FastifyInstance): Promise<void> {
   const db = getDatabase();
 
-  // Get paginated feed
   fastify.get<{ Querystring: FeedQuery }>(
     '/api/feed',
     {
@@ -33,12 +126,13 @@ export default async function feedRoutes(fastify: FastifyInstance): Promise<void
     async (request, reply) => {
       try {
         const page = parseInt(request.query.page || '0', 10);
-        const limit = Math.min(parseInt(request.query.limit || '20', 10), 100); // Max 100
+        const limit = Math.min(parseInt(request.query.limit || '20', 10), 100);
         const lastSourceId = request.query.lastSourceId;
         const sourceId = request.query.sourceId;
+        const feedSeed = request.query.feedSeed;
         const userId = request.user!.userId;
 
-        const feedData = generatePaginatedFeed(db, page, limit, lastSourceId, userId, sourceId);
+        const feedData = generatePaginatedFeed(db, page, limit, lastSourceId, userId, sourceId, feedSeed);
 
         return {
           success: true,
@@ -57,68 +151,50 @@ export default async function feedRoutes(fastify: FastifyInstance): Promise<void
     }
   );
 
-  // Get media from a specific source
   fastify.get<{ Params: { sourceId: string }; Querystring: { limit?: string } }>(
     '/api/source/:sourceId/media',
+    {
+      onRequest: [fastify.authenticate],
+    },
     async (
       request: FastifyRequest<{ Params: { sourceId: string }; Querystring: { limit?: string } }>,
       reply: FastifyReply
     ) => {
       const { sourceId } = request.params;
       const limit = Math.min(parseInt(request.query.limit || '50', 10), 200);
+      const userId = request.user!.userId;
 
       try {
         const mediaItems = db
           .prepare(
             `
-          SELECT 
-            m.id,
-            m.path,
-            m.type,
-            m.source_id as sourceId,
-            m.liked,
-            m.saved,
-            m.view_count as viewCount,
-            m.last_viewed as lastViewed,
-            m.depth,
-            s.display_name as displayName,
-            s.avatar_seed as avatarSeed
-          FROM media m
-          JOIN sources s ON m.source_id = s.id
-          WHERE m.source_id = ?
-          ORDER BY RANDOM()
-          LIMIT ?
-        `
+            ${latestPathsCte}
+            SELECT
+              f.id,
+              lp.absolute_path AS path,
+              f.media_kind AS type,
+              ${sourceIdSql} AS sourceId,
+              CASE WHEN ulf.file_id IS NULL THEN 0 ELSE 1 END AS liked,
+              CASE WHEN usf.file_id IS NULL THEN 0 ELSE 1 END AS saved,
+              ${depthSql} AS depth,
+              0 AS viewCount,
+              NULL AS lastViewed
+            FROM files f
+            JOIN latest_paths lp ON lp.file_id = f.id
+            LEFT JOIN user_liked_files ulf ON ulf.user_id = ? AND ulf.file_id = f.id
+            LEFT JOIN user_saved_files usf ON usf.user_id = ? AND usf.file_id = f.id
+            LEFT JOIN user_hidden_files uhf ON uhf.user_id = ? AND uhf.file_id = f.id
+            WHERE uhf.file_id IS NULL
+              AND ${sourceIdSql} = ?
+            ORDER BY RANDOM()
+            LIMIT ?
+          `
           )
-          .all(sourceId, limit) as Array<{
-            id: string;
-            path: string;
-            type: string;
-            sourceId: string;
-            liked: number;
-            saved: number;
-            viewCount: number;
-            lastViewed: number | null;
-            depth: number;
-            displayName: string;
-            avatarSeed: string;
-          }>;
+          .all(userId, userId, userId, userId, userId, sourceId, limit) as MediaRow[];
 
         return {
           success: true,
-          media: mediaItems.map((m) => ({
-            id: m.id,
-            path: m.path,
-            type: m.type,
-            sourceId: m.sourceId,
-            displayName: m.displayName,
-            avatarSeed: m.avatarSeed,
-            liked: m.liked === 1,
-            saved: m.saved === 1,
-            viewCount: m.viewCount,
-            lastViewed: m.lastViewed,
-            depth: m.depth,
-          })),
+          media: mediaItems.map((m) => buildMediaResponse(m)),
           count: mediaItems.length,
         };
       } catch (error) {
@@ -131,7 +207,6 @@ export default async function feedRoutes(fastify: FastifyInstance): Promise<void
     }
   );
 
-  // Like a media item
   fastify.post<{ Body: InteractionBody }>(
     '/api/like',
     {
@@ -146,35 +221,17 @@ export default async function feedRoutes(fastify: FastifyInstance): Promise<void
       }
 
       try {
-        // Check if interaction exists
-        const interaction = db.prepare(
-          'SELECT liked FROM user_interactions WHERE user_id = ? AND source_id = ? AND media_id = ?'
-        ).get(userId, sourceId, mediaId) as { liked: number } | undefined;
-
-        if (interaction) {
-          // Toggle like status
-          const newLikedStatus = interaction.liked === 1 ? 0 : 1;
-          db.prepare(
-            'UPDATE user_interactions SET liked = ? WHERE user_id = ? AND source_id = ? AND media_id = ?'
-          ).run(newLikedStatus, userId, sourceId, mediaId);
-
-          return {
-            success: true,
-            mediaId,
-            liked: newLikedStatus === 1,
-          };
-        } else {
-          // Create new interaction with like
-          db.prepare(
-            'INSERT INTO user_interactions (user_id, source_id, media_id, liked) VALUES (?, ?, ?, 1)'
-          ).run(userId, sourceId, mediaId);
-
-          return {
-            success: true,
-            mediaId,
-            liked: true,
-          };
+        if (!assertUserHasFileAccess(db, userId, mediaId)) {
+          return reply.code(404).send({ error: 'Media not found' });
         }
+
+        const liked = toggleUserFileFlag(db, 'user_liked_files', userId, mediaId);
+
+        return {
+          success: true,
+          mediaId,
+          liked,
+        };
       } catch (error) {
         console.error('Like error:', error);
         return reply.code(500).send({
@@ -185,7 +242,6 @@ export default async function feedRoutes(fastify: FastifyInstance): Promise<void
     }
   );
 
-  // Save a media item
   fastify.post<{ Body: InteractionBody }>(
     '/api/save',
     {
@@ -200,35 +256,17 @@ export default async function feedRoutes(fastify: FastifyInstance): Promise<void
       }
 
       try {
-        // Check if interaction exists
-        const interaction = db.prepare(
-          'SELECT saved FROM user_interactions WHERE user_id = ? AND source_id = ? AND media_id = ?'
-        ).get(userId, sourceId, mediaId) as { saved: number } | undefined;
-
-        if (interaction) {
-          // Toggle save status
-          const newSavedStatus = interaction.saved === 1 ? 0 : 1;
-          db.prepare(
-            'UPDATE user_interactions SET saved = ? WHERE user_id = ? AND source_id = ? AND media_id = ?'
-          ).run(newSavedStatus, userId, sourceId, mediaId);
-
-          return {
-            success: true,
-            mediaId,
-            saved: newSavedStatus === 1,
-          };
-        } else {
-          // Create new interaction with save
-          db.prepare(
-            'INSERT INTO user_interactions (user_id, source_id, media_id, saved) VALUES (?, ?, ?, 1)'
-          ).run(userId, sourceId, mediaId);
-
-          return {
-            success: true,
-            mediaId,
-            saved: true,
-          };
+        if (!assertUserHasFileAccess(db, userId, mediaId)) {
+          return reply.code(404).send({ error: 'Media not found' });
         }
+
+        const saved = toggleUserFileFlag(db, 'user_saved_files', userId, mediaId);
+
+        return {
+          success: true,
+          mediaId,
+          saved,
+        };
       } catch (error) {
         console.error('Save error:', error);
         return reply.code(500).send({
@@ -239,7 +277,6 @@ export default async function feedRoutes(fastify: FastifyInstance): Promise<void
     }
   );
 
-  // Record a view
   fastify.post<{ Body: InteractionBody }>(
     '/api/view',
     {
@@ -254,26 +291,8 @@ export default async function feedRoutes(fastify: FastifyInstance): Promise<void
       }
 
       try {
-        const now = Math.floor(Date.now() / 1000);
-
-        // Check if interaction exists
-        const interaction = db.prepare(
-          'SELECT view_count FROM user_interactions WHERE user_id = ? AND source_id = ? AND media_id = ?'
-        ).get(userId, sourceId, mediaId);
-
-        if (interaction) {
-          // Update existing interaction
-          db.prepare(
-            `UPDATE user_interactions SET 
-             view_count = view_count + 1,
-             last_viewed = ?
-             WHERE user_id = ? AND source_id = ? AND media_id = ?`
-          ).run(now, userId, sourceId, mediaId);
-        } else {
-          // Create new interaction with view
-          db.prepare(
-            'INSERT INTO user_interactions (user_id, source_id, media_id, view_count, last_viewed) VALUES (?, ?, ?, 1, ?)'
-          ).run(userId, sourceId, mediaId, now);
+        if (!assertUserHasFileAccess(db, userId, mediaId)) {
+          return reply.code(404).send({ error: 'Media not found' });
         }
 
         return {
@@ -291,44 +310,41 @@ export default async function feedRoutes(fastify: FastifyInstance): Promise<void
     }
   );
 
-  // Get a specific media item
   fastify.get<{ Params: { id: string } }>(
     '/api/media/:id',
+    {
+      onRequest: [fastify.authenticate],
+    },
     async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
       const { id } = request.params;
+      const userId = request.user!.userId;
 
       try {
         const media = db
           .prepare(
             `
-          SELECT 
-            m.id,
-            m.path,
-            m.type,
-            m.source_id as sourceId,
-            m.liked,
-            m.saved,
-            m.view_count as viewCount,
-            m.last_viewed as lastViewed,
-            s.display_name as displayName,
-            s.avatar_seed as avatarSeed
-          FROM media m
-          JOIN sources s ON m.source_id = s.id
-          WHERE m.id = ?
-        `
+            ${latestPathsCte}
+            SELECT
+              f.id,
+              lp.absolute_path AS path,
+              f.media_kind AS type,
+              ${sourceIdSql} AS sourceId,
+              CASE WHEN ulf.file_id IS NULL THEN 0 ELSE 1 END AS liked,
+              CASE WHEN usf.file_id IS NULL THEN 0 ELSE 1 END AS saved,
+              ${depthSql} AS depth,
+              0 AS viewCount,
+              NULL AS lastViewed
+            FROM files f
+            JOIN latest_paths lp ON lp.file_id = f.id
+            LEFT JOIN user_liked_files ulf ON ulf.user_id = ? AND ulf.file_id = f.id
+            LEFT JOIN user_saved_files usf ON usf.user_id = ? AND usf.file_id = f.id
+            LEFT JOIN user_hidden_files uhf ON uhf.user_id = ? AND uhf.file_id = f.id
+            WHERE f.id = ?
+              AND uhf.file_id IS NULL
+            LIMIT 1
+          `
           )
-          .get(id) as {
-            id: string;
-            path: string;
-            type: string;
-            sourceId: string;
-            liked: number;
-            saved: number;
-            viewCount: number;
-            lastViewed: number | null;
-            displayName: string;
-            avatarSeed: string;
-          } | undefined;
+          .get(userId, userId, userId, userId, userId, id) as MediaRow | undefined;
 
         if (!media) {
           return reply.code(404).send({ error: 'Media not found' });
@@ -336,18 +352,7 @@ export default async function feedRoutes(fastify: FastifyInstance): Promise<void
 
         return {
           success: true,
-          media: {
-            id: media.id,
-            path: media.path,
-            type: media.type,
-            sourceId: media.sourceId,
-            displayName: media.displayName,
-            avatarSeed: media.avatarSeed,
-            liked: media.liked === 1,
-            saved: media.saved === 1,
-            viewCount: media.viewCount,
-            lastViewed: media.lastViewed,
-          },
+          media: buildMediaResponse(media),
         };
       } catch (error) {
         console.error('Get media error:', error);
@@ -359,7 +364,6 @@ export default async function feedRoutes(fastify: FastifyInstance): Promise<void
     }
   );
 
-  // Get all saved items
   fastify.get(
     '/api/saved',
     {
@@ -372,51 +376,31 @@ export default async function feedRoutes(fastify: FastifyInstance): Promise<void
         const savedMedia = db
           .prepare(
             `
-          SELECT 
-            m.id,
-            m.path,
-            m.type,
-            m.source_id as sourceId,
-            ui.liked,
-            ui.saved,
-            ui.view_count as viewCount,
-            ui.last_viewed as lastViewed,
-            s.display_name as displayName,
-            s.avatar_seed as avatarSeed
-          FROM media m
-          JOIN sources s ON m.source_id = s.id
-          JOIN user_interactions ui ON m.id = ui.media_id AND m.source_id = ui.source_id
-          WHERE ui.user_id = ? AND ui.saved = 1
-          ORDER BY ui.last_viewed DESC
-        `
+            ${latestPathsCte}
+            SELECT
+              f.id,
+              lp.absolute_path AS path,
+              f.media_kind AS type,
+              ${sourceIdSql} AS sourceId,
+              CASE WHEN ulf.file_id IS NULL THEN 0 ELSE 1 END AS liked,
+              1 AS saved,
+              ${depthSql} AS depth,
+              0 AS viewCount,
+              NULL AS lastViewed
+            FROM files f
+            JOIN latest_paths lp ON lp.file_id = f.id
+            JOIN user_saved_files usf ON usf.user_id = ? AND usf.file_id = f.id
+            LEFT JOIN user_liked_files ulf ON ulf.user_id = ? AND ulf.file_id = f.id
+            LEFT JOIN user_hidden_files uhf ON uhf.user_id = ? AND uhf.file_id = f.id
+            WHERE uhf.file_id IS NULL
+            ORDER BY usf.updated_at DESC
+          `
           )
-          .all(userId) as Array<{
-            id: string;
-            path: string;
-            type: string;
-            sourceId: string;
-            liked: number;
-            saved: number;
-            viewCount: number;
-            lastViewed: number | null;
-            displayName: string;
-            avatarSeed: string;
-          }>;
+          .all(userId, userId, userId, userId, userId) as MediaRow[];
 
         return {
           success: true,
-          savedMedia: savedMedia.map((m) => ({
-            id: m.id,
-            path: m.path,
-            type: m.type,
-            sourceId: m.sourceId,
-            displayName: m.displayName,
-            avatarSeed: m.avatarSeed,
-            liked: m.liked === 1,
-            saved: m.saved === 1,
-            viewCount: m.viewCount,
-            lastViewed: m.lastViewed,
-          })),
+          savedMedia: savedMedia.map((m) => buildMediaResponse(m)),
         };
       } catch (error) {
         console.error('Get saved error:', error);
@@ -428,7 +412,6 @@ export default async function feedRoutes(fastify: FastifyInstance): Promise<void
     }
   );
 
-  // Get all liked items
   fastify.get(
     '/api/liked',
     {
@@ -441,51 +424,31 @@ export default async function feedRoutes(fastify: FastifyInstance): Promise<void
         const likedMedia = db
           .prepare(
             `
-          SELECT 
-            m.id,
-            m.path,
-            m.type,
-            m.source_id as sourceId,
-            ui.liked,
-            ui.saved,
-            ui.view_count as viewCount,
-            ui.last_viewed as lastViewed,
-            s.display_name as displayName,
-            s.avatar_seed as avatarSeed
-          FROM media m
-          JOIN sources s ON m.source_id = s.id
-          JOIN user_interactions ui ON m.id = ui.media_id AND m.source_id = ui.source_id
-          WHERE ui.user_id = ? AND ui.liked = 1
-          ORDER BY ui.last_viewed DESC
-        `
+            ${latestPathsCte}
+            SELECT
+              f.id,
+              lp.absolute_path AS path,
+              f.media_kind AS type,
+              ${sourceIdSql} AS sourceId,
+              1 AS liked,
+              CASE WHEN usf.file_id IS NULL THEN 0 ELSE 1 END AS saved,
+              ${depthSql} AS depth,
+              0 AS viewCount,
+              NULL AS lastViewed
+            FROM files f
+            JOIN latest_paths lp ON lp.file_id = f.id
+            JOIN user_liked_files ulf ON ulf.user_id = ? AND ulf.file_id = f.id
+            LEFT JOIN user_saved_files usf ON usf.user_id = ? AND usf.file_id = f.id
+            LEFT JOIN user_hidden_files uhf ON uhf.user_id = ? AND uhf.file_id = f.id
+            WHERE uhf.file_id IS NULL
+            ORDER BY ulf.updated_at DESC
+          `
           )
-          .all(userId) as Array<{
-            id: string;
-            path: string;
-            type: string;
-            sourceId: string;
-            liked: number;
-            saved: number;
-            viewCount: number;
-            lastViewed: number | null;
-            displayName: string;
-            avatarSeed: string;
-          }>;
+          .all(userId, userId, userId, userId, userId) as MediaRow[];
 
         return {
           success: true,
-          likedMedia: likedMedia.map((m) => ({
-            id: m.id,
-            path: m.path,
-            type: m.type,
-            sourceId: m.sourceId,
-            displayName: m.displayName,
-            avatarSeed: m.avatarSeed,
-            liked: m.liked === 1,
-            saved: m.saved === 1,
-            viewCount: m.viewCount,
-            lastViewed: m.lastViewed,
-          })),
+          likedMedia: likedMedia.map((m) => buildMediaResponse(m)),
         };
       } catch (error) {
         console.error('Get liked error:', error);
@@ -497,14 +460,46 @@ export default async function feedRoutes(fastify: FastifyInstance): Promise<void
     }
   );
 
-  // Serve media file with streaming support
-  fastify.get<{ Params: { id: string } }>(
+  fastify.get<{ Params: { id: string }; Querystring: MediaFileQuery }>(
     '/api/media/file/:id',
-    async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+    async (
+      request: FastifyRequest<{ Params: { id: string }; Querystring: MediaFileQuery }>,
+      reply: FastifyReply
+    ) => {
       const { id } = request.params;
 
+      let userId: string;
+      const token = request.query.token;
+
+      if (token) {
+        try {
+          const decoded = fastify.jwt.verify<{ userId: string }>(token);
+          userId = decoded.userId;
+        } catch {
+          return reply.code(401).send({ error: 'Invalid or expired token' });
+        }
+      } else {
+        try {
+          await request.jwtVerify();
+          userId = request.user!.userId;
+        } catch {
+          return reply.code(401).send({ error: 'Unauthorized' });
+        }
+      }
+
       try {
-        const media = db.prepare('SELECT path, type FROM media WHERE id = ?').get(id) as {
+        const media = db
+          .prepare(
+            `
+            ${latestPathsCte}
+            SELECT lp.absolute_path AS path, f.media_kind AS type
+            FROM files f
+            JOIN latest_paths lp ON lp.file_id = f.id
+            WHERE f.id = ?
+            LIMIT 1
+          `
+          )
+          .get(userId, userId, id) as {
           path: string;
           type: string;
         } | undefined;
@@ -513,13 +508,6 @@ export default async function feedRoutes(fastify: FastifyInstance): Promise<void
           return reply.code(404).send({ error: 'Media not found' });
         }
 
-        // Check file exists
-        const fileStats = await fs.stat(media.path);
-        if (!fileStats.isFile()) {
-          return reply.code(404).send({ error: 'File not found' });
-        }
-
-        // Get MIME type
         const ext = path.extname(media.path).toLowerCase();
         const mimeTypes: Record<string, string> = {
           '.jpg': 'image/jpeg',
@@ -534,10 +522,23 @@ export default async function feedRoutes(fastify: FastifyInstance): Promise<void
         };
 
         const contentType = mimeTypes[ext] || 'application/octet-stream';
-        const isVideo = media.type.toLowerCase().startsWith('video') ||
-          contentType.startsWith('video/');
 
-        // For videos, support range requests for streaming
+        if (media.path.startsWith('rclone:')) {
+          const remoteBuffer = await readRemoteFile(media.path);
+          return reply
+            .type(contentType)
+            .header('Content-Length', remoteBuffer.length.toString())
+            .header('Cache-Control', 'public, max-age=300')
+            .send(remoteBuffer);
+        }
+
+        const fileStats = await fs.stat(media.path);
+        if (!fileStats.isFile()) {
+          return reply.code(404).send({ error: 'File not found' });
+        }
+
+        const isVideo = media.type.toLowerCase() === 'video' || contentType.startsWith('video/');
+
         if (isVideo) {
           const range = request.headers.range;
 
@@ -557,27 +558,25 @@ export default async function feedRoutes(fastify: FastifyInstance): Promise<void
               .header('Content-Type', contentType)
               .header('Cache-Control', 'public, max-age=3600')
               .send(readStream);
-          } else {
-            // No range request, send entire file as stream
-            const readStream = (await import('fs')).createReadStream(media.path);
-
-            return reply
-              .header('Content-Length', fileStats.size.toString())
-              .header('Content-Type', contentType)
-              .header('Accept-Ranges', 'bytes')
-              .header('Cache-Control', 'public, max-age=3600')
-              .send(readStream);
           }
-        } else {
-          // For images, read entire file (they're usually smaller)
-          const fileContent = await fs.readFile(media.path);
+
+          const readStream = (await import('fs')).createReadStream(media.path);
 
           return reply
-            .type(contentType)
             .header('Content-Length', fileStats.size.toString())
+            .header('Content-Type', contentType)
+            .header('Accept-Ranges', 'bytes')
             .header('Cache-Control', 'public, max-age=3600')
-            .send(fileContent);
+            .send(readStream);
         }
+
+        const fileContent = await fs.readFile(media.path);
+
+        return reply
+          .type(contentType)
+          .header('Content-Length', fileStats.size.toString())
+          .header('Cache-Control', 'public, max-age=3600')
+          .send(fileContent);
       } catch (error) {
         console.error('Get media file error:', error);
         return reply.code(500).send({
@@ -588,7 +587,6 @@ export default async function feedRoutes(fastify: FastifyInstance): Promise<void
     }
   );
 
-  // Hide/unhide a media item
   fastify.post<{ Body: InteractionBody }>(
     '/api/hide',
     {
@@ -603,35 +601,17 @@ export default async function feedRoutes(fastify: FastifyInstance): Promise<void
       }
 
       try {
-        // Check if interaction exists
-        const interaction = db.prepare(
-          'SELECT hidden FROM user_interactions WHERE user_id = ? AND source_id = ? AND media_id = ?'
-        ).get(userId, sourceId, mediaId) as { hidden: number } | undefined;
-
-        if (interaction) {
-          // Toggle hide status
-          const newHiddenStatus = interaction.hidden === 1 ? 0 : 1;
-          db.prepare(
-            'UPDATE user_interactions SET hidden = ? WHERE user_id = ? AND source_id = ? AND media_id = ?'
-          ).run(newHiddenStatus, userId, sourceId, mediaId);
-
-          return {
-            success: true,
-            mediaId,
-            hidden: newHiddenStatus === 1,
-          };
-        } else {
-          // Create new interaction with hidden
-          db.prepare(
-            'INSERT INTO user_interactions (user_id, source_id, media_id, hidden) VALUES (?, ?, ?, 1)'
-          ).run(userId, sourceId, mediaId);
-
-          return {
-            success: true,
-            mediaId,
-            hidden: true,
-          };
+        if (!assertUserHasFileAccess(db, userId, mediaId)) {
+          return reply.code(404).send({ error: 'Media not found' });
         }
+
+        const hidden = toggleUserFileFlag(db, 'user_hidden_files', userId, mediaId);
+
+        return {
+          success: true,
+          mediaId,
+          hidden,
+        };
       } catch (error) {
         console.error('Hide error:', error);
         return reply.code(500).send({
@@ -642,7 +622,6 @@ export default async function feedRoutes(fastify: FastifyInstance): Promise<void
     }
   );
 
-  // Get hidden media items
   fastify.get(
     '/api/hidden',
     {
@@ -655,54 +634,30 @@ export default async function feedRoutes(fastify: FastifyInstance): Promise<void
         const hiddenMedia = db
           .prepare(
             `
-          SELECT 
-            m.id,
-            m.path,
-            m.type,
-            m.source_id as sourceId,
-            ui.liked,
-            ui.saved,
-            ui.view_count as viewCount,
-            ui.last_viewed as lastViewed,
-            m.depth,
-            s.display_name as displayName,
-            s.avatar_seed as avatarSeed
-          FROM media m
-          JOIN sources s ON m.source_id = s.id
-          JOIN user_interactions ui ON m.id = ui.media_id AND m.source_id = ui.source_id
-          WHERE ui.user_id = ? AND ui.hidden = 1
-          ORDER BY ui.last_viewed DESC NULLS LAST, m.created_at DESC
-        `
+            ${latestPathsCte}
+            SELECT
+              f.id,
+              lp.absolute_path AS path,
+              f.media_kind AS type,
+              ${sourceIdSql} AS sourceId,
+              CASE WHEN ulf.file_id IS NULL THEN 0 ELSE 1 END AS liked,
+              CASE WHEN usf.file_id IS NULL THEN 0 ELSE 1 END AS saved,
+              ${depthSql} AS depth,
+              0 AS viewCount,
+              NULL AS lastViewed
+            FROM files f
+            JOIN latest_paths lp ON lp.file_id = f.id
+            JOIN user_hidden_files uhf ON uhf.user_id = ? AND uhf.file_id = f.id
+            LEFT JOIN user_liked_files ulf ON ulf.user_id = ? AND ulf.file_id = f.id
+            LEFT JOIN user_saved_files usf ON usf.user_id = ? AND usf.file_id = f.id
+            ORDER BY uhf.updated_at DESC
+          `
           )
-          .all(userId) as Array<{
-            id: string;
-            path: string;
-            type: string;
-            sourceId: string;
-            liked: number;
-            saved: number;
-            viewCount: number;
-            lastViewed: number | null;
-            depth: number;
-            displayName: string;
-            avatarSeed: string;
-          }>;
+          .all(userId, userId, userId, userId, userId) as MediaRow[];
 
         return {
           success: true,
-          hiddenMedia: hiddenMedia.map((m) => ({
-            id: m.id,
-            path: m.path,
-            type: m.type,
-            sourceId: m.sourceId,
-            displayName: m.displayName,
-            avatarSeed: m.avatarSeed,
-            liked: m.liked === 1,
-            saved: m.saved === 1,
-            viewCount: m.viewCount,
-            lastViewed: m.lastViewed,
-            depth: m.depth,
-          })),
+          hiddenMedia: hiddenMedia.map((m) => buildMediaResponse(m)),
           count: hiddenMedia.length,
         };
       } catch (error) {

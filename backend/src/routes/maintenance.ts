@@ -6,6 +6,8 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { getDatabase } from '../db/index.js';
 import { getFileIntegrityService } from '../services/integrity.js';
 import { getThumbnailService } from '../services/thumbnails.js';
+import { clearAllIndexedDataV2, getV2MediaStats } from '../services/v2-data-maintenance.js';
+import { getAllSourcesV2 } from '../services/v2-sources.js';
 import fs from 'fs/promises';
 
 export default async function maintenanceRoutes(fastify: FastifyInstance): Promise<void> {
@@ -18,13 +20,7 @@ export default async function maintenanceRoutes(fastify: FastifyInstance): Promi
    */
   fastify.get('/api/admin/health', async (request: FastifyRequest, reply: FastifyReply) => {
     try {
-      // Count media and sources
-      const mediaCount = (
-        db.prepare('SELECT COUNT(*) as count FROM media').get() as { count: number }
-      ).count;
-      const sourceCount = (
-        db.prepare('SELECT COUNT(*) as count FROM sources').get() as { count: number }
-      ).count;
+      const v2Stats = getV2MediaStats(db);
 
       // Get database file size
       const dbStats = await fs.stat('./.db/media.db').catch(() => null);
@@ -35,8 +31,8 @@ export default async function maintenanceRoutes(fastify: FastifyInstance): Promi
         status: 'healthy',
         timestamp: Date.now(),
         database: {
-          mediaCount,
-          sourceCount,
+          mediaCount: v2Stats.total,
+          sourceCount: v2Stats.folderCount,
           sizeBytes: dbSize,
         },
         lastIntegrityCheck: integrityService.getLastCheckTime(),
@@ -138,53 +134,92 @@ export default async function maintenanceRoutes(fastify: FastifyInstance): Promi
    */
   fastify.get('/api/admin/stats', async (request: FastifyRequest, reply: FastifyReply) => {
     try {
-      // Media stats
-      const mediaStats = db
-        .prepare(
-          `
-          SELECT 
-            COUNT(*) as total,
-            SUM(CASE WHEN type LIKE 'image%' THEN 1 ELSE 0 END) as images,
-            SUM(CASE WHEN type LIKE 'video%' THEN 1 ELSE 0 END) as videos,
-            SUM(liked) as likedCount,
-            SUM(saved) as savedCount,
-            AVG(view_count) as avgViewCount,
-            MAX(view_count) as maxViewCount
-          FROM media
-        `
-        )
-        .get() as {
-          total: number;
-          images: number;
-          videos: number;
-          likedCount: number;
-          savedCount: number;
-          avgViewCount: number;
-          maxViewCount: number;
+      const mediaStats = getV2MediaStats(db);
+
+      const userId = request.user?.userId;
+
+      if (userId) {
+        const rootFolderRow = db
+          .prepare(
+            `
+              SELECT absolute_path AS rootFolder
+              FROM folders
+              WHERE user_id = ?
+                AND storage_mode = 'local'
+                AND relative_path_from_root = ''
+              ORDER BY updated_at DESC
+              LIMIT 1
+            `
+          )
+          .get(userId) as { rootFolder: string } | undefined;
+
+        const userMedia = db
+          .prepare(
+            `
+              SELECT
+                COUNT(DISTINCT fp.file_id) as total,
+                COUNT(DISTINCT CASE WHEN f.media_kind = 'image' THEN fp.file_id END) as images,
+                COUNT(DISTINCT CASE WHEN f.media_kind = 'video' THEN fp.file_id END) as videos,
+                COUNT(fp.id) as presentPathCount
+              FROM file_paths fp
+              JOIN files f ON f.id = fp.file_id
+              WHERE fp.user_id = ?
+                AND fp.is_present = 1
+            `
+          )
+          .get(userId) as {
+          total: number | null;
+          images: number | null;
+          videos: number | null;
+          presentPathCount: number | null;
         };
 
-      // Source stats
-      const sourceStats = db
-        .prepare('SELECT COUNT(*) as count FROM sources')
-        .get() as { count: number };
+        const saved = db
+          .prepare('SELECT COUNT(*) as count FROM user_saved_files WHERE user_id = ?')
+          .get(userId) as { count: number };
+        const liked = db
+          .prepare('SELECT COUNT(*) as count FROM user_liked_files WHERE user_id = ?')
+          .get(userId) as { count: number };
+        const hidden = db
+          .prepare('SELECT COUNT(*) as count FROM user_hidden_files WHERE user_id = ?')
+          .get(userId) as { count: number };
 
-      // Depth distribution
-      const depthDist = db
-        .prepare(
-          `
-          SELECT depth, COUNT(*) as count
-          FROM media
-          GROUP BY depth
-          ORDER BY depth ASC
-        `
-        )
-        .all() as Array<{ depth: number; count: number }>;
+        const sourcesCount = getAllSourcesV2(db, userId).length;
+
+        return {
+          success: true,
+          media_count: userMedia.total ?? 0,
+          sources_count: sourcesCount,
+          liked_count: liked.count,
+          saved_count: saved.count,
+          hidden_count: hidden.count,
+          root_folder: rootFolderRow?.rootFolder ?? null,
+          media: {
+            total: userMedia.total ?? 0,
+            images: userMedia.images ?? 0,
+            videos: userMedia.videos ?? 0,
+            presentPathCount: userMedia.presentPathCount ?? 0,
+            likedCount: liked.count,
+            savedCount: saved.count,
+            hiddenCount: hidden.count,
+            folderCount: sourcesCount,
+          },
+          sources: { count: sourcesCount },
+          depthDistribution: [],
+        };
+      }
 
       return {
         success: true,
+        media_count: mediaStats.total,
+        sources_count: mediaStats.folderCount,
+        liked_count: mediaStats.likedCount,
+        saved_count: mediaStats.savedCount,
+        hidden_count: mediaStats.hiddenCount,
+        root_folder: null,
         media: mediaStats,
-        sources: { count: sourceStats.count },
-        depthDistribution: depthDist,
+        sources: { count: mediaStats.folderCount },
+        depthDistribution: [],
       };
     } catch (error) {
       return reply.code(500).send({
@@ -199,11 +234,7 @@ export default async function maintenanceRoutes(fastify: FastifyInstance): Promi
    */
   fastify.post('/api/admin/reset', async (request: FastifyRequest, reply: FastifyReply) => {
     try {
-      // Clear media table
-      db.prepare('DELETE FROM media').run();
-
-      // Clear sources table
-      db.prepare('DELETE FROM sources').run();
+      clearAllIndexedDataV2(db);
 
       // Clear thumbnails
       await thumbnailService.clearCache();
@@ -226,23 +257,7 @@ export default async function maintenanceRoutes(fastify: FastifyInstance): Promi
    */
   fastify.get('/api/admin/diagnostics', async (request: FastifyRequest, reply: FastifyReply) => {
     try {
-      // Get all stats
-      const mediaCount = (
-        db.prepare('SELECT COUNT(*) as count FROM media').get() as { count: number }
-      ).count;
-      const sourceCount = (
-        db.prepare('SELECT COUNT(*) as count FROM sources').get() as { count: number }
-      ).count;
-      const savedCount = (
-        db.prepare('SELECT COUNT(*) as count FROM media WHERE saved = 1').get() as {
-          count: number;
-        }
-      ).count;
-      const likedCount = (
-        db.prepare('SELECT COUNT(*) as count FROM media WHERE liked = 1').get() as {
-          count: number;
-        }
-      ).count;
+      const mediaStats = getV2MediaStats(db);
 
       const thumbnailStats = thumbnailService.getCacheStats();
       const lastIntegrityCheck = integrityService.getLastCheckTime();
@@ -252,10 +267,12 @@ export default async function maintenanceRoutes(fastify: FastifyInstance): Promi
         diagnostics: {
           timestamp: Date.now(),
           database: {
-            mediaCount,
-            sourceCount,
-            savedCount,
-            likedCount,
+            mediaCount: mediaStats.total,
+            sourceCount: mediaStats.folderCount,
+            savedCount: mediaStats.savedCount,
+            likedCount: mediaStats.likedCount,
+            hiddenCount: mediaStats.hiddenCount,
+            presentPathCount: mediaStats.presentPathCount,
           },
           thumbnails: thumbnailStats,
           system: {

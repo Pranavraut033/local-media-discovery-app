@@ -1,37 +1,24 @@
 /**
  * File Watcher Service
- * Monitors file system for changes and triggers incremental indexing
+ * Monitors file system for changes and triggers debounced v2 reindexing
  */
 import chokidar, { type FSWatcher } from 'chokidar';
 import type Database from 'better-sqlite3';
 import path from 'path';
 import { config } from '../config.js';
 import { indexMediaFiles } from './indexer.js';
-import { generateSources } from './sources.js';
-import { createHash } from 'crypto';
 
 interface WatcherOptions {
   rootFolder: string;
+  userId: string;
   db: Database.Database;
   onIndexComplete?: (result: { added: number; removed: number }) => void;
 }
 
 let watcher: FSWatcher | null = null;
 let debounceTimer: NodeJS.Timeout | null = null;
-
-/**
- * Generate a stable ID from file path
- */
-function generateFileId(filePath: string): string {
-  return createHash('sha256').update(filePath).digest('hex').substring(0, 16);
-}
-
-/**
- * Generate a stable source ID from folder path
- */
-function generateSourceId(folderPath: string): string {
-  return createHash('sha256').update(folderPath).digest('hex').substring(0, 16);
-}
+let reindexInProgress = false;
+let reindexQueued = false;
 
 /**
  * Determine if a file is a supported media type
@@ -50,34 +37,57 @@ function getMediaType(filePath: string): 'image' | 'video' | null {
   return null;
 }
 
-/**
- * Get the depth of a file relative to the root folder
- */
-function getFileDepth(filePath: string, rootFolder: string): number {
-  const relative = path.relative(rootFolder, filePath);
-  const parts = relative.split(path.sep);
-  return parts.length - 1;
-}
-
-/**
- * Get the top-level folder (source) for a file path
- */
-function getSourceFolder(filePath: string, rootFolder: string): string | null {
-  const relative = path.relative(rootFolder, filePath);
-  const parts = relative.split(path.sep);
-
-  if (parts.length === 0 || parts[0] === '.') {
-    return null;
+async function runReindex(
+  db: Database.Database,
+  rootFolder: string,
+  userId: string,
+  onIndexComplete?: (result: { added: number; removed: number }) => void
+): Promise<void> {
+  if (reindexInProgress) {
+    reindexQueued = true;
+    return;
   }
 
-  return path.join(rootFolder, parts[0]);
+  reindexInProgress = true;
+  try {
+    const result = await indexMediaFiles(db, rootFolder, userId);
+    if (onIndexComplete) {
+      onIndexComplete({
+        added: result.newFiles,
+        removed: result.removedFiles,
+      });
+    }
+  } catch (error) {
+    console.error('Watcher reindex error:', error);
+  } finally {
+    reindexInProgress = false;
+    if (reindexQueued) {
+      reindexQueued = false;
+      await runReindex(db, rootFolder, userId, onIndexComplete);
+    }
+  }
+}
+
+function debounceReindex(
+  db: Database.Database,
+  rootFolder: string,
+  userId: string,
+  onIndexComplete?: (result: { added: number; removed: number }) => void
+): void {
+  if (debounceTimer) {
+    clearTimeout(debounceTimer);
+  }
+
+  debounceTimer = setTimeout(() => {
+    void runReindex(db, rootFolder, userId, onIndexComplete);
+  }, 1500);
 }
 
 /**
  * Start watching a root folder for file changes
  */
 export function startWatcher(options: WatcherOptions): void {
-  const { rootFolder, db, onIndexComplete } = options;
+  const { rootFolder, userId, db, onIndexComplete } = options;
 
   // Stop existing watcher if any
   stopWatcher();
@@ -100,24 +110,8 @@ export function startWatcher(options: WatcherOptions): void {
     const mediaType = getMediaType(filePath);
     if (!mediaType) return;
 
-    const sourceFolder = getSourceFolder(filePath, rootFolder);
-    if (!sourceFolder) return;
-
-    const fileId = generateFileId(filePath);
-    const sourceId = generateSourceId(sourceFolder);
-    const depth = getFileDepth(filePath, rootFolder);
-
-    // Insert into database
-    db.prepare(`
-      INSERT OR IGNORE INTO media (id, path, source_id, depth, type)
-      VALUES (?, ?, ?, ?, ?)
-    `).run(fileId, filePath, sourceId, depth, mediaType);
-
-    console.log(`Added: ${filePath}`);
-
-    if (onIndexComplete) {
-      onIndexComplete({ added: 1, removed: 0 });
-    }
+    console.log(`Detected add: ${filePath}`);
+    debounceReindex(db, rootFolder, userId, onIndexComplete);
   });
 
   // Handle file removals
@@ -125,42 +119,35 @@ export function startWatcher(options: WatcherOptions): void {
     const mediaType = getMediaType(filePath);
     if (!mediaType) return;
 
-    // Remove from database
-    db.prepare('DELETE FROM media WHERE path = ?').run(filePath);
-
-    console.log(`Removed: ${filePath}`);
-
-    if (onIndexComplete) {
-      onIndexComplete({ added: 0, removed: 1 });
-    }
+    console.log(`Detected remove: ${filePath}`);
+    debounceReindex(db, rootFolder, userId, onIndexComplete);
   });
 
-  // Handle directory additions (potential new sources)
+  watcher.on('change', (filePath: string) => {
+    const mediaType = getMediaType(filePath);
+    if (!mediaType) return;
+
+    console.log(`Detected change: ${filePath}`);
+    debounceReindex(db, rootFolder, userId, onIndexComplete);
+  });
+
+  // Handle directory additions/removals
   watcher.on('addDir', (dirPath: string) => {
-    // Check if this is a top-level directory
-    const relative = path.relative(rootFolder, dirPath);
-    const parts = relative.split(path.sep);
-
-    if (parts.length === 1 && parts[0] !== '.') {
-      console.log(`New top-level folder detected: ${dirPath}`);
-      // Trigger source regeneration with debounce
-      debounceSourceRegeneration(db, rootFolder);
+    if (dirPath === rootFolder) {
+      return;
     }
+
+    console.log(`Detected directory add: ${dirPath}`);
+    debounceReindex(db, rootFolder, userId, onIndexComplete);
   });
 
-  // Handle directory removals
   watcher.on('unlinkDir', (dirPath: string) => {
-    // Check if this was a top-level directory
-    const relative = path.relative(rootFolder, dirPath);
-    const parts = relative.split(path.sep);
-
-    if (parts.length === 1 && parts[0] !== '.') {
-      console.log(`Top-level folder removed: ${dirPath}`);
-      // Remove associated source
-      const sourceId = generateSourceId(dirPath);
-      db.prepare('DELETE FROM sources WHERE id = ?').run(sourceId);
-      db.prepare('DELETE FROM media WHERE source_id = ?').run(sourceId);
+    if (dirPath === rootFolder) {
+      return;
     }
+
+    console.log(`Detected directory remove: ${dirPath}`);
+    debounceReindex(db, rootFolder, userId, onIndexComplete);
   });
 
   // Handle errors
@@ -170,25 +157,6 @@ export function startWatcher(options: WatcherOptions): void {
 
   console.log('File watcher started');
 }
-
-/**
- * Debounce source regeneration to avoid excessive updates
- */
-function debounceSourceRegeneration(db: Database.Database, rootFolder: string): void {
-  if (debounceTimer) {
-    clearTimeout(debounceTimer);
-  }
-
-  debounceTimer = setTimeout(async () => {
-    try {
-      await generateSources(db, rootFolder);
-      console.log('Sources regenerated after directory change');
-    } catch (error) {
-      console.error('Error regenerating sources:', error);
-    }
-  }, 3000); // Wait 3 seconds for multiple changes
-}
-
 /**
  * Stop the file watcher
  */
@@ -203,6 +171,9 @@ export async function stopWatcher(): Promise<void> {
     clearTimeout(debounceTimer);
     debounceTimer = null;
   }
+
+  reindexInProgress = false;
+  reindexQueued = false;
 }
 
 /**

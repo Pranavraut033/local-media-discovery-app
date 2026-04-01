@@ -16,30 +16,58 @@ export default async function thumbnailRoutes(fastify: FastifyInstance): Promise
   const db = getDatabase();
   const thumbnailService = getThumbnailService();
 
+  const resolveMediaForUser = (userId: string, fileId: string) => {
+    return db
+      .prepare(
+        `
+          WITH latest_paths AS (
+            SELECT fp.*
+            FROM file_paths fp
+            JOIN (
+              SELECT file_id, MAX(last_seen_at) AS max_seen
+              FROM file_paths
+              WHERE user_id = ? AND is_present = 1
+              GROUP BY file_id
+            ) latest
+              ON latest.file_id = fp.file_id
+             AND latest.max_seen = fp.last_seen_at
+            WHERE fp.user_id = ? AND fp.is_present = 1
+          )
+          SELECT lp.absolute_path AS path, f.media_kind AS type
+          FROM files f
+          JOIN latest_paths lp ON lp.file_id = f.id
+          WHERE f.id = ?
+          LIMIT 1
+        `
+      )
+      .get(userId, userId, fileId) as { path: string; type: string } | undefined;
+  };
+
   /**
    * Get thumbnail for a media item
    * Generates on-demand if not cached
    */
   fastify.get<{ Params: { id: string }; Querystring: ThumbnailQuery }>(
     '/api/thumbnail/:id',
+    {
+      onRequest: [fastify.authenticate],
+    },
     async (
       request: FastifyRequest<{ Params: { id: string }; Querystring: ThumbnailQuery }>,
       reply: FastifyReply
     ) => {
       const { id } = request.params;
+      const userId = request.user!.userId;
 
       try {
-        // Get media info from database
-        const media = db
-          .prepare('SELECT path, type FROM media WHERE id = ?')
-          .get(id) as { path: string; type: string } | undefined;
+        const media = resolveMediaForUser(userId, id);
 
         if (!media) {
           return reply.code(404).send({ error: 'Media not found' });
         }
 
         // Determine media type
-        const mediaType = media.type.toLowerCase().startsWith('video') ? 'video' : 'image';
+        const mediaType = media.type.toLowerCase() === 'video' ? 'video' : 'image';
 
         // Generate or retrieve cached thumbnail
         const thumbnailPath = await thumbnailService.getThumbnail(id, media.path, mediaType);
@@ -70,8 +98,12 @@ export default async function thumbnailRoutes(fastify: FastifyInstance): Promise
    */
   fastify.post<{ Body: { ids: string[] } }>(
     '/api/thumbnails/batch',
+    {
+      onRequest: [fastify.authenticate],
+    },
     async (request: FastifyRequest<{ Body: { ids: string[] } }>, reply: FastifyReply) => {
       const { ids } = request.body;
+      const userId = request.user!.userId;
 
       if (!Array.isArray(ids) || ids.length === 0) {
         return reply.code(400).send({ error: 'Invalid request: ids array required' });
@@ -86,16 +118,14 @@ export default async function thumbnailRoutes(fastify: FastifyInstance): Promise
       try {
         const results = await Promise.allSettled(
           ids.map(async (id) => {
-            const media = db
-              .prepare('SELECT path, type FROM media WHERE id = ?')
-              .get(id) as { path: string; type: string } | undefined;
+            const media = resolveMediaForUser(userId, id);
 
             if (!media) {
               return { id, success: false, error: 'Not found' };
             }
 
             try {
-              const mediaType = media.type.toLowerCase().startsWith('video')
+              const mediaType = media.type.toLowerCase() === 'video'
                 ? 'video'
                 : 'image';
               const thumbnailPath = await thumbnailService.getThumbnail(

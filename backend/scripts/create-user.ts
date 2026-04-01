@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
- * CLI script to create a user with a 6-digit PIN
- * Usage: node scripts/create-user.js <6-digit-pin>
+ * CLI script to create a user with a 6-digit PIN and name
+ * Usage: node scripts/create-user.js <6-digit-pin> <name>
  */
 
 import bcrypt from 'bcrypt';
@@ -15,17 +15,23 @@ const __dirname = path.dirname(__filename);
 
 const args = process.argv.slice(2);
 
-if (args.length !== 1) {
-  console.error('Usage: node scripts/create-user.js <6-digit-pin>');
-  console.error('Example: node scripts/create-user.js 123456');
+if (args.length < 2) {
+  console.error('Usage: node scripts/create-user.js <6-digit-pin> <name>');
+  console.error('Example: node scripts/create-user.js 123456 Alice');
   process.exit(1);
 }
 
 const pin = args[0];
+const name = args.slice(1).join(' ').trim();
 
 // Validate PIN format
 if (!/^\d{6}$/.test(pin)) {
   console.error('Error: PIN must be exactly 6 digits (0-9 only)');
+  process.exit(1);
+}
+
+if (!name) {
+  console.error('Error: name is required');
   process.exit(1);
 }
 
@@ -42,11 +48,12 @@ async function createUser() {
     const userId = randomUUID();
     
     // Insert user
-    const stmt = db.prepare('INSERT INTO users (id, pin_hash) VALUES (?, ?)');
-    stmt.run(userId, pinHash);
+    const stmt = db.prepare('INSERT INTO users (id, pin_hash, name) VALUES (?, ?, ?)');
+    stmt.run(userId, pinHash, name);
     
     console.log('✅ User created successfully!');
     console.log(`User ID: ${userId}`);
+    console.log(`Name: ${name}`);
     console.log(`PIN: ${pin} (keep this secure)`);
     
     // Check total users

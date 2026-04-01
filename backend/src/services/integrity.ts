@@ -36,14 +36,15 @@ class FileIntegrityService {
 
     try {
       const db = getDatabase();
+      const now = Math.floor(Date.now() / 1000);
 
-      // Get all media records
-      const allMedia = db
-        .prepare('SELECT id, path FROM media')
-        .all() as Array<{ id: string; path: string }>;
+      // Check all currently-present file paths across users.
+      const allPaths = db
+        .prepare('SELECT id, file_id, absolute_path FROM file_paths WHERE is_present = 1')
+        .all() as Array<{ id: string; file_id: string; absolute_path: string }>;
 
       const result: IntegrityCheckResult = {
-        totalMedia: allMedia.length,
+        totalMedia: allPaths.length,
         validFiles: 0,
         missingFiles: 0,
         movedFiles: 0,
@@ -55,38 +56,59 @@ class FileIntegrityService {
         },
       };
 
-      // Check each file
-      for (const media of allMedia) {
+      // Check each file path on disk.
+      const missingPathIds: string[] = [];
+      const missingFileIds = new Set<string>();
+
+      for (const media of allPaths) {
         try {
-          const stats = await fs.stat(media.path);
+          const stats = await fs.stat(media.absolute_path);
 
           if (stats.isFile()) {
             result.validFiles++;
           } else {
-            // Not a file (might be directory or symlink)
             result.missingFiles++;
-            result.deletedIds.push(media.id);
+            missingPathIds.push(media.id);
+            missingFileIds.add(media.file_id);
           }
         } catch (error) {
-          // File doesn't exist
           result.missingFiles++;
-          result.deletedIds.push(media.id);
+          missingPathIds.push(media.id);
+          missingFileIds.add(media.file_id);
         }
       }
 
-      // Delete records for missing files
-      if (result.deletedIds.length > 0) {
-        const stmt = db.prepare('DELETE FROM media WHERE id = ?');
-        for (const id of result.deletedIds) {
-          stmt.run(id);
-        }
+      // Mark missing paths as no longer present.
+      if (missingPathIds.length > 0) {
+        const markMissingStmt = db.prepare(
+          'UPDATE file_paths SET is_present = 0, last_seen_at = ?, updated_at = ? WHERE id = ?'
+        );
+
+        const tx = db.transaction(() => {
+          for (const id of missingPathIds) {
+            markMissingStmt.run(now, now, id);
+          }
+
+          // Remove canonical files that are no longer referenced by any path.
+          db.prepare('DELETE FROM files WHERE id NOT IN (SELECT DISTINCT file_id FROM file_paths)').run();
+        });
+
+        tx();
       }
 
-      result.report.success = true;
+      result.deletedIds = Array.from(missingFileIds);
+
+      if (result.totalMedia > 0) {
+        result.report.success = true;
+      } else {
+        // Empty DB is still a successful integrity check.
+        result.report.success = true;
+      }
+
       result.report.duration = Date.now() - startTime;
 
       console.log(
-        `File integrity check completed: ${result.validFiles}/${result.totalMedia} valid, ${result.missingFiles} removed`
+        `File integrity check completed: ${result.validFiles}/${result.totalMedia} valid, ${result.missingFiles} marked missing`
       );
 
       return result;
@@ -100,32 +122,28 @@ class FileIntegrityService {
   }
 
   /**
-   * Clean up orphaned thumbnails (thumbnails without corresponding media)
+   * Clean up orphaned thumbnails (thumbnails without corresponding files)
    */
   async cleanupOrphanedThumbnails(thumbnailDir: string): Promise<number> {
     try {
       const db = getDatabase();
 
-      // Get all media IDs
       const mediaIds = new Set(
         db
-          .prepare('SELECT id FROM media')
+          .prepare('SELECT id FROM files')
           .all()
           .map((row: any) => row.id)
       );
 
-      // List thumbnail files
       const files = await fs.readdir(thumbnailDir);
       let deleted = 0;
 
       for (const file of files) {
         if (file === 'cache.json') continue;
 
-        // Extract media ID from filename (format: {id}.webp)
         const mediaId = file.replace('.webp', '');
 
         if (!mediaIds.has(mediaId)) {
-          // Orphaned thumbnail
           try {
             await fs.unlink(`${thumbnailDir}/${file}`);
             deleted++;
@@ -144,31 +162,37 @@ class FileIntegrityService {
   }
 
   /**
-   * Detect and remove empty/corrupted media records
+   * Detect and remove empty/corrupted records in schema v2.
    */
   async cleanupInvalidRecords(): Promise<number> {
     const db = getDatabase();
     let deleted = 0;
 
     try {
-      // Remove records with null or empty paths
-      const result = db.prepare('DELETE FROM media WHERE path IS NULL OR path = ""').run();
-      deleted += result.changes;
+      const invalidPaths = db
+        .prepare('DELETE FROM file_paths WHERE absolute_path IS NULL OR absolute_path = ""')
+        .run();
+      deleted += invalidPaths.changes;
 
-      // Remove records with invalid types
-      const validTypes = ['image', 'video'];
-      const invalidResult = db
+      const validKinds = ['image', 'video', 'other'];
+      const invalidFiles = db
         .prepare(
           `
-          DELETE FROM media 
-          WHERE type NOT IN (${validTypes.map(() => '?').join(',')})
+          DELETE FROM files
+          WHERE media_kind NOT IN (${validKinds.map(() => '?').join(',')})
         `
         )
-        .run(...validTypes);
-      deleted += invalidResult.changes;
+        .run(...validKinds);
+      deleted += invalidFiles.changes;
+
+      // Remove any file records left without path references.
+      const orphans = db
+        .prepare('DELETE FROM files WHERE id NOT IN (SELECT DISTINCT file_id FROM file_paths)')
+        .run();
+      deleted += orphans.changes;
 
       if (deleted > 0) {
-        console.log(`Cleaned up ${deleted} invalid media records`);
+        console.log(`Cleaned up ${deleted} invalid v2 records`);
       }
 
       return deleted;
