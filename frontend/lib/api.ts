@@ -1,4 +1,4 @@
-import { getRootFolder, getStoredToken, useUIStore } from './storage';
+import { getRootFolder, getStoredToken } from './storage';
 
 export function getApiBase(): string {
   if (process.env.NEXT_PUBLIC_API_URL) {
@@ -40,13 +40,15 @@ export async function authenticatedFetch(
 ): Promise<Response> {
   const token = getStoredToken();
 
-  const headers = {
-    'Content-Type': 'application/json',
-    ...options.headers,
-  };
+  const headers = new Headers(options.headers);
 
-  if (token) {
-    (headers as any)['Authorization'] = `Bearer ${token}`;
+  // Only set JSON content type when we are actually sending a non-FormData body.
+  if (options.body != null && !(options.body instanceof FormData) && !headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json');
+  }
+
+  if (token && !headers.has('Authorization')) {
+    headers.set('Authorization', `Bearer ${token}`);
   }
 
   const response = await fetch(url, {
@@ -66,7 +68,14 @@ export async function authenticatedFetch(
 
 export function getMediaUrl(mediaId: string): string {
   const base = getApiBase();
-  return `${base}/api/media/file/${mediaId}`;
+  const url = new URL(`${base}/api/media/file/${mediaId}`);
+  const token = getStoredToken();
+
+  if (token) {
+    url.searchParams.set('token', token);
+  }
+
+  return url.toString();
 }
 
 /**
@@ -77,6 +86,7 @@ export interface FolderNode {
   name: string;
   mediaCount: number;
   hidden: boolean;
+  sourceId?: string; // ID of the source this folder belongs to
   children: FolderNode[];
 }
 const base = getApiBase();
@@ -97,8 +107,15 @@ export async function getFolderTree(sourceIds: string[]): Promise<FolderNode> {
 
   const root = getRootFolder()!
 
-  const children = (responses as FolderNode[]).map((node) => ({
+  // Add sourceId to each node recursively
+  const addSourceIdToNodes = (node: FolderNode, sourceId: string): FolderNode => ({
     ...node,
+    sourceId,
+    children: node.children.map(child => addSourceIdToNodes(child, sourceId)),
+  });
+
+  const children = (responses as FolderNode[]).map((node, index) => ({
+    ...addSourceIdToNodes(node, sourceIds[index]),
     mediaCount: node.mediaCount || node.children.reduce((sum, child) => sum + child.mediaCount, 0),
   }))
 
@@ -122,7 +139,8 @@ export async function toggleFolderHide(
   });
 
   if (!response.ok) {
-    throw new Error('Failed to toggle folder visibility');
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error || 'Failed to toggle folder visibility');
   }
 
   return response.json();
@@ -140,4 +158,64 @@ export async function getHiddenFolders(
   }
 
   return response.json();
+}
+
+/**
+ * Rclone API helpers
+ */
+
+export interface RcloneRemote {
+  name: string;
+  type: string;
+}
+
+export interface AddRcloneSourceBody {
+  remote_name: string;
+  base_path: string;
+  remote_type: string;
+  credentials?: Record<string, string>;
+  use_crypt?: boolean;
+  crypt_password?: string;
+}
+
+export async function fetchRcloneRemotes(): Promise<RcloneRemote[]> {
+  const response = await authenticatedFetch(`${base}/api/rclone/remotes`);
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error || 'Failed to fetch rclone remotes');
+  }
+
+  const data = (await response.json()) as { remotes: RcloneRemote[] };
+  return data.remotes;
+}
+
+export async function validateRcloneRemote(remotePath: string): Promise<{ success: boolean; message?: string; error?: string }> {
+  const response = await authenticatedFetch(`${base}/api/rclone/validate`, {
+    method: 'POST',
+    body: JSON.stringify({ remote_path: remotePath }),
+  });
+
+  const data = await response.json();
+
+  if (!response.ok) {
+    throw new Error(data.error || 'Validation failed');
+  }
+
+  return data;
+}
+
+export async function addRcloneSource(body: AddRcloneSourceBody): Promise<{ accepted?: boolean; success?: boolean; source_id?: string; jobId?: string; message?: string }> {
+  const response = await authenticatedFetch(`${base}/api/rclone/add-source`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+
+  const data = await response.json();
+
+  if (!response.ok) {
+    throw new Error(data.error || 'Failed to add rclone source');
+  }
+
+  return data;
 }

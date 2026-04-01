@@ -4,33 +4,61 @@
  */
 'use client';
 
-import { useEffect, useRef, useState, useCallback } from 'react';
-import { useFeed, useLikeMutation, useSaveMutation, useMediaPreload } from '@/lib/hooks';
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
+import { useInfiniteFeed, useLikeMutation, useSaveMutation, useMediaPreload } from '@/lib/hooks';
+import type { FeedItem } from '@/lib/hooks';
 import { MediaCard } from './MediaCard';
-import { Grid3x3, Layers, Heart, Bookmark } from 'lucide-react';
+import { Grid3x3, Layers, Heart, Bookmark, Maximize, Minimize } from 'lucide-react';
 import { getViewMode, setViewMode, getLastViewedMedia, setLastViewedMedia } from '@/lib/storage';
 import Masonry from 'react-masonry-css';
+import { useFullscreen } from '@/lib/useFullscreen';
+import {
+  MEDIA_MASONRY_BREAKPOINTS,
+  MEDIA_MASONRY_CLASS,
+  MEDIA_MASONRY_COLUMN_CLASS,
+} from '@/lib/layout';
+import { useIndexingStore } from '@/lib/stores/indexing.store';
 
 export type FeedMode = 'reels' | 'feed';
 
 interface FeedProps {
   initialMode?: FeedMode;
   onViewSource?: (sourceId: string, displayName: string, avatarSeed: string) => void;
+  onModeChange?: (mode: FeedMode) => void;
 }
 
-export function Feed({ initialMode, onViewSource }: FeedProps) {
+export function Feed({ initialMode, onViewSource, onModeChange }: FeedProps) {
   const [mode, setMode] = useState<FeedMode>(() => initialMode || getViewMode());
-  const [page, setPage] = useState(0);
-  const [allItems, setAllItems] = useState<any[]>([]);
+  const [allItems, setAllItems] = useState<FeedItem[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [isResuming, setIsResuming] = useState(true);
+  const [feedSeed] = useState(() => `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`);
   const containerRef = useRef<HTMLDivElement>(null);
   const touchStartY = useRef(0);
-  const [lastSourceId, setLastSourceId] = useState<string>();
+  const { isFullscreen, toggleFullscreen } = useFullscreen();
 
-  const { data: feedData, isLoading, isFetching } = useFeed(page, 20, lastSourceId);
+  const {
+    data: feedPages,
+    isLoading,
+    isFetchingNextPage,
+    hasNextPage,
+    fetchNextPage,
+  } = useInfiniteFeed(30, undefined, feedSeed);
   const likeMutation = useLikeMutation();
   const saveMutation = useSaveMutation();
+
+  const mergedFeedItems = useMemo(() => {
+    if (!feedPages?.pages?.length) return [];
+
+    const byId = new Map<string, FeedItem>();
+    feedPages.pages.forEach((page) => {
+      page.feed.forEach((item) => {
+        byId.set(item.id, { ...(byId.get(item.id) || {}), ...item });
+      });
+    });
+
+    return Array.from(byId.values());
+  }, [feedPages]);
 
   const currentMedia = allItems[currentIndex];
 
@@ -46,7 +74,9 @@ export function Feed({ initialMode, onViewSource }: FeedProps) {
   const processedLikeMutationRef = useRef<string | null>(null);
   const processedSaveMutationRef = useRef<string | null>(null);
   const observerRef = useRef<IntersectionObserver | null>(null);
-  const lastItemRef = useRef<HTMLDivElement | null>(null);
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+  const lastWheelNavigationAtRef = useRef(0);
+  const initialPrefetchDoneRef = useRef(false);
 
   // Sync mutations back into allItems
   useEffect(() => {
@@ -81,18 +111,49 @@ export function Feed({ initialMode, onViewSource }: FeedProps) {
     }
   }, [saveMutation.isSuccess, saveMutation.data?.mediaId, saveMutation.data?.saved]);
 
+  const reconciliationMap = useIndexingStore((s) => s.reconciliationMap);
+
+  // Reconcile temp IDs → final IDs when hashing completes (Phase 9)
+  useEffect(() => {
+    if (Object.keys(reconciliationMap).length === 0) return;
+    setAllItems((prev) => {
+      let changed = false;
+      const next = prev.map((item) => {
+        const finalId = reconciliationMap[item.id];
+        if (finalId && finalId !== item.id) {
+          changed = true;
+          return { ...item, id: finalId, status: 'ready' };
+        }
+        return item;
+      });
+      return changed ? next : prev;
+    });
+  }, [reconciliationMap]);
+
   // Load more when reaching near the end and sync updates from cache
   useEffect(() => {
-    if (feedData?.feed && feedData.feed.length > 0) {
+    if (mergedFeedItems.length > 0) {
       setAllItems((prev) => {
         const merged = [...prev];
         let hasNewItems = false;
+        let hasUpdatedItems = false;
 
-        feedData.feed.forEach((newItem) => {
+        mergedFeedItems.forEach((newItem) => {
           const existingIndex = merged.findIndex((p) => p.id === newItem.id);
           if (existingIndex !== -1) {
-            // Update existing item (preserves all properties including liked/saved)
-            merged[existingIndex] = newItem;
+            const existing = merged[existingIndex];
+            const next = { ...existing, ...newItem };
+            const changed =
+              existing.liked !== next.liked ||
+              existing.saved !== next.saved ||
+              existing.hidden !== next.hidden ||
+              existing.path !== next.path ||
+              existing.activePath !== next.activePath;
+
+            if (changed) {
+              merged[existingIndex] = next;
+              hasUpdatedItems = true;
+            }
           } else {
             // Add new item only if not already present
             merged.push(newItem);
@@ -101,15 +162,11 @@ export function Feed({ initialMode, onViewSource }: FeedProps) {
         });
 
         // Only update if there were actual changes
-        return hasNewItems ? merged : prev;
+        return hasNewItems || hasUpdatedItems ? merged : prev;
       });
 
-      // Update last source ID for diversity
-      if (feedData.feed.length > 0) {
-        setLastSourceId(feedData.feed[feedData.feed.length - 1].sourceId);
-      }
     }
-  }, [feedData]);
+  }, [mergedFeedItems]);
 
   // Resume position from last session
   useEffect(() => {
@@ -125,6 +182,11 @@ export function Feed({ initialMode, onViewSource }: FeedProps) {
     }
   }, [allItems, isResuming]);
 
+  // Let the layout react to feed/reels mode for global chrome visibility.
+  useEffect(() => {
+    onModeChange?.(mode);
+  }, [mode, onModeChange]);
+
   // Save current position when index changes
   useEffect(() => {
     if (!isResuming && allItems[currentIndex]) {
@@ -132,12 +194,15 @@ export function Feed({ initialMode, onViewSource }: FeedProps) {
     }
   }, [currentIndex, allItems, isResuming]);
 
-  // Load next page when we're near the end
+  // Load next page when we're near the end in reels mode.
+  // Feed mode uses the intersection observer below.
   useEffect(() => {
-    if (currentIndex > allItems.length - 5 && feedData?.hasMore && !isFetching) {
-      setPage((p) => p + 1);
+    if (mode !== 'reels') return;
+
+    if (currentIndex > allItems.length - 5 && hasNextPage && !isFetchingNextPage) {
+      fetchNextPage();
     }
-  }, [currentIndex, allItems.length, feedData?.hasMore, isFetching]);
+  }, [mode, currentIndex, allItems.length, hasNextPage, isFetchingNextPage, fetchNextPage]);
 
   // Set up intersection observer for infinite scroll in feed mode
   useEffect(() => {
@@ -145,31 +210,41 @@ export function Feed({ initialMode, onViewSource }: FeedProps) {
 
     const handleIntersection = (entries: IntersectionObserverEntry[]) => {
       const lastEntry = entries[0];
-      if (lastEntry.isIntersecting && feedData?.hasMore && !isFetching) {
-        setPage((p) => p + 1);
+      if (lastEntry.isIntersecting && hasNextPage && !isFetchingNextPage) {
+        fetchNextPage();
       }
     };
 
-    // Create observer if it doesn't exist
-    if (!observerRef.current) {
-      observerRef.current = new IntersectionObserver(handleIntersection, {
-        root: containerRef.current,
-        rootMargin: '200px',
-        threshold: 0.1,
-      });
-    }
+    // Recreate observer so callback always uses fresh pagination state.
+    observerRef.current?.disconnect();
+    observerRef.current = new IntersectionObserver(handleIntersection, {
+      root: containerRef.current,
+      rootMargin: '200px',
+      threshold: 0.1,
+    });
 
-    // Observe the last item if it exists
-    if (lastItemRef.current && allItems.length > 0) {
-      observerRef.current.observe(lastItemRef.current);
+    const observer = observerRef.current;
+
+    // Observe a dedicated sentinel placed after the masonry list.
+    if (sentinelRef.current && allItems.length > 0) {
+      observer.observe(sentinelRef.current);
     }
 
     return () => {
-      if (lastItemRef.current && observerRef.current) {
-        observerRef.current.unobserve(lastItemRef.current);
-      }
+      observer.disconnect();
     };
-  }, [mode, feedData?.hasMore, isFetching, allItems.length]);
+  }, [mode, hasNextPage, isFetchingNextPage, allItems.length, fetchNextPage]);
+
+  // Warm up feed mode by prefetching one extra page once initial data has loaded.
+  useEffect(() => {
+    if (mode !== 'feed') return;
+    if (initialPrefetchDoneRef.current) return;
+    if (allItems.length === 0) return;
+    if (!hasNextPage || isFetchingNextPage) return;
+
+    initialPrefetchDoneRef.current = true;
+    void fetchNextPage();
+  }, [mode, allItems.length, hasNextPage, isFetchingNextPage, fetchNextPage]);
 
   // Handle touch/swipe gestures
   const handleTouchStart = useCallback((e: React.TouchEvent) => {
@@ -200,6 +275,28 @@ export function Feed({ initialMode, onViewSource }: FeedProps) {
     setCurrentIndex((prev) => Math.min(prev + 1, allItems.length - 1));
   }, [allItems.length]);
 
+  const handleWheel = useCallback((e: React.WheelEvent<HTMLDivElement>) => {
+    if (mode !== 'reels' || allItems.length <= 1) return;
+
+    const threshold = 24;
+    const deltaY = e.deltaY;
+    if (Math.abs(deltaY) < threshold) return;
+
+    const now = Date.now();
+    // Throttle wheel/trackpad gestures to one reel step at a time.
+    if (now - lastWheelNavigationAtRef.current < 260) return;
+    lastWheelNavigationAtRef.current = now;
+
+    e.preventDefault();
+
+    if (deltaY > 0) {
+      handleNext();
+      return;
+    }
+
+    handlePrevious();
+  }, [mode, allItems.length, handleNext, handlePrevious]);
+
   const handleLike = useCallback(async () => {
     if (currentMedia) {
       await likeMutation.mutateAsync({ mediaId: currentMedia.id, sourceId: currentMedia.sourceId });
@@ -222,10 +319,13 @@ export function Feed({ initialMode, onViewSource }: FeedProps) {
 
   if (isLoading && allItems.length === 0) {
     return (
-      <div className="w-full h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900">
-        <div className="text-center">
-          <div className="w-12 h-12 border-4 border-gray-300 dark:border-gray-600 border-t-gray-900 dark:border-t-gray-200 rounded-full animate-spin mx-auto mb-4"></div>
-          <p className="text-gray-600 dark:text-gray-400">Loading feed...</p>
+      <div className="w-full h-screen flex items-center justify-center bg-neutral-950">
+        <div className="text-center space-y-6">
+          <div className="w-14 h-14 border-4 border-white/20 border-t-white rounded-full animate-spin mx-auto"></div>
+          <div className="space-y-2">
+            <h1 className="font-serif text-2xl tracking-tight text-neutral-100">Loading feed</h1>
+            <p className="text-neutral-400">Gathering your media...</p>
+          </div>
         </div>
       </div>
     );
@@ -233,181 +333,194 @@ export function Feed({ initialMode, onViewSource }: FeedProps) {
 
   if (allItems.length === 0) {
     return (
-      <div className="w-full h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900">
-        <div className="text-center">
-          <p className="text-gray-600 dark:text-gray-400">No media found. Please index your media first.</p>
+      <div className="w-full h-screen flex items-center justify-center px-4 bg-neutral-950">
+        <div className="text-center space-y-4 max-w-md">
+          <h1 className="font-serif text-3xl tracking-tight text-neutral-100">No media yet</h1>
+          <p className="text-neutral-400">No media found. Please index your media first.</p>
         </div>
       </div>
     );
   }
 
-  // Reels Mode (Full-screen vertical swipe)
+  // Reels Mode (Cinematic, immersive vertical pager)
   if (mode === 'reels') {
     return (
-      <div
-        ref={containerRef}
-        onTouchStart={handleTouchStart}
-        onTouchEnd={handleTouchEnd}
-        className="w-full h-screen bg-black overflow-hidden relative"
-      >
-        {/* Current Media */}
-        <div className="absolute inset-0 flex items-center justify-center" style={{ paddingBottom: '140px', paddingTop: '60px' }}>
-          <MediaCard
-            media={currentMedia}
-            onVisible={() => { }}
-            onViewSource={onViewSource}
-            mode="reels"
-            className="w-full h-full"
-          />
-        </div>
-
-        {/* Interaction Buttons - Right Side */}
-        <div className="absolute right-4 bottom-32 flex flex-col gap-4 pointer-events-auto z-20">
-          <button
-            onClick={handleLike}
-            disabled={likeMutation.isPending}
-            className={`flex flex-col items-center gap-1 p-3 rounded-full transition-all ${currentMedia?.liked
-              ? 'bg-red-500 text-white shadow-lg'
-              : 'bg-white/90 text-black hover:bg-white'
-              } disabled:opacity-50`}
-            aria-label={currentMedia?.liked ? 'Unlike' : 'Like'}
-          >
-            <Heart
-              size={28}
-              className={currentMedia?.liked ? 'fill-current' : ''}
-            />
-            <span className="text-xs font-semibold">
-              {currentMedia?.liked ? 'Liked' : 'Like'}
-            </span>
-          </button>
-
-          <button
-            onClick={handleSave}
-            disabled={saveMutation.isPending}
-            className={`flex flex-col items-center gap-1 p-3 rounded-full transition-all ${currentMedia?.saved
-              ? 'bg-blue-500 text-white shadow-lg'
-              : 'bg-white/90 text-black hover:bg-white'
-              } disabled:opacity-50`}
-            aria-label={currentMedia?.saved ? 'Unsave' : 'Save'}
-          >
-            <Bookmark
-              size={28}
-              className={currentMedia?.saved ? 'fill-current' : ''}
-            />
-            <span className="text-xs font-semibold">
-              {currentMedia?.saved ? 'Saved' : 'Save'}
-            </span>
-          </button>
-        </div>
-
-        {/* Navigation Buttons */}
-        <div className="absolute inset-x-0 bottom-20 flex justify-center gap-4 px-4 pointer-events-none z-10">
-          <button
-            onClick={handlePrevious}
-            disabled={currentIndex === 0}
-            className="pointer-events-auto bg-white hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-black dark:text-white px-6 py-2 rounded-full font-medium disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-          >
-            ← Previous
-          </button>
-          <button
-            onClick={handleNext}
-            disabled={currentIndex === allItems.length - 1}
-            className="pointer-events-auto bg-white hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-black dark:text-white px-6 py-2 rounded-full font-medium disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-          >
-            Next →
-          </button>
-        </div>
-
-        {/* Progress Indicator */}
-        <div className="absolute top-4 left-4 right-4 flex items-center gap-2 pointer-events-none">
-          <span className="text-white text-sm font-medium">
+      <div className="relative h-screen w-full overflow-hidden bg-neutral-950">
+        {/* Top Chrome - Gradient fade with controls */}
+        <div className="fixed top-0 inset-x-0 z-40 h-16 bg-linear-to-b from-black/70 to-transparent flex items-start justify-between px-4 pt-2">
+          <span className="text-neutral-100 text-xs font-medium pt-2">
             {currentIndex + 1} / {allItems.length}
           </span>
-          <div className="flex-1 bg-gray-700 rounded-full h-1 overflow-hidden">
-            <div
-              className="bg-white h-full transition-all duration-300"
-              style={{ width: `${((currentIndex + 1) / allItems.length) * 100}%` }}
+          <div className="flex gap-2">
+            <button
+              onClick={toggleMode}
+              className="h-10 w-10 rounded-lg bg-black/40 text-white/80 hover:text-white backdrop-blur-md border border-white/15 flex items-center justify-center transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300"
+              aria-label="Switch to feed mode"
+            >
+              <Grid3x3 size={20} />
+            </button>
+            <button
+              onClick={toggleFullscreen}
+              className="h-10 w-10 rounded-lg bg-black/40 text-white/80 hover:text-white backdrop-blur-md border border-white/15 flex items-center justify-center transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300"
+              aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
+            >
+              {isFullscreen ? <Minimize size={20} /> : <Maximize size={20} />}
+            </button>
+          </div>
+        </div>
+
+        {/* Media Pager Container - Touch swipe enabled */}
+        <div
+          ref={containerRef}
+          onTouchStart={handleTouchStart}
+          onTouchEnd={handleTouchEnd}
+          onWheel={handleWheel}
+          className="absolute inset-0 h-full w-full overflow-hidden"
+        >
+          {/* Single Media Item (Full Height) */}
+          <div className="relative h-full w-full flex items-center justify-center">
+            <MediaCard
+              media={currentMedia}
+              onVisible={() => { }}
+              onViewSource={onViewSource}
+              mode="reels"
+              className="w-full h-full"
             />
           </div>
         </div>
 
-        {/* Mode Toggle */}
-        <button
-          onClick={toggleMode}
-          className="absolute top-4 right-4 bg-white hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-black dark:text-white p-2 rounded-lg transition-colors pointer-events-auto z-20"
-          aria-label="Switch to feed mode"
-        >
-          <Grid3x3 size={24} />
-        </button>
+        {/* Bottom Navigation - Context aware */}
+        <div className="fixed bottom-0 left-0 right-0 z-40 px-4 pb-[max(env(safe-area-inset-bottom),1rem)] pt-4">
+          <div className="mx-auto max-w-xl flex h-14 items-center gap-2 rounded-full bg-black/45 px-3 backdrop-blur-lg border border-white/15">
+            <button
+              onClick={handlePrevious}
+              disabled={currentIndex === 0}
+              className="text-white/60 hover:text-white disabled:opacity-30 transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300 rounded px-2 shrink-0"
+              aria-label="Previous"
+            >
+              ← Prev
+            </button>
+
+            <button
+              onClick={handleLike}
+              disabled={likeMutation.isPending}
+              className={`h-9 w-9 rounded-full backdrop-blur-md border transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300 flex items-center justify-center shrink-0 ${
+                currentMedia?.liked
+                  ? 'bg-red-500/80 text-white border-red-400'
+                  : 'bg-black/35 text-white/80 border-white/20 hover:text-white'
+              } disabled:opacity-50`}
+              aria-label={currentMedia?.liked ? 'Unlike' : 'Like'}
+            >
+              <Heart
+                size={18}
+                className={currentMedia?.liked ? 'fill-current' : ''}
+              />
+            </button>
+
+            <button
+              onClick={handleSave}
+              disabled={saveMutation.isPending}
+              className={`h-9 w-9 rounded-full backdrop-blur-md border transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300 flex items-center justify-center shrink-0 ${
+                currentMedia?.saved
+                  ? 'bg-amber-400/80 text-neutral-950 border-amber-300'
+                  : 'bg-black/35 text-white/80 border-white/20 hover:text-white'
+              } disabled:opacity-50`}
+              aria-label={currentMedia?.saved ? 'Unsave' : 'Save'}
+            >
+              <Bookmark
+                size={18}
+                className={currentMedia?.saved ? 'fill-current' : ''}
+              />
+            </button>
+
+            <div className="flex-1 mx-1 h-0.5 bg-white/20 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-amber-400 transition-all duration-300"
+                style={{ width: `${((currentIndex + 1) / allItems.length) * 100}%` }}
+              />
+            </div>
+
+            <button
+              onClick={handleNext}
+              disabled={currentIndex === allItems.length - 1}
+              className="text-white/60 hover:text-white disabled:opacity-30 transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300 rounded px-2 shrink-0"
+              aria-label="Next"
+            >
+              Next →
+            </button>
+          </div>
+        </div>
 
         {/* Loading indicator */}
-        {isFetching && (
-          <div className="absolute bottom-4 left-4 right-4 flex items-center justify-center pointer-events-none">
-            <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+        {isFetchingNextPage && (
+          <div className="absolute bottom-20 left-1/2 -translate-x-1/2 pointer-events-none">
+            <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
           </div>
         )}
       </div>
     );
   }
 
-  // Masonry breakpoint configuration
-  const breakpointColumns = {
-    default: 4,
-    1536: 4,
-    1280: 3,
-    1024: 3,
-    768: 2,
-    640: 2,
-    480: 1,
-  };
-
-  // Feed Mode (Masonry grid)
+  // Feed Mode (Masonry grid with Ethos Narrative chrome)
   return (
-    <div className="w-full h-screen flex flex-col bg-white dark:bg-gray-900 overflow-hidden">
-      {/* Header */}
-      <div className="border-b border-gray-200 dark:border-gray-700 p-4 flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Feed</h1>
-        <button
-          onClick={toggleMode}
-          className="bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-900 dark:text-white p-2 rounded-lg transition-colors"
-          aria-label="Switch to reels mode"
-        >
-          <Layers size={24} />
-        </button>
+    <div className="w-full h-screen flex flex-col bg-neutral-950 overflow-hidden">
+      {/* Top Chrome - Gradient chrome with title and controls */}
+      <div className="fixed top-0 inset-x-0 z-40 h-14 md:h-16 bg-linear-to-b from-black/70 to-transparent flex items-start justify-between px-4 md:px-8 pt-3">
+        <h1 className="font-serif text-xl md:text-2xl tracking-tight text-neutral-100">Feed</h1>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={toggleMode}
+            className="h-10 w-10 rounded-lg bg-black/40 text-white/80 hover:text-white backdrop-blur-md border border-white/15 flex items-center justify-center transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300"
+            aria-label="Switch to reels mode"
+          >
+            <Layers size={20} />
+          </button>
+          <button
+            onClick={toggleFullscreen}
+            className="h-10 w-10 rounded-lg bg-black/40 text-white/80 hover:text-white backdrop-blur-md border border-white/15 flex items-center justify-center transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300"
+            aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
+          >
+            {isFullscreen ? <Minimize size={20} /> : <Maximize size={20} />}
+          </button>
+        </div>
       </div>
 
       {/* Masonry Grid Container */}
       <div
         ref={containerRef}
-        className="flex-1 overflow-y-auto p-4 pb-20"
+        className="flex-1 overflow-y-auto pt-14 md:pt-16 pb-24 md:pb-8 px-2 md:px-4"
       >
-        <Masonry
-          breakpointCols={breakpointColumns}
-          className="flex -ml-4 w-auto"
-          columnClassName="pl-4 bg-clip-padding"
-        >
-          {allItems.map((item, index) => (
-            <div
-              key={item.id}
-              ref={index === allItems.length - 1 ? lastItemRef : null}
-              className="mb-4 rounded-lg overflow-hidden shadow-sm hover:shadow-md transition-shadow"
-            >
-              <MediaCard
-                media={item}
-                onVisible={() => { }}
-                onViewSource={onViewSource}
-                mode="feed"
-                className="w-full"
-              />
-            </div>
-          ))}
-        </Masonry>
+        <div className="mx-auto max-w-400 flex flex-col">
+          <Masonry
+            breakpointCols={MEDIA_MASONRY_BREAKPOINTS}
+            className={MEDIA_MASONRY_CLASS}
+            columnClassName={MEDIA_MASONRY_COLUMN_CLASS}
+          >
+            {allItems.map((item) => (
+              <div
+                key={item.id}
+                className="mb-2 md:mb-4 break-inside-avoid"
+              >
+                <MediaCard
+                  media={item}
+                  onVisible={() => { }}
+                  onViewSource={onViewSource}
+                  mode="feed"
+                  enableHoverAutoplay={true}
+                  className="w-full rounded-2xl overflow-hidden"
+                />
+              </div>
+            ))}
+          </Masonry>
 
-        {isFetching && (
-          <div className="flex items-center justify-center py-8">
-            <div className="w-8 h-8 border-4 border-gray-300 dark:border-gray-600 border-t-gray-900 dark:border-t-gray-200 rounded-full animate-spin"></div>
-          </div>
-        )}
+          <div ref={sentinelRef} className="h-8 w-full" aria-hidden="true" />
+
+          {isFetchingNextPage && (
+            <div className="flex items-center justify-center py-12">
+              <div className="w-6 h-6 border-2 border-white/20 border-t-white rounded-full animate-spin"></div>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

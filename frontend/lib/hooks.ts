@@ -2,7 +2,7 @@
  * Custom React Query hooks for feed and media interactions
  * Includes performance optimization hooks for lazy loading and preloading
  */
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient, useInfiniteQuery } from '@tanstack/react-query';
 import React, { useEffect, useRef, useCallback } from 'react';
 import { getApiBase, authenticatedFetch } from '@/lib/api';
 
@@ -14,14 +14,23 @@ const API_BASE = getApiBase();
 
 export interface FeedItem {
   id: string;
+  fileKey: string;
   path: string;
+  activePath: string;
   type: string;
   sourceId: string;
   displayName: string;
   avatarSeed: string;
   liked: boolean;
   saved: boolean;
+  hidden: boolean;
   depth: number;
+  source?: {
+    id: string;
+    displayName: string;
+    avatarSeed: string;
+    folderPath?: string;
+  };
 }
 
 interface FeedResponse {
@@ -45,6 +54,7 @@ interface InteractionResponse {
   mediaId: string;
   liked?: boolean;
   saved?: boolean;
+  hidden?: boolean;
   viewRecorded?: boolean;
 }
 
@@ -72,11 +82,276 @@ interface HiddenResponse {
   }>;
 }
 
+interface SourceMediaResponse {
+  success: boolean;
+  media: Array<FeedItem & {
+    viewCount: number;
+    lastViewed: number | null;
+  }>;
+}
+
 interface PreloadConfig {
   prefetchDistance?: number;
   enableThumbnails?: boolean;
   enableMetadata?: boolean;
 }
+
+interface QuerySnapshot {
+  queryKey: readonly unknown[];
+  data: unknown;
+}
+
+interface MutationSnapshotContext {
+  snapshots: QuerySnapshot[];
+  targetItem?: FeedItem;
+}
+
+type QueryCollectionKey = 'feed' | 'savedMedia' | 'likedMedia' | 'hiddenMedia' | 'media';
+
+type UnknownRecord = Record<string, unknown>;
+
+const MUTATION_QUERY_ROOTS = ['feed', 'saved', 'liked', 'hidden', 'sourceMedia'] as const;
+
+const isRecord = (value: unknown): value is UnknownRecord =>
+  typeof value === 'object' && value !== null;
+
+const toBoolean = (value: unknown, fallback: boolean = false): boolean => {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value === 1;
+  return fallback;
+};
+
+const toNumber = (value: unknown, fallback: number = 0): number => {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string') {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : fallback;
+  }
+  return fallback;
+};
+
+const inferSourceIdFromPath = (path: string): string => {
+  if (!path) return 'root';
+  const normalized = path.replace(/\\/g, '/').replace(/^\/+/, '');
+  if (!normalized) return 'root';
+  const firstSegment = normalized.split('/').filter(Boolean)[0];
+  return firstSegment || 'root';
+};
+
+const normalizeFeedItem = (rawInput: unknown, options?: { hidden?: boolean }): FeedItem => {
+  const raw = isRecord(rawInput) ? rawInput : {};
+  const source = isRecord(raw.source) ? raw.source : {};
+  const sourceId =
+    (typeof raw.sourceId === 'string' ? raw.sourceId : undefined) ||
+    (typeof source.id === 'string' ? source.id : undefined) ||
+    inferSourceIdFromPath(
+      (typeof raw.activePath === 'string' ? raw.activePath : undefined) ||
+      (typeof raw.path === 'string' ? raw.path : undefined) ||
+      (typeof raw.filePath === 'string' ? raw.filePath : undefined) ||
+      ''
+    );
+  const displayName =
+    (typeof raw.displayName === 'string' ? raw.displayName : undefined) ||
+    (typeof source.displayName === 'string' ? source.displayName : undefined) ||
+    (sourceId === 'root' ? 'Root' : sourceId);
+  const avatarSeed =
+    (typeof raw.avatarSeed === 'string' ? raw.avatarSeed : undefined) ||
+    (typeof source.avatarSeed === 'string' ? source.avatarSeed : undefined) ||
+    sourceId;
+  const activePath =
+    (typeof raw.activePath === 'string' ? raw.activePath : undefined) ||
+    (typeof raw.path === 'string' ? raw.path : undefined) ||
+    (typeof raw.filePath === 'string' ? raw.filePath : undefined) ||
+    '';
+  const id =
+    (typeof raw.id === 'string' ? raw.id : undefined) ||
+    (typeof raw.fileKey === 'string' ? raw.fileKey : undefined) ||
+    '';
+
+  return {
+    id,
+    fileKey: (typeof raw.fileKey === 'string' ? raw.fileKey : undefined) || id,
+    path: activePath,
+    activePath,
+    type:
+      (typeof raw.type === 'string' ? raw.type : undefined) ||
+      (typeof raw.mediaKind === 'string' ? raw.mediaKind : undefined) ||
+      'unknown',
+    sourceId,
+    displayName,
+    avatarSeed,
+    liked: toBoolean(raw.liked),
+    saved: toBoolean(raw.saved),
+    hidden: toBoolean(raw.hidden, options?.hidden ?? false),
+    depth: toNumber(raw.depth, 0),
+    source: {
+      id: sourceId,
+      displayName,
+      avatarSeed,
+      folderPath: typeof source.folderPath === 'string' ? source.folderPath : undefined,
+    },
+  };
+};
+
+const normalizeFeedResponse = (response: FeedResponse): FeedResponse => ({
+  ...response,
+  feed: (response.feed || []).map((item) => normalizeFeedItem(item)),
+});
+
+const normalizeMediaResponse = (response: MediaResponse): MediaResponse => ({
+  ...response,
+  media: {
+    ...normalizeFeedItem(response.media),
+    viewCount: toNumber(response.media?.viewCount, 0),
+    lastViewed: response.media?.lastViewed ?? null,
+  },
+});
+
+const normalizeSavedResponse = (response: SavedResponse): SavedResponse => ({
+  ...response,
+  savedMedia: (response.savedMedia || []).map((item) => ({
+    ...normalizeFeedItem(item),
+    viewCount: toNumber(item.viewCount, 0),
+    lastViewed: item.lastViewed ?? null,
+  })),
+});
+
+const normalizeLikedResponse = (response: LikedResponse): LikedResponse => ({
+  ...response,
+  likedMedia: (response.likedMedia || []).map((item) => ({
+    ...normalizeFeedItem(item),
+    viewCount: toNumber(item.viewCount, 0),
+    lastViewed: item.lastViewed ?? null,
+  })),
+});
+
+const normalizeHiddenResponse = (response: HiddenResponse): HiddenResponse => ({
+  ...response,
+  hiddenMedia: (response.hiddenMedia || []).map((item) => ({
+    ...normalizeFeedItem(item, { hidden: true }),
+    viewCount: toNumber(item.viewCount, 0),
+    lastViewed: item.lastViewed ?? null,
+  })),
+});
+
+const normalizeSourceMediaResponse = (response: unknown): SourceMediaResponse => {
+  const payload = isRecord(response) ? response : {};
+  const rawMedia = Array.isArray(payload.media)
+    ? payload.media
+    : Array.isArray(payload.savedMedia)
+      ? payload.savedMedia
+      : [];
+
+  return {
+    success: Boolean(payload.success),
+    media: rawMedia.map((item) => ({
+    ...normalizeFeedItem(item),
+    viewCount: toNumber(isRecord(item) ? item.viewCount : undefined, 0),
+    lastViewed: isRecord(item) ? (item.lastViewed as number | null | undefined) ?? null : null,
+  })),
+  };
+};
+
+const collectMutationSnapshots = (queryClient: ReturnType<typeof useQueryClient>): QuerySnapshot[] => {
+  const snapshots: QuerySnapshot[] = [];
+
+  MUTATION_QUERY_ROOTS.forEach((root) => {
+    const entries = queryClient.getQueriesData({ queryKey: [root] });
+    entries.forEach(([queryKey, data]) => {
+      snapshots.push({ queryKey, data });
+    });
+  });
+
+  return snapshots;
+};
+
+const restoreMutationSnapshots = (
+  queryClient: ReturnType<typeof useQueryClient>,
+  snapshots: QuerySnapshot[] | undefined
+) => {
+  if (!snapshots?.length) return;
+  snapshots.forEach(({ queryKey, data }) => {
+    queryClient.setQueryData(queryKey, data);
+  });
+};
+
+const updateQueryCollection = (
+  queryClient: ReturnType<typeof useQueryClient>,
+  rootKey: string,
+  collectionKey: QueryCollectionKey,
+  updater: (items: FeedItem[]) => FeedItem[]
+) => {
+  queryClient.setQueriesData({ queryKey: [rootKey] }, (old) => {
+    if (!isRecord(old) || !Array.isArray(old[collectionKey])) return old;
+    return {
+      ...old,
+      [collectionKey]: updater(old[collectionKey] as FeedItem[]),
+    };
+  });
+};
+
+const findItemInMutationCaches = (
+  queryClient: ReturnType<typeof useQueryClient>,
+  mediaId: string
+): FeedItem | undefined => {
+  const locations: Array<{ root: string; key: QueryCollectionKey }> = [
+    { root: 'feed', key: 'feed' },
+    { root: 'saved', key: 'savedMedia' },
+    { root: 'liked', key: 'likedMedia' },
+    { root: 'hidden', key: 'hiddenMedia' },
+    { root: 'sourceMedia', key: 'media' },
+  ];
+
+  for (const location of locations) {
+    const entries = queryClient.getQueriesData({ queryKey: [location.root] });
+    for (const [, data] of entries) {
+      const items = isRecord(data) ? data[location.key] : undefined;
+      if (!Array.isArray(items)) continue;
+      const match = items.find((item) => isRecord(item) && item.id === mediaId);
+      if (match) return normalizeFeedItem(match);
+    }
+  }
+
+  return undefined;
+};
+
+const patchItemInAllCollections = (
+  queryClient: ReturnType<typeof useQueryClient>,
+  mediaId: string,
+  patch: Partial<FeedItem>,
+  options?: {
+    removeFromVisibleLists?: boolean;
+    removeFromHiddenList?: boolean;
+    prependToHiddenList?: FeedItem;
+  }
+) => {
+  const patchItem = (item: FeedItem): FeedItem =>
+    item.id === mediaId ? { ...item, ...patch } : item;
+
+  const filterVisible = (items: FeedItem[]) =>
+    options?.removeFromVisibleLists ? items.filter((item) => item.id !== mediaId) : items.map(patchItem);
+
+  updateQueryCollection(queryClient, 'feed', 'feed', filterVisible);
+  updateQueryCollection(queryClient, 'saved', 'savedMedia', filterVisible);
+  updateQueryCollection(queryClient, 'liked', 'likedMedia', filterVisible);
+  updateQueryCollection(queryClient, 'sourceMedia', 'media', filterVisible);
+
+  updateQueryCollection(queryClient, 'hidden', 'hiddenMedia', (items) => {
+    let next = items;
+
+    if (options?.removeFromHiddenList) {
+      next = next.filter((item) => item.id !== mediaId);
+    } else {
+      next = next.map(patchItem);
+    }
+
+    if (options?.prependToHiddenList && !next.some((item) => item.id === mediaId)) {
+      next = [options.prependToHiddenList, ...next];
+    }
+
+    return next;
+  });
+};
 
 // ============================================================================
 // Data Fetching Hooks
@@ -85,22 +360,58 @@ interface PreloadConfig {
 /**
  * Fetch paginated feed
  */
-export const useFeed = (page: number = 0, limit: number = 20, lastSourceId?: string) => {
+export const useFeed = (
+  page: number = 0,
+  limit: number = 20,
+  lastSourceId?: string,
+  feedSeed?: string
+) => {
   return useQuery({
-    queryKey: ['feed', page, limit, lastSourceId],
+    queryKey: ['feed', page, limit, lastSourceId, feedSeed],
     queryFn: async (): Promise<FeedResponse> => {
       const params = new URLSearchParams({
         page: page.toString(),
         limit: limit.toString(),
         ...(lastSourceId && { lastSourceId }),
+        ...(feedSeed && { feedSeed }),
       });
 
       const response = await authenticatedFetch(`${API_BASE}/api/feed?${params}`);
       if (!response.ok) {
         throw new Error('Failed to fetch feed');
       }
-      return response.json();
+      const data = await response.json();
+      return normalizeFeedResponse(data);
     },
+    staleTime: 30 * 1000,
+    gcTime: 5 * 60 * 1000,
+  });
+};
+
+/**
+ * Fetch feed with infinite pagination
+ */
+export const useInfiniteFeed = (limit: number = 20, sourceId?: string, feedSeed?: string) => {
+  return useInfiniteQuery({
+    queryKey: ['feed', 'infinite', limit, sourceId, feedSeed],
+    queryFn: async ({ pageParam = 0 }): Promise<FeedResponse> => {
+      const params = new URLSearchParams({
+        page: String(pageParam),
+        limit: String(limit),
+        ...(sourceId ? { sourceId } : {}),
+        ...(feedSeed ? { feedSeed } : {}),
+      });
+
+      const response = await authenticatedFetch(`${API_BASE}/api/feed?${params}`);
+      if (!response.ok) {
+        throw new Error('Failed to fetch feed');
+      }
+
+      const data = await response.json();
+      return normalizeFeedResponse(data);
+    },
+    initialPageParam: 0,
+    getNextPageParam: (lastPage) => (lastPage.hasMore ? lastPage.page + 1 : undefined),
     staleTime: 30 * 1000,
     gcTime: 5 * 60 * 1000,
   });
@@ -117,7 +428,8 @@ export const useMedia = (mediaId: string) => {
       if (!response.ok) {
         throw new Error('Failed to fetch media');
       }
-      return response.json();
+      const data = await response.json();
+      return normalizeMediaResponse(data);
     },
     enabled: !!mediaId,
     staleTime: 1 * 60 * 1000,
@@ -136,7 +448,8 @@ export const useSavedItems = () => {
       if (!response.ok) {
         throw new Error('Failed to fetch saved items');
       }
-      return response.json();
+      const data = await response.json();
+      return normalizeSavedResponse(data);
     },
     staleTime: 1 * 60 * 1000,
     gcTime: 5 * 60 * 1000,
@@ -154,7 +467,8 @@ export const useLikedItems = () => {
       if (!response.ok) {
         throw new Error('Failed to fetch liked items');
       }
-      return response.json();
+      const data = await response.json();
+      return normalizeLikedResponse(data);
     },
     staleTime: 1 * 60 * 1000,
     gcTime: 5 * 60 * 1000,
@@ -167,7 +481,7 @@ export const useLikedItems = () => {
 export const useSourceMedia = (sourceId: string, limit: number = 50) => {
   return useQuery({
     queryKey: ['sourceMedia', sourceId, limit],
-    queryFn: async (): Promise<SavedResponse> => {
+    queryFn: async (): Promise<SourceMediaResponse> => {
       const params = new URLSearchParams({
         limit: limit.toString(),
       });
@@ -176,7 +490,8 @@ export const useSourceMedia = (sourceId: string, limit: number = 50) => {
       if (!response.ok) {
         throw new Error('Failed to fetch source media');
       }
-      return response.json();
+      const data = await response.json();
+      return normalizeSourceMediaResponse(data);
     },
     enabled: !!sourceId,
     staleTime: 2 * 60 * 1000,
@@ -184,12 +499,13 @@ export const useSourceMedia = (sourceId: string, limit: number = 50) => {
   });
 };
 
-interface Source {
+export interface Source {
   id: string;
-  folderPath: string;
   displayName: string;
   avatarSeed: string;
-  createdAt: number;
+  // Legacy fields may be absent in schema v2 source projections.
+  folderPath?: string;
+  createdAt?: number;
 }
 
 /**
@@ -232,40 +548,25 @@ export const useLikeMutation = () => {
       }
       return response.json();
     },
-    onMutate: async ({ mediaId }) => {
-      await queryClient.cancelQueries({ queryKey: ['feed'] });
-      const previousFeeds = queryClient.getQueriesData({ queryKey: ['feed'] });
+    onMutate: async ({ mediaId }): Promise<MutationSnapshotContext> => {
+      await Promise.all(MUTATION_QUERY_ROOTS.map((root) => queryClient.cancelQueries({ queryKey: [root] })));
 
-      queryClient.setQueriesData({ queryKey: ['feed'] }, (old: any) => {
-        if (!old) return old;
-        return {
-          ...old,
-          feed: old.feed.map((item: FeedItem) =>
-            item.id === mediaId ? { ...item, liked: !item.liked } : item
-          ),
-        };
-      });
+      const snapshots = collectMutationSnapshots(queryClient);
+      const targetItem = findItemInMutationCaches(queryClient, mediaId);
+      const nextLiked = !(targetItem?.liked ?? false);
 
-      return { previousFeeds };
+      patchItemInAllCollections(queryClient, mediaId, { liked: nextLiked });
+
+      return { snapshots, targetItem };
     },
-    onError: (err, { mediaId }, context: any) => {
-      if (context?.previousFeeds) {
-        queryClient.setQueriesData({ queryKey: ['feed'] }, context.previousFeeds);
-      }
+    onError: (_err, _variables, context) => {
+      restoreMutationSnapshots(queryClient, context?.snapshots);
     },
     onSuccess: (data, { mediaId }) => {
-      // Update cache with actual API response state
       if (data.liked !== undefined) {
-        queryClient.setQueriesData({ queryKey: ['feed'] }, (old: any) => {
-          if (!old) return old;
-          return {
-            ...old,
-            feed: old.feed.map((item: FeedItem) =>
-              item.id === mediaId ? { ...item, liked: data.liked } : item
-            ),
-          };
-        });
+        patchItemInAllCollections(queryClient, mediaId, { liked: data.liked });
       }
+
       queryClient.invalidateQueries({ queryKey: ['feed'] });
       queryClient.invalidateQueries({ queryKey: ['liked'] });
     },
@@ -289,40 +590,25 @@ export const useSaveMutation = () => {
       }
       return response.json();
     },
-    onMutate: async ({ mediaId }) => {
-      await queryClient.cancelQueries({ queryKey: ['feed'] });
-      const previousFeeds = queryClient.getQueriesData({ queryKey: ['feed'] });
+    onMutate: async ({ mediaId }): Promise<MutationSnapshotContext> => {
+      await Promise.all(MUTATION_QUERY_ROOTS.map((root) => queryClient.cancelQueries({ queryKey: [root] })));
 
-      queryClient.setQueriesData({ queryKey: ['feed'] }, (old: any) => {
-        if (!old) return old;
-        return {
-          ...old,
-          feed: old.feed.map((item: FeedItem) =>
-            item.id === mediaId ? { ...item, saved: !item.saved } : item
-          ),
-        };
-      });
+      const snapshots = collectMutationSnapshots(queryClient);
+      const targetItem = findItemInMutationCaches(queryClient, mediaId);
+      const nextSaved = !(targetItem?.saved ?? false);
 
-      return { previousFeeds };
+      patchItemInAllCollections(queryClient, mediaId, { saved: nextSaved });
+
+      return { snapshots, targetItem };
     },
-    onError: (err, { mediaId }, context: any) => {
-      if (context?.previousFeeds) {
-        queryClient.setQueriesData({ queryKey: ['feed'] }, context.previousFeeds);
-      }
+    onError: (_err, _variables, context) => {
+      restoreMutationSnapshots(queryClient, context?.snapshots);
     },
     onSuccess: (data, { mediaId }) => {
-      // Update cache with actual API response state
       if (data.saved !== undefined) {
-        queryClient.setQueriesData({ queryKey: ['feed'] }, (old: any) => {
-          if (!old) return old;
-          return {
-            ...old,
-            feed: old.feed.map((item: FeedItem) =>
-              item.id === mediaId ? { ...item, saved: data.saved } : item
-            ),
-          };
-        });
+        patchItemInAllCollections(queryClient, mediaId, { saved: data.saved });
       }
+
       queryClient.invalidateQueries({ queryKey: ['feed'] });
       queryClient.invalidateQueries({ queryKey: ['saved'] });
       queryClient.invalidateQueries({ queryKey: ['liked'] });
@@ -334,8 +620,6 @@ export const useSaveMutation = () => {
  * Record a view
  */
 export const useViewMutation = () => {
-  const queryClient = useQueryClient();
-
   return useMutation({
     mutationFn: async ({ mediaId, sourceId }: { mediaId: string; sourceId: string }): Promise<InteractionResponse> => {
       const response = await authenticatedFetch(`${API_BASE}/api/view`, {
@@ -367,9 +651,53 @@ export const useHideMutation = () => {
       }
       return response.json();
     },
-    onSuccess: () => {
+    onMutate: async ({ mediaId }): Promise<MutationSnapshotContext> => {
+      await Promise.all(MUTATION_QUERY_ROOTS.map((root) => queryClient.cancelQueries({ queryKey: [root] })));
+
+      const snapshots = collectMutationSnapshots(queryClient);
+      const targetItem = findItemInMutationCaches(queryClient, mediaId);
+      const nextHidden = !(targetItem?.hidden ?? false);
+      const hiddenCandidate = targetItem
+        ? {
+            ...targetItem,
+            hidden: true,
+          }
+        : undefined;
+
+      patchItemInAllCollections(
+        queryClient,
+        mediaId,
+        { hidden: nextHidden },
+        {
+          removeFromVisibleLists: nextHidden,
+          removeFromHiddenList: !nextHidden,
+          prependToHiddenList: nextHidden ? hiddenCandidate : undefined,
+        }
+      );
+
+      return { snapshots, targetItem };
+    },
+    onError: (_err, _variables, context) => {
+      restoreMutationSnapshots(queryClient, context?.snapshots);
+    },
+    onSuccess: (data, { mediaId }) => {
+      if (typeof data.hidden === 'boolean') {
+        patchItemInAllCollections(
+          queryClient,
+          mediaId,
+          { hidden: data.hidden },
+          {
+            removeFromVisibleLists: data.hidden,
+            removeFromHiddenList: !data.hidden,
+          }
+        );
+      }
+
       queryClient.invalidateQueries({ queryKey: ['feed'] });
+      queryClient.invalidateQueries({ queryKey: ['saved'] });
+      queryClient.invalidateQueries({ queryKey: ['liked'] });
       queryClient.invalidateQueries({ queryKey: ['hidden'] });
+      queryClient.invalidateQueries({ queryKey: ['sourceMedia'] });
     },
   });
 };
@@ -385,7 +713,8 @@ export const useHiddenItems = () => {
       if (!response.ok) {
         throw new Error('Failed to fetch hidden items');
       }
-      return response.json();
+      const data = await response.json();
+      return normalizeHiddenResponse(data);
     },
     staleTime: 1 * 60 * 1000,
     gcTime: 5 * 60 * 1000,
@@ -610,7 +939,8 @@ export const useFolderTree = (sourceIds: string[]) => {
       return getFolderTree(sourceIds);
     },
     enabled: !!sourceIds.length,
-    staleTime: 1000 * 60 * 5, // 5 minutes
+    staleTime: 1000 * 30, // 30 seconds - fresh enough for hide toggles
+    gcTime: 1000 * 60 * 5, // Keep in cache for 5 minutes
   });
 };
 
@@ -623,12 +953,30 @@ export const useHideFolderMutation = () => {
   return useMutation({
     mutationFn: ({ sourceId, folderPath }: { sourceId: string; folderPath: string }) =>
       toggleFolderHide(sourceId, folderPath),
-    onSuccess: (_, variables) => {
-      // Invalidate folder tree to refresh
-      queryClient.invalidateQueries({ queryKey: ['folderTree', variables.sourceId] });
-      // Invalidate feed to reflect hidden folder changes
+    onSuccess: async (data, variables) => {
+      console.log('Folder hide toggled:', data, 'for', variables.folderPath);
+
+      // Update the cache directly with server response
+      queryClient.setQueriesData({ queryKey: ['folderTree'] }, (old: any) => {
+        if (!old) return old;
+
+        const updateNodeHidden = (node: FolderNode): FolderNode => {
+          if (node.path === variables.folderPath) {
+            return { ...node, hidden: data.hidden };
+          }
+          return {
+            ...node,
+            children: node.children.map(updateNodeHidden),
+          };
+        };
+
+        return updateNodeHidden(old);
+      });
+
+      // Invalidate related queries
       queryClient.invalidateQueries({ queryKey: ['feed'] });
       queryClient.invalidateQueries({ queryKey: ['sourceFeed'] });
+      queryClient.invalidateQueries({ queryKey: ['hiddenFolders'] });
     },
   });
 };

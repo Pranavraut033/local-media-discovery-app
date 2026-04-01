@@ -4,12 +4,14 @@
  */
 'use client';
 
-import { useState, useEffect } from 'react';
-import { Settings as SettingsIcon, ArrowLeft, RotateCw, Eye, LogOut, FolderTree } from 'lucide-react';
-import { getPreferences, setPreferences, ViewMode, clearRecentFolders, getRootFolder, clearRootFolder } from '@/lib/storage';
+import { useState, useEffect, useMemo } from 'react';
+import { Settings as SettingsIcon, ArrowLeft, RotateCw, Eye, LogOut, FolderTree, Maximize, Minimize } from 'lucide-react';
+import { getPreferences, setPreferences, ViewMode, clearRecentFolders, clearRootFolder } from '@/lib/storage';
 import { getApiBase, authenticatedFetch } from '@/lib/api';
 import { useSources, useFolderTree, useHideFolderMutation } from '@/lib/hooks';
 import { FolderTreeView } from './FolderTreeView';
+import { RemoteSourcesSection } from './RemoteSourcesSection';
+import { useFullscreen } from '@/lib/useFullscreen';
 
 interface AppStats {
   totalMedia: number;
@@ -28,6 +30,7 @@ interface SettingsProps {
 export function Settings({ onBack, onViewHidden }: SettingsProps) {
   const API_URL = getApiBase();
   const [preferences, setLocalPreferences] = useState<ReturnType<typeof getPreferences> | null>(null);
+  const { isFullscreen, toggleFullscreen } = useFullscreen();
   const [stats, setStats] = useState<AppStats | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -36,11 +39,22 @@ export function Settings({ onBack, onViewHidden }: SettingsProps) {
   // Fetch user sources
   const { data: sources } = useSources();
 
-  // Automatically use the first source (current root folder)
-  const currentSource = sources && sources.length > 0 ? sources[0] : null;
+  // Prefer root source and fall back to folder/display matches before first source.
+  const currentSource = useMemo(() => {
+    if (!sources?.length) return null;
 
-  // Fetch folder tree for current root folder
-  const { data: folderTree, isLoading: isTreeLoading } = useFolderTree(sources?.map(s => s.id) || []);
+    const apiRootFolder = stats?.rootFolder && stats.rootFolder !== 'Not set' ? stats.rootFolder : null;
+
+    return (
+      sources.find((source) => source.id === 'root') ||
+      sources.find((source) => source.folderPath === apiRootFolder || source.displayName === apiRootFolder) ||
+      sources[0]
+    );
+  }, [sources, stats?.rootFolder]);
+
+  // Fetch folder tree only for the active source.
+  const activeSourceIds = currentSource ? [currentSource.id] : [];
+  const { data: folderTree, isLoading: isTreeLoading } = useFolderTree(activeSourceIds);
 
   // Mutation for hiding/showing folders
   const hideFolderMutation = useHideFolderMutation();
@@ -56,16 +70,13 @@ export function Settings({ onBack, onViewHidden }: SettingsProps) {
         const prefs = getPreferences();
         setLocalPreferences(prefs);
 
-        // Get root folder from localStorage (stored locally for privacy)
-        const rootFolder = getRootFolder();
-
         // Load stats from API
-        const statsResponse = await fetch(`${API_URL}/api/admin/stats`);
+        const statsResponse = await authenticatedFetch(`${API_URL}/api/admin/stats`);
         if (statsResponse.ok) {
           const statsData = await statsResponse.json();
 
           // Get hidden count
-          const hiddenResponse = await fetch(`${API_URL}/api/hidden`);
+          const hiddenResponse = await authenticatedFetch(`${API_URL}/api/hidden`);
           const hiddenData = hiddenResponse.ok ? await hiddenResponse.json() : { count: 0 };
 
           setStats({
@@ -74,7 +85,7 @@ export function Settings({ onBack, onViewHidden }: SettingsProps) {
             likedCount: statsData.liked_count || 0,
             savedCount: statsData.saved_count || 0,
             hiddenCount: hiddenData.count || 0,
-            rootFolder: rootFolder || 'Not set',
+            rootFolder: statsData.root_folder || 'Not set',
           });
         }
       } catch (err) {
@@ -153,7 +164,45 @@ export function Settings({ onBack, onViewHidden }: SettingsProps) {
   if (isLoading) {
     return (
       <div className="w-full h-screen flex flex-col bg-white dark:bg-gray-900">
-        <div className="border-b border-gray-200 dark:border-gray-700 p-4 flex items-center gap-4">
+        <div className="border-b border-gray-200 dark:border-gray-700 p-4 flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            {onBack && (
+              <button
+                onClick={onBack}
+                className="bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-900 dark:text-white p-2 rounded-lg transition-colors"
+                aria-label="Go back"
+              >
+                <ArrowLeft size={24} />
+              </button>
+            )}
+            <h1 className="text-2xl font-bold text-gray-900 dark:text-white flex items-center gap-2">
+              <SettingsIcon size={28} />
+              Settings
+            </h1>
+          </div>
+          <button
+            onClick={toggleFullscreen}
+            className="bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-900 dark:text-white p-2 rounded-lg transition-colors"
+            aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
+          >
+            {isFullscreen ? <Minimize size={24} /> : <Maximize size={24} />}
+          </button>
+        </div>
+        <div className="flex-1 flex items-center justify-center">
+          <div className="text-center">
+            <div className="w-12 h-12 border-4 border-gray-300 dark:border-gray-600 border-t-gray-900 dark:border-t-gray-200 rounded-full animate-spin mx-auto mb-4"></div>
+            <p className="text-gray-600 dark:text-gray-400">Loading settings...</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="w-full h-screen flex flex-col bg-white dark:bg-gray-900 overflow-y-auto">
+      {/* Header */}
+      <div className="border-b border-gray-200 dark:border-gray-700 p-4 flex items-center justify-between sticky top-0 bg-white dark:bg-gray-900 z-10">
+        <div className="flex items-center gap-4">
           {onBack && (
             <button
               onClick={onBack}
@@ -168,33 +217,13 @@ export function Settings({ onBack, onViewHidden }: SettingsProps) {
             Settings
           </h1>
         </div>
-        <div className="flex-1 flex items-center justify-center">
-          <div className="text-center">
-            <div className="w-12 h-12 border-4 border-gray-300 dark:border-gray-600 border-t-gray-900 dark:border-t-gray-200 rounded-full animate-spin mx-auto mb-4"></div>
-            <p className="text-gray-600 dark:text-gray-400">Loading settings...</p>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="w-full h-screen flex flex-col bg-white dark:bg-gray-900 overflow-y-auto pb-20">
-      {/* Header */}
-      <div className="border-b border-gray-200 dark:border-gray-700 p-4 flex items-center gap-4 sticky top-0 bg-white dark:bg-gray-900 z-10">
-        {onBack && (
-          <button
-            onClick={onBack}
-            className="bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-900 dark:text-white p-2 rounded-lg transition-colors"
-            aria-label="Go back"
-          >
-            <ArrowLeft size={24} />
-          </button>
-        )}
-        <h1 className="text-2xl font-bold text-gray-900 dark:text-white flex items-center gap-2">
-          <SettingsIcon size={28} />
-          Settings
-        </h1>
+        <button
+          onClick={toggleFullscreen}
+          className="bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-900 dark:text-white p-2 rounded-lg transition-colors"
+          aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
+        >
+          {isFullscreen ? <Minimize size={24} /> : <Maximize size={24} />}
+        </button>
       </div>
 
       {/* Error State */}
@@ -264,20 +293,28 @@ export function Settings({ onBack, onViewHidden }: SettingsProps) {
           </div>
         )}
 
-        {/* Root Folder */}
+        {/* Root Folder + Folder Management */}
         <div className="mb-8">
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Root Folder</h2>
+          <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
+            <FolderTree size={20} />
+            Root Folder & Folder Management
+          </h2>
           <div className="p-4 bg-gray-50 dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700">
-            <div className="mb-3">
-              <p className="text-sm text-gray-600 dark:text-gray-400 font-medium mb-2">Current Folder</p>
-              <p className="text-gray-900 dark:text-white font-mono text-sm break-all">
-                {stats?.rootFolder || 'Not set'}
+            <div className="mb-4 p-3 bg-white dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-700">
+  
+              <p className="text-xs text-gray-500 dark:text-gray-400 font-medium mt-2 mb-1">Current Source</p>
+              <p className="text-sm text-gray-900 dark:text-white font-mono break-all">
+                {currentSource ? `${currentSource.displayName} (${currentSource.id})` : 'No active source'}
+              </p>
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
+                Root folder path is read from indexed configuration data.
               </p>
             </div>
+
             <button
               onClick={handleResetRootFolder}
               disabled={isResetting || !stats?.rootFolder || stats.rootFolder === 'Not set'}
-              className="w-full bg-red-600 hover:bg-red-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg transition-colors font-medium flex items-center justify-center gap-2"
+              className="w-full bg-red-600 hover:bg-red-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg transition-colors font-medium flex items-center justify-center gap-2 mb-4"
             >
               {isResetting ? (
                 <>
@@ -291,31 +328,17 @@ export function Settings({ onBack, onViewHidden }: SettingsProps) {
                 </>
               )}
             </button>
-            <p className="text-xs text-gray-500 dark:text-gray-500 mt-2">
-              This will clear all indexed media and return you to the folder selection screen.
-            </p>
-          </div>
-        </div>
 
-        {/* Folder Management */}
-        <div className="mb-8">
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
-            <FolderTree size={20} />
-            Folder Management
-          </h2>
-          <div className="p-4 bg-gray-50 dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700">
+            <p className="text-xs text-gray-500 dark:text-gray-500 mb-4">
+              Reset will clear all indexed media and return you to the folder selection screen.
+            </p>
+
             {currentSource ? (
               <>
                 <div className="mb-4">
-                  <p className="text-sm text-gray-600 dark:text-gray-400 mb-2">
+                  <p className="text-sm text-gray-600 dark:text-gray-400">
                     Manage subfolders in your root folder. Hidden subfolders will not appear in your feed.
                   </p>
-                  <div className="p-3 bg-white dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-700">
-                    <p className="text-xs text-gray-500 dark:text-gray-400 font-medium mb-1">Current Root Folder</p>
-                    <p className="text-sm text-gray-900 dark:text-white font-mono break-all">
-                      {currentSource.folderPath}
-                    </p>
-                  </div>
                 </div>
 
                 {/* Folder Tree */}
@@ -328,11 +351,26 @@ export function Settings({ onBack, onViewHidden }: SettingsProps) {
                   ) : folderTree ? (
                     <FolderTreeView
                       tree={folderTree}
-                      onToggleHide={(folderPath) => {
-                        hideFolderMutation.mutate({
-                          sourceId: currentSource.id,
-                          folderPath,
-                        });
+                      onToggleHide={(folderPath, sourceId) => {
+                        if (!sourceId) {
+                          console.error('No sourceId provided for folder:', folderPath);
+                          return;
+                        }
+                        hideFolderMutation.mutate(
+                          {
+                            sourceId,
+                            folderPath,
+                          },
+                          {
+                            onError: (mutationError) => {
+                              setError(
+                                mutationError instanceof Error
+                                  ? mutationError.message
+                                  : 'Failed to toggle folder visibility'
+                              );
+                            },
+                          }
+                        );
                       }}
                       isLoading={hideFolderMutation.isPending}
                     />
@@ -442,11 +480,18 @@ export function Settings({ onBack, onViewHidden }: SettingsProps) {
             </p>
           </div>
         </div>
+
+        <RemoteSourcesSection
+          className="mb-8"
+          onSourcesUpdated={() => {
+            window.location.reload();
+          }}
+        />
       </div>
 
       {/* Save indicator */}
       {isSaving && (
-        <div className="fixed bottom-20 left-1/2 transform -translate-x-1/2 bg-green-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 text-sm">
+        <div className="fixed bottom-6 left-1/2 transform -translate-x-1/2 bg-green-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 text-sm">
           <RotateCw size={16} className="animate-spin" />
           Saving...
         </div>

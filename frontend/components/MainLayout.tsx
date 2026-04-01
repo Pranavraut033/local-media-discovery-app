@@ -13,8 +13,8 @@ import { HiddenView } from '@/components/HiddenView';
 import { Settings } from '@/components/Settings';
 import { SourceView } from '@/components/SourceView';
 import { NavigationBar, type NavTab } from '@/components/NavigationBar';
-import { getApiBase } from '@/lib/api';
 import { getRootFolder } from '@/lib/storage';
+import type { FeedMode } from '@/components/Feed';
 
 type AppView = 'feed' | 'saved' | 'liked' | 'hidden' | 'source' | 'settings';
 
@@ -25,11 +25,11 @@ interface SourceViewState {
 }
 
 export default function MainLayout() {
-  const API_URL = getApiBase();
   const [rootFolderSet, setRootFolderSet] = useState(false);
   const [isChecking, setIsChecking] = useState(true);
   const [currentView, setCurrentView] = useState<AppView>('feed');
   const [sourceViewState, setSourceViewState] = useState<SourceViewState | null>(null);
+  const [feedMode, setFeedMode] = useState<FeedMode>('feed');
 
   // Check if root folder is already set (in localStorage for privacy)
   useEffect(() => {
@@ -85,10 +85,13 @@ export default function MainLayout() {
 
   if (isChecking) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-linear-to-br from-gray-50 to-gray-100 dark:from-gray-900 dark:to-black">
-        <div className="text-center">
-          <div className="w-12 h-12 border-4 border-gray-300 dark:border-gray-600 border-t-gray-900 dark:border-t-gray-200 rounded-full animate-spin mx-auto mb-4"></div>
-          <p className="text-gray-600 dark:text-gray-400">Loading...</p>
+      <div className="flex min-h-screen items-center justify-center px-4 py-10 bg-neutral-950">
+        <div className="text-center space-y-6">
+          <div className="w-14 h-14 border-4 border-white/20 border-t-white rounded-full animate-spin mx-auto"></div>
+          <div className="space-y-2">
+            <h1 className="font-serif text-3xl tracking-tight text-neutral-100">Warming up</h1>
+            <p className="text-neutral-400">Loading your local workspace...</p>
+          </div>
         </div>
       </div>
     );
@@ -96,7 +99,7 @@ export default function MainLayout() {
 
   if (!rootFolderSet) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-linear-to-br from-gray-50 to-gray-100 dark:from-gray-900 dark:to-black px-4">
+      <div className="flex min-h-screen items-center justify-center px-4 py-10 bg-neutral-950">
         <main className="flex flex-col items-center justify-center w-full max-w-2xl py-12">
           <FolderSelection onFolderSelected={handleFolderSelected} />
         </main>
@@ -106,7 +109,7 @@ export default function MainLayout() {
 
   return (
     <>
-      {currentView === 'feed' && <Feed onViewSource={handleViewSource} />}
+      {currentView === 'feed' && <Feed onViewSource={handleViewSource} onModeChange={setFeedMode} />}
       {currentView === 'saved' && <SavedView onBack={handleBackFromSaved} />}
       {currentView === 'liked' && <LikedView onBack={handleBackFromLiked} />}
       {currentView === 'hidden' && <HiddenView onBack={handleBackFromHidden} />}
@@ -121,7 +124,7 @@ export default function MainLayout() {
       {currentView === 'settings' && <Settings onBack={handleBackFromSettings} onViewHidden={() => setCurrentView('hidden')} />}
 
       {/* Navigation Bar (only show when not viewing a source) */}
-      {currentView !== 'source' && (
+      {currentView !== 'source' && !(currentView === 'feed' && feedMode === 'reels') && (
         <NavigationBar
           activeTab={currentView === 'settings' ? 'settings' : currentView === 'saved' ? 'saved' : currentView === 'liked' ? 'liked' : 'feed'}
           onTabChange={handleTabChange}

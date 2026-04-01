@@ -3,6 +3,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { useAuthStore } from '@/lib/storage';
 import { getApiBase } from '@/lib/api';
+import { connectSSE, disconnectSSE } from '@/lib/sse';
 
 interface AuthContextType {
   isAuthenticated: boolean;
@@ -44,6 +45,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           setToken(storedToken);
           setUserId(data.userId);
           setIsAuthenticated(true);
+          connectSSE();
         } else {
           // Token invalid, remove it
           useAuthStore.getState().removeToken();
@@ -64,9 +66,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setToken(newToken);
     setUserId(newUserId);
     setIsAuthenticated(true);
+    connectSSE();
   }, []);
 
   const logout = useCallback(() => {
+    disconnectSSE();
     useAuthStore.getState().removeToken();
     setToken(null);
     setUserId(null);

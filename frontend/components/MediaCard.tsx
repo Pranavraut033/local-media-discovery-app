@@ -9,7 +9,7 @@ import { VideoPlayer } from './VideoPlayer';
 import { SourceBadge } from './SourceBadge';
 import { LikeButton, SaveButton, HideButton } from './InteractionButtons';
 import { useEffect, useRef, useState } from 'react';
-import { useLikeMutation, useSaveMutation, useViewMutation, useHideMutation, useFeed, FeedItem } from '@/lib/hooks';
+import { useLikeMutation, useSaveMutation, useViewMutation, useHideMutation, FeedItem } from '@/lib/hooks';
 import { getMediaUrl } from '@/lib/api';
 
 
@@ -28,21 +28,14 @@ export function MediaCard({ media, onVisible, onViewSource, mode = 'feed', class
   const hasRecordedView = useRef(false);
   const [currentLiked, setCurrentLiked] = useState(media?.liked ?? false);
   const [currentSaved, setCurrentSaved] = useState(media?.saved ?? false);
-  const [currentHidden, setCurrentHidden] = useState(false);
+  const [currentHidden, setCurrentHidden] = useState(media?.hidden ?? false);
+  const [optimisticMediaId, setOptimisticMediaId] = useState<string | null>(null);
   const [isHovered, setIsHovered] = useState(false);
 
   const likeMutation = useLikeMutation();
   const saveMutation = useSaveMutation();
   const hideMutation = useHideMutation();
   const viewMutation = useViewMutation();
-
-  // Sync component state with media prop changes
-  useEffect(() => {
-    if (media) {
-      setCurrentLiked(media.liked);
-      setCurrentSaved(media.saved);
-    }
-  }, [media?.id, media?.liked, media?.saved]);
 
   const normalizedType = media?.type?.toLowerCase() || '';
   const isImage = normalizedType === 'image' || normalizedType.startsWith('image/');
@@ -77,24 +70,32 @@ export function MediaCard({ media, onVisible, onViewSource, mode = 'feed', class
     return () => {
       observer.disconnect();
     };
-  }, [media?.id, onVisible, viewMutation]);
+  }, [media?.id, media?.sourceId, onVisible, viewMutation]);
 
   if (!media) {
     return null;
   }
 
+  const usesOptimisticState = optimisticMediaId === media.id;
+  const likedValue = usesOptimisticState ? currentLiked : media.liked;
+  const savedValue = usesOptimisticState ? currentSaved : media.saved;
+  const hiddenValue = usesOptimisticState ? currentHidden : media.hidden;
+
   const handleLike = async () => {
-    setCurrentLiked(!currentLiked);
+    setOptimisticMediaId(media.id);
+    setCurrentLiked(!likedValue);
     await likeMutation.mutateAsync({ mediaId: media.id, sourceId: media.sourceId });
   };
 
   const handleSave = async () => {
-    setCurrentSaved(!currentSaved);
+    setOptimisticMediaId(media.id);
+    setCurrentSaved(!savedValue);
     await saveMutation.mutateAsync({ mediaId: media.id, sourceId: media.sourceId });
   };
 
   const handleHide = async () => {
-    setCurrentHidden(!currentHidden);
+    setOptimisticMediaId(media.id);
+    setCurrentHidden(!hiddenValue);
     await hideMutation.mutateAsync({ mediaId: media.id, sourceId: media.sourceId });
   };
 
@@ -104,30 +105,28 @@ export function MediaCard({ media, onVisible, onViewSource, mode = 'feed', class
   return (
     <div
       ref={containerRef}
-      className={`flex flex-col bg-transparent overflow-hidden ${isReelsMode ? 'w-full h-full' : 'w-full bg-white dark:bg-gray-900 rounded-lg'
+      className={`group relative flex flex-col bg-transparent overflow-hidden transition-all ${'w-full' + (isReelsMode ? ' h-full' : '')
         } ${className}`}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
     >
       {/* Media Display Area */}
-      <div className={`relative flex items-center justify-center ${isReelsMode ? 'w-full h-full bg-black' : 'bg-gray-100 dark:bg-gray-800'
+      <div className={`relative flex items-center justify-center ${'w-full' + (isReelsMode ? ' h-full bg-black' : ' bg-neutral-900')
         }`}>
         {isImage ? (
           <div className="relative w-full h-full">
             <ImageViewer
+              key={mediaSource}
               src={mediaSource}
               alt={media.path}
               mode={mode}
               className={isReelsMode ? 'w-full h-full' : 'w-full'}
             />
-            {/* Image badge overlay */}
-            <div className="absolute top-2 left-2 bg-blue-600 text-white text-xs font-semibold px-2 py-1 rounded">
-              IMAGE
-            </div>
           </div>
         ) : isVideo ? (
           <div className="relative w-full h-full">
             <VideoPlayer
+              key={mediaSource}
               src={mediaSource}
               mode={mode}
               className={isReelsMode ? 'w-full h-full' : 'w-full'}
@@ -135,63 +134,70 @@ export function MediaCard({ media, onVisible, onViewSource, mode = 'feed', class
               shouldAutoPlayOnMobileVisible={enableMobileAutoplay}
               isCardHovered={isHovered}
             />
-            {/* Video badge overlay */}
-            <div className="absolute top-2 left-2 bg-red-600 text-white text-xs font-semibold px-2 py-1 rounded flex items-center gap-1">
-              <span className="w-2 h-2 bg-white rounded-full animate-pulse"></span>
-              VIDEO
-            </div>
           </div>
         ) : (
-          <div className="w-full min-h-50 flex items-center justify-center text-gray-500 dark:text-gray-400">
-            <span>Unsupported media type: {media.type}</span>
+          <div className="w-full min-h-50 flex items-center justify-center text-neutral-500">
+            <span className="text-sm">Unsupported media type: {media.type}</span>
           </div>
         )}
+
       </div>
 
-      {/* Info and Interactions Bar */}
-      <div className="bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 p-3">
-        {/* Source Badge */}
-        <div className="mb-3">
+      {/* Feed Mode Footer (kept outside media frame to avoid content obstruction) */}
+      {!isReelsMode && (
+        <div className="bg-neutral-950/95 border-t border-white/10 p-3 space-y-3">
           <SourceBadge
             displayName={media.displayName}
             avatarSeed={media.avatarSeed}
             onClick={onViewSource ? () => onViewSource(media.sourceId, media.displayName, media.avatarSeed) : undefined}
           />
-        </div>
 
-        {/* Action Buttons - Always Visible */}
-        <div className="flex gap-2 mb-3">
-          <LikeButton
-            liked={currentLiked}
-            onToggle={handleLike}
-            isLoading={likeMutation.isPending}
-            className="flex-1"
-          />
-          <SaveButton
-            saved={currentSaved}
-            onToggle={handleSave}
-            isLoading={saveMutation.isPending}
-            className="flex-1"
-          />
-          <HideButton
-            hidden={currentHidden}
-            onToggle={handleHide}
-            isLoading={hideMutation.isPending}
-            className="flex-1"
-          />
-        </div>
-
-        {/* File Info - Collapsible */}
-        <details className="text-xs text-gray-500 dark:text-gray-400">
-          <summary className="cursor-pointer hover:text-gray-700 dark:hover:text-gray-300">
-            File details
-          </summary>
-          <div className="mt-2 space-y-1">
-            <p className="truncate">{media.path}</p>
-            <p className="text-gray-400 dark:text-gray-500">Depth: {media.depth}</p>
+          <div className="flex gap-2">
+            <LikeButton
+              liked={likedValue}
+              onToggle={handleLike}
+              isLoading={likeMutation.isPending}
+              className="flex-1 h-9"
+            />
+            <SaveButton
+              saved={savedValue}
+              onToggle={handleSave}
+              isLoading={saveMutation.isPending}
+              className="flex-1 h-9"
+            />
+            <HideButton
+              hidden={hiddenValue}
+              onToggle={handleHide}
+              isLoading={hideMutation.isPending}
+              className="flex-1 h-9"
+            />
           </div>
-        </details>
-      </div>
+        </div>
+      )}
+
+      {/* Info Bar - Reels Mode Only (Bottom with gradient veil) */}
+      {isReelsMode && (
+        <div className="absolute bottom-0 inset-x-0 bg-linear-to-t from-black/90 via-black/40 to-transparent pt-12 px-4 pb-6 z-20">
+          {/* Source Badge */}
+          <div className="mb-4">
+            <SourceBadge
+              displayName={media.displayName}
+              avatarSeed={media.avatarSeed}
+              onClick={onViewSource ? () => onViewSource(media.sourceId, media.displayName, media.avatarSeed) : undefined}
+            />
+          </div>
+
+          {/* File Info - Minimal */}
+          <details className="text-xs text-neutral-300">
+            <summary className="cursor-pointer text-neutral-400 hover:text-neutral-100 transition-colors">
+              Details
+            </summary>
+            <div className="mt-2 space-y-1 text-neutral-400 text-xs">
+              <p className="truncate">{media.path}</p>
+            </div>
+          </details>
+        </div>
+      )}
     </div>
   );
 }

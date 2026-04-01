@@ -1,5 +1,6 @@
 /**
  * Navigation Bar Component
+ * Ethos Narrative mobile bottom action pod with glass morphism
  * Provides navigation between main feed, saved items, liked items, and settings
  */
 'use client';
@@ -22,8 +23,8 @@ export function NavigationBar({ activeTab, onTabChange }: NavigationBarProps) {
   ];
 
   return (
-    <nav className="fixed bottom-0 left-0 right-0 bg-white dark:bg-gray-900 border-t border-gray-200 dark:border-gray-700 z-50">
-      <div className="flex justify-around items-center h-16 max-w-7xl mx-auto px-4">
+    <nav className="fixed bottom-0 left-0 right-0 z-40 px-4 pb-[max(env(safe-area-inset-bottom),1rem)]">
+      <div className="mx-auto max-w-md flex h-14 items-center justify-between rounded-full bg-black/45 px-4 backdrop-blur-lg border border-white/15">
         {tabs.map((tab) => {
           const Icon = tab.icon;
           const isActive = activeTab === tab.id;
@@ -32,15 +33,20 @@ export function NavigationBar({ activeTab, onTabChange }: NavigationBarProps) {
             <button
               key={tab.id}
               onClick={() => onTabChange(tab.id)}
-              className={`flex flex-col items-center justify-center flex-1 h-full transition-colors ${isActive
-                ? 'text-blue-600 dark:text-blue-400'
-                : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'
-                }`}
+              className={`flex flex-col items-center justify-center transition-all duration-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300 rounded-lg px-2 py-1 ${
+                isActive
+                  ? 'text-white'
+                  : 'text-neutral-400 hover:text-neutral-100'
+              }`}
               aria-label={tab.label}
               aria-current={isActive ? 'page' : undefined}
             >
-              <Icon size={24} className={isActive ? 'stroke-2' : 'stroke-1.5'} />
-              <span className={`text-xs mt-1 ${isActive ? 'font-semibold' : 'font-medium'}`}>
+              <Icon size={22} className={`${
+                isActive ? 'stroke-2' : 'stroke-1.5'
+              }`} />
+              <span className={`text-xs mt-0.5 ${
+                isActive ? 'font-semibold' : 'font-medium'
+              }`}>
                 {tab.label}
               </span>
             </button>

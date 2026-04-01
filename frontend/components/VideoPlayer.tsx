@@ -32,7 +32,7 @@ export function VideoPlayer({
 }: VideoPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const [isPlaying, setIsPlaying] = useState(autoPlay);
+  const [isPlaying, setIsPlaying] = useState(false);
   const [isMuted, setIsMuted] = useState(muted);
   const [hasError, setHasError] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
@@ -50,6 +50,18 @@ export function VideoPlayer({
 
   const isReelsMode = mode === 'reels';
   const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
+  const shouldAutoPlay = autoPlay ||
+    ((shouldAutoPlayOnHover && (isHovered || isCardHovered) && !isMobile) ||
+      (shouldAutoPlayOnMobileVisible && isVisible && isMobile));
+  const showExpandedControls = !isReelsMode && (isHovered || isSeeking);
+  const showProgressInExpandedControls = !hasError && duration > 0 && showExpandedControls;
+  const showBottomPlayingProgress = !isReelsMode && !hasError && duration > 0 && isPlaying && !showExpandedControls;
+  const showStaticReelsControls = isReelsMode && !hasError;
+  const progressPercent = duration > 0 ? Math.min((currentTime / duration) * 100, 100) : 0;
+
+  const stopEventPropagation = (e: React.SyntheticEvent) => {
+    e.stopPropagation();
+  };
 
   // Set up intersection observer for mobile visibility detection
   useEffect(() => {
@@ -73,32 +85,19 @@ export function VideoPlayer({
     };
   }, [shouldAutoPlayOnMobileVisible, isMobile]);
 
-  // Sync video play state with React state
+  // Keep the media element aligned with the desired autoplay behavior.
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
 
-    if (isPlaying) {
+    if (shouldAutoPlay) {
       video.play().catch((err) => {
         console.error('Video play failed:', err);
-        setIsPlaying(false);
       });
     } else {
       video.pause();
     }
-  }, [isPlaying]);
-
-  // Auto-play on hover (desktop) or when visible (mobile)
-  useEffect(() => {
-    const shouldPlay = (shouldAutoPlayOnHover && (isHovered || isCardHovered) && !isMobile) ||
-      (shouldAutoPlayOnMobileVisible && isVisible && isMobile);
-
-    if (shouldPlay && !isPlaying) {
-      setIsPlaying(true);
-    } else if (!shouldPlay && isPlaying && !autoPlay) {
-      setIsPlaying(false);
-    }
-  }, [isHovered, isCardHovered, isVisible, isMobile, shouldAutoPlayOnHover, shouldAutoPlayOnMobileVisible, isPlaying, autoPlay]);
+  }, [shouldAutoPlay]);
 
   // Sync mute state with React state
   useEffect(() => {
@@ -109,7 +108,17 @@ export function VideoPlayer({
   }, [isMuted]);
 
   const handlePlayPause = () => {
-    setIsPlaying(!isPlaying);
+    const video = videoRef.current;
+    if (!video) return;
+
+    if (video.paused) {
+      video.play().catch((err) => {
+        console.error('Video play failed:', err);
+      });
+      return;
+    }
+
+    video.pause();
   };
 
   const handleMuteToggle = () => {
@@ -133,16 +142,17 @@ export function VideoPlayer({
 
     const details = err
       ? {
-        code: err.code,
-        name: codeMap[err.code] || 'UNKNOWN',
-        message: (err as any).message || undefined,
-        currentSrc: video?.currentSrc,
-      }
+          code: err.code,
+          name: codeMap[err.code] || 'UNKNOWN',
+          message: (err as { message?: string }).message || undefined,
+          currentSrc: video?.currentSrc,
+        }
       : { currentSrc: video?.currentSrc };
 
     console.error('Video error:', details);
     setHasError(true);
     setIsLoading(false);
+    setIsPlaying(false);
   };
 
   const handleFullscreen = () => {
@@ -210,7 +220,7 @@ export function VideoPlayer({
   }, []);
 
   // Double tap to zoom
-  const handleDoubleTap = useCallback((e: React.TouchEvent | React.MouseEvent) => {
+  const handleDoubleTap = useCallback(() => {
     const now = Date.now();
     if (now - lastTap.current < 300) {
       if (scale > 1) {
@@ -255,21 +265,26 @@ export function VideoPlayer({
   }
 
   return (
-    <div
-      ref={containerRef}
-      className={`relative ${isReelsMode ? 'w-full h-full flex items-center justify-center' : 'w-full'} bg-black group ${className}`}
-      onMouseDown={handleMouseDown}
-      onMouseMove={handleMouseMove}
-      onMouseUp={handleMouseUp}
-      onMouseLeave={() => {
-        handleMouseUp();
-        setIsHovered(false);
-      }}
-      onMouseEnter={() => setIsHovered(true)}
-      onClick={handleDoubleTap}
-      onTouchEnd={handleDoubleTap}
-      style={{ cursor: isDragging ? 'grabbing' : scale > 1 ? 'grab' : 'default' }}
-    >
+    <div className={`${isReelsMode ? 'w-full h-full flex flex-col bg-black' : ''} ${className}`}>
+      <div
+        ref={containerRef}
+        className={`relative ${isReelsMode ? 'w-full flex-1 flex items-center justify-center' : 'w-full'} bg-black group`}
+        onMouseDown={handleMouseDown}
+        onMouseMove={handleMouseMove}
+        onMouseUp={handleMouseUp}
+        onMouseLeave={() => {
+          handleMouseUp();
+          setIsHovered(false);
+        }}
+        onMouseEnter={() => {
+          if (!isReelsMode) {
+            setIsHovered(true);
+          }
+        }}
+        onClick={handleDoubleTap}
+        onTouchEnd={handleDoubleTap}
+        style={{ cursor: isDragging ? 'grabbing' : scale > 1 ? 'grab' : 'default' }}
+      >
       {isLoading && (
         <div className="absolute inset-0 flex items-center justify-center bg-gray-900 z-10">
           <div className="w-8 h-8 border-4 border-gray-600 border-t-white rounded-full animate-spin"></div>
@@ -284,9 +299,12 @@ export function VideoPlayer({
           transform: `scale(${scale}) translate(${position.x / scale}px, ${position.y / scale}px)`,
           transition: isDragging ? 'none' : 'transform 0.2s ease-out',
         }}
+        loop
         onLoadedData={handleLoadedData}
         onLoadedMetadata={handleLoadedMetadata}
         onTimeUpdate={handleTimeUpdate}
+        onPlay={() => setIsPlaying(true)}
+        onPause={() => setIsPlaying(false)}
         onError={handleError}
         muted={isMuted}
         playsInline
@@ -294,11 +312,17 @@ export function VideoPlayer({
         preload="metadata"
       />
 
-      {/* Controls - visible on hover */}
-      <div className="absolute inset-0 flex flex-col justify-end opacity-0 group-hover:opacity-100 transition-opacity bg-linear-to-t from-black via-transparent to-transparent pointer-events-none">
-        {/* Progress Bar - Only shown on hover as part of full controls */}
-        {!hasError && duration > 0 && !isPlaying && (
-          <div className="flex flex-col items-center group/progress cursor-pointer pointer-events-auto px-4 pt-2">
+      {/* Expanded controls - visible while hovering/seeking */}
+      <div className={`absolute inset-x-0 bottom-0 flex flex-col justify-end transition-opacity bg-linear-to-t from-black/70 via-black/20 to-transparent pointer-events-none ${showExpandedControls ? 'opacity-100' : 'opacity-0'}`}>
+        {/* Progress bar above action buttons when media is hovered */}
+        {showProgressInExpandedControls && (
+          <div
+            className="flex flex-col items-center group/progress pointer-events-auto px-4 pt-2"
+            onClick={stopEventPropagation}
+            onMouseDown={stopEventPropagation}
+            onTouchStart={stopEventPropagation}
+            onTouchEnd={stopEventPropagation}
+          >
             {/* Seek slider */}
             <input
               type="range"
@@ -310,10 +334,13 @@ export function VideoPlayer({
               onMouseUp={handleSeekEnd}
               onTouchStart={handleSeekStart}
               onTouchEnd={handleSeekEnd}
-              className="w-full h-1 group-hover/progress:h-2 bg-gray-500 rounded-full appearance-none cursor-pointer transition-all hover:bg-gray-400 accent-red-500 slider"
+              onClick={stopEventPropagation}
+              onPointerDown={stopEventPropagation}
+              onPointerUp={stopEventPropagation}
+              className="w-full h-1 bg-gray-500 rounded-full appearance-none cursor-pointer transition-colors hover:bg-gray-400 accent-red-500 slider"
               aria-label="Video progress"
               style={{
-                background: `linear-gradient(to right, rgb(239, 68, 68) 0%, rgb(239, 68, 68) ${(currentTime / duration) * 100}%, rgb(107, 114, 128) ${(currentTime / duration) * 100}%, rgb(107, 114, 128) 100%)`
+                background: `linear-gradient(to right, rgb(239, 68, 68) 0%, rgb(239, 68, 68) ${progressPercent}%, rgb(107, 114, 128) ${progressPercent}%, rgb(107, 114, 128) 100%)`
               }}
             />
 
@@ -325,7 +352,13 @@ export function VideoPlayer({
           </div>
         )}
 
-        <div className="flex items-center justify-between p-4 pointer-events-auto">
+        <div
+          className="flex items-center justify-between p-4 pointer-events-auto"
+          onClick={stopEventPropagation}
+          onMouseDown={stopEventPropagation}
+          onTouchStart={stopEventPropagation}
+          onTouchEnd={stopEventPropagation}
+        >
           <div className="flex items-center gap-2">
             <button
               onClick={(e) => {
@@ -363,9 +396,15 @@ export function VideoPlayer({
         </div>
       </div>
 
-      {/* Minimal Progress Bar - Always visible when playing, independent of hover state */}
-      {isPlaying && !hasError && duration > 0 && (
-        <div className="absolute bottom-0 left-0 right-0 flex flex-col items-center cursor-pointer pointer-events-auto px-4 py-2 group/minimal-progress hover:bg-black/10 transition-colors z-20">
+      {/* Minimal progress bar at bottom while playing and not hovering */}
+      {showBottomPlayingProgress && (
+        <div
+          className="absolute bottom-0 left-0 right-0 flex flex-col items-center pointer-events-auto px-4 py-2 group/minimal-progress hover:bg-black/10 transition-colors z-20"
+          onClick={stopEventPropagation}
+          onMouseDown={stopEventPropagation}
+          onTouchStart={stopEventPropagation}
+          onTouchEnd={stopEventPropagation}
+        >
           {/* Seek slider - minimal version */}
           <input
             type="range"
@@ -377,10 +416,13 @@ export function VideoPlayer({
             onMouseUp={handleSeekEnd}
             onTouchStart={handleSeekStart}
             onTouchEnd={handleSeekEnd}
-            className="w-full h-0.5 group-hover/minimal-progress:h-1 bg-gray-500 rounded-full appearance-none cursor-pointer transition-all accent-red-500 slider-minimal"
+            onClick={stopEventPropagation}
+            onPointerDown={stopEventPropagation}
+            onPointerUp={stopEventPropagation}
+            className="w-full h-1 bg-gray-500 rounded-full appearance-none cursor-pointer transition-colors accent-red-500 slider-minimal"
             aria-label="Video progress"
             style={{
-              background: `linear-gradient(to right, rgb(239, 68, 68) 0%, rgb(239, 68, 68) ${(currentTime / duration) * 100}%, rgb(107, 114, 128) ${(currentTime / duration) * 100}%, rgb(107, 114, 128) 100%)`
+              background: `linear-gradient(to right, rgb(239, 68, 68) 0%, rgb(239, 68, 68) ${progressPercent}%, rgb(107, 114, 128) ${progressPercent}%, rgb(107, 114, 128) 100%)`
             }}
           />
         </div>
@@ -420,6 +462,82 @@ export function VideoPlayer({
               Reset
             </button>
           )}
+        </div>
+      )}
+
+      </div>
+
+      {showStaticReelsControls && (
+        <div
+          className="bg-black/95 border-t border-white/15 p-3 space-y-2"
+          onClick={stopEventPropagation}
+          onMouseDown={stopEventPropagation}
+          onTouchStart={stopEventPropagation}
+          onTouchEnd={stopEventPropagation}
+        >
+          {duration > 0 && (
+            <input
+              type="range"
+              min="0"
+              max={duration}
+              value={currentTime}
+              onChange={handleSeek}
+              onMouseDown={handleSeekStart}
+              onMouseUp={handleSeekEnd}
+              onTouchStart={handleSeekStart}
+              onTouchEnd={handleSeekEnd}
+              onClick={stopEventPropagation}
+              onPointerDown={stopEventPropagation}
+              onPointerUp={stopEventPropagation}
+              className="w-full h-1 bg-gray-500 rounded-full appearance-none cursor-pointer accent-red-500 slider"
+              aria-label="Video progress"
+              style={{
+                background: `linear-gradient(to right, rgb(239, 68, 68) 0%, rgb(239, 68, 68) ${progressPercent}%, rgb(107, 114, 128) ${progressPercent}%, rgb(107, 114, 128) 100%)`
+              }}
+            />
+          )}
+
+          <div className="flex items-center justify-between text-xs text-white/90">
+            <span>{formatTime(currentTime)}</span>
+            <span>{formatTime(duration)}</span>
+          </div>
+
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handlePlayPause();
+                }}
+                className="bg-white hover:bg-gray-200 text-black p-2 rounded-full transition-colors"
+                aria-label={isPlaying ? 'Pause' : 'Play'}
+              >
+                {isPlaying ? <Pause size={18} /> : <Play size={18} />}
+              </button>
+
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleMuteToggle();
+                }}
+                className="bg-white hover:bg-gray-200 text-black p-2 rounded-full transition-colors"
+                aria-label={isMuted ? 'Unmute' : 'Mute'}
+              >
+                {isMuted ? <VolumeX size={18} /> : <Volume2 size={18} />}
+              </button>
+            </div>
+
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                handleFullscreen();
+              }}
+              className="bg-white hover:bg-gray-200 text-black p-2 rounded-full transition-colors"
+              aria-label="Fullscreen"
+            >
+              <Maximize2 size={18} />
+            </button>
+          </div>
         </div>
       )}
 

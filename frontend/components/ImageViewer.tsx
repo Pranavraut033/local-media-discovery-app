@@ -4,7 +4,6 @@
  */
 'use client';
 
-import Image from 'next/image';
 import { useState, useRef, useCallback } from 'react';
 import { ZoomIn, ZoomOut } from 'lucide-react';
 import { useLazyImage } from '@/lib/hooks';
@@ -65,7 +64,7 @@ export function ImageViewer({ src, alt, mode = 'feed', className = '', onLoad }:
   }, []);
 
   // Double tap to zoom
-  const handleDoubleTap = useCallback((e: React.TouchEvent | React.MouseEvent) => {
+  const handleDoubleTap = useCallback(() => {
     const now = Date.now();
     if (now - lastTap.current < 300) {
       if (scale > 1) {

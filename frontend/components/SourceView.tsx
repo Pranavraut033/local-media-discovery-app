@@ -8,6 +8,14 @@ import { useSourceMedia } from '@/lib/hooks';
 import { MediaCard } from './MediaCard';
 import { ArrowLeft } from 'lucide-react';
 import { getAvatarColor } from '@/lib/avatar';
+import Masonry from 'react-masonry-css';
+import {
+  CONTENT_BOTTOM_INSET_CLASS,
+  MEDIA_GRID_CARD_CLASS,
+  MEDIA_MASONRY_BREAKPOINTS,
+  MEDIA_MASONRY_CLASS,
+  MEDIA_MASONRY_COLUMN_CLASS,
+} from '@/lib/layout';
 
 interface SourceViewProps {
   sourceId: string;
@@ -123,21 +131,28 @@ export function SourceView({ sourceId, displayName, avatarSeed, onBack }: Source
         </div>
       )}
 
-      {/* Grid Container */}
+      {/* Masonry Grid Container */}
       {mediaItems.length > 0 && (
-        <div className="flex-1 overflow-y-auto grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 p-4">
-          {mediaItems.map((item: any) => (
-            <div
-              key={item.id}
-              className="aspect-square bg-gray-100 dark:bg-gray-800 rounded-lg overflow-hidden hover:shadow-lg transition-shadow"
-            >
-              <MediaCard
-                media={item}
-                onVisible={() => { }}
-                className="w-full h-full"
-              />
-            </div>
-          ))}
+        <div className={`flex-1 overflow-y-auto p-4 ${CONTENT_BOTTOM_INSET_CLASS}`}>
+          <Masonry
+            breakpointCols={MEDIA_MASONRY_BREAKPOINTS}
+            className={MEDIA_MASONRY_CLASS}
+            columnClassName={MEDIA_MASONRY_COLUMN_CLASS}
+          >
+            {mediaItems.map((item: any) => (
+              <div
+                key={item.id}
+                className={MEDIA_GRID_CARD_CLASS}
+              >
+                <MediaCard
+                  media={item}
+                  onVisible={() => { }}
+                  mode="feed"
+                  className="w-full"
+                />
+              </div>
+            ))}
+          </Masonry>
         </div>
       )}
     </div>

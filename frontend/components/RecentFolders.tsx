@@ -5,12 +5,17 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { FolderOpen, Trash2, Clock } from 'lucide-react';
-import { getRecentFolders, removeRecentFolder, clearRecentFolders, type RecentFolder, addRecentFolder } from '@/lib/storage';
+import { FolderOpen, Clock } from 'lucide-react';
 import { getApiBase, authenticatedFetch } from '@/lib/api';
 
 interface RecentFoldersProps {
   onFolderSelect?: (path: string, name: string) => void;
+}
+
+interface RecentFolder {
+  path: string;
+  name: string;
+  lastIndexedAt: number;
 }
 
 export function RecentFolders({ onFolderSelect }: RecentFoldersProps) {
@@ -19,8 +24,26 @@ export function RecentFolders({ onFolderSelect }: RecentFoldersProps) {
   const [isLoading, setIsLoading] = useState(false);
 
   useEffect(() => {
-    setRecentFolders(getRecentFolders());
-  }, []);
+    const loadRecentFolders = async () => {
+      try {
+        setIsLoading(true);
+        const response = await authenticatedFetch(`${API_URL}/api/config/recent-folders`);
+        if (!response.ok) {
+          throw new Error('Failed to load recent folders');
+        }
+
+        const data = await response.json();
+        setRecentFolders(Array.isArray(data.folders) ? data.folders : []);
+      } catch (error) {
+        console.error('Failed to load recent folders from DB:', error);
+        setRecentFolders([]);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    loadRecentFolders();
+  }, [API_URL]);
 
   const handleSelectFolder = async (path: string, name: string) => {
     try {
@@ -32,10 +55,6 @@ export function RecentFolders({ onFolderSelect }: RecentFoldersProps) {
 
       if (!response.ok) throw new Error('Failed to set root folder');
 
-      // Add to recent folders
-      addRecentFolder(path, name);
-      setRecentFolders(getRecentFolders());
-
       onFolderSelect?.(path, name);
     } catch (error) {
       console.error('Failed to select folder:', error);
@@ -44,17 +63,17 @@ export function RecentFolders({ onFolderSelect }: RecentFoldersProps) {
     }
   };
 
-  const handleRemoveFolder = (path: string) => {
-    removeRecentFolder(path);
-    setRecentFolders(getRecentFolders());
-  };
-
-  const handleClearAll = () => {
-    if (window.confirm('Clear all recent folders?')) {
-      clearRecentFolders();
-      setRecentFolders([]);
-    }
-  };
+  if (isLoading && recentFolders.length === 0) {
+    return (
+      <div className="mb-6 px-4">
+        <h2 className="text-lg font-semibold text-gray-900 dark:text-white flex items-center gap-2">
+          <Clock size={20} />
+          Recent Folders
+        </h2>
+        <p className="text-sm text-gray-500 dark:text-gray-400 mt-2">Loading recent folders...</p>
+      </div>
+    );
+  }
 
   if (recentFolders.length === 0) {
     return null;
@@ -68,13 +87,7 @@ export function RecentFolders({ onFolderSelect }: RecentFoldersProps) {
           <Clock size={20} />
           Recent Folders
         </h2>
-        <button
-          onClick={handleClearAll}
-          className="text-xs font-medium text-red-600 dark:text-red-400 hover:text-red-700 dark:hover:text-red-300 transition-colors flex items-center gap-1"
-        >
-          <Trash2 size={14} />
-          Clear
-        </button>
+        <span className="text-xs text-gray-500 dark:text-gray-400">From your indexed history</span>
       </div>
 
       {/* Recent folders list */}
@@ -100,21 +113,9 @@ export function RecentFolders({ onFolderSelect }: RecentFoldersProps) {
                   {folder.path}
                 </p>
                 <p className="text-xs text-gray-400 dark:text-gray-500 mt-2">
-                  {new Date(folder.timestamp).toLocaleDateString()}
+                  Last indexed {new Date(folder.lastIndexedAt * 1000).toLocaleDateString()}
                 </p>
               </div>
-            </button>
-
-            {/* Remove button (visible on hover) */}
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                handleRemoveFolder(folder.path);
-              }}
-              className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity bg-red-100 dark:bg-red-900/20 hover:bg-red-200 dark:hover:bg-red-900/40 text-red-600 dark:text-red-400 p-1.5 rounded-md"
-              aria-label="Remove folder"
-            >
-              <Trash2 size={14} />
             </button>
           </div>
         ))}

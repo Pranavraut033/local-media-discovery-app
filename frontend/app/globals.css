@@ -1,26 +1,78 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #f8f9fa;
+  --foreground: #191c1d;
+
+  /* Stitch-inspired editorial palette */
+  --surface: #f8f9fa;
+  --surface-low: #f3f4f5;
+  --surface-lowest: #ffffff;
+  --surface-high: #e7e8e9;
+  --surface-highest: #e1e3e4;
+  --surface-ink: #191c1d;
+  --surface-muted: #44474a;
+  --outline: #75777a;
+  --outline-variant: #c5c6ca;
+
+  --primary: #000101;
+  --primary-container: #1a1c1e;
+  --on-primary: #ffffff;
+  --secondary: #435e91;
+  --secondary-container: #a9c4fd;
+  --on-secondary-container: #355082;
+
+  --error: #ba1a1a;
+  --on-error: #ffffff;
+
+  --radius-lg: 1rem;
+  --radius-xl: 1.5rem;
+  --glass-bg: rgba(248, 249, 250, 0.8);
+  --ambient-shadow: 0 12px 32px rgba(25, 28, 29, 0.06);
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --font-sans: var(--font-manrope);
+  --font-mono: var(--font-manrope);
 }
 
 body {
-  background: var(--background);
+  min-height: 100vh;
+  background:
+    radial-gradient(1200px 480px at 100% -10%, rgba(67, 94, 145, 0.12), transparent 60%),
+    radial-gradient(900px 500px at -10% 10%, rgba(169, 196, 253, 0.2), transparent 56%),
+    var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-manrope), sans-serif;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+.editorial-title {
+  font-family: var(--font-newsreader), serif;
+  font-weight: 600;
+  line-height: 1.1;
+}
+
+.surface-panel {
+  background: var(--surface-lowest);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--ambient-shadow);
+}
+
+.glass-panel {
+  background: var(--glass-bg);
+  backdrop-filter: blur(20px);
+  border: 1px solid rgba(197, 198, 202, 0.28);
+}
+
+.focus-ring:focus-visible {
+  outline: 2px solid var(--outline);
+  outline-offset: 2px;
 }

@@ -1,15 +1,15 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Manrope, Newsreader } from "next/font/google";
 import "./globals.css";
 import Providers from "./providers";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
+const manrope = Manrope({
+  variable: "--font-manrope",
   subsets: ["latin"],
 });
 
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
+const newsreader = Newsreader({
+  variable: "--font-newsreader",
   subsets: ["latin"],
 });
 
@@ -25,7 +25,6 @@ export const metadata: Metadata = {
   formatDetection: {
     telephone: false,
   },
-  viewport: "width=device-width, initial-scale=1, viewport-fit=cover",
 };
 
 export default function RootLayout({
@@ -38,13 +37,13 @@ export default function RootLayout({
       <head>
         <link rel="manifest" href="/manifest.json" />
         <link rel="icon" href="/icon-192.png" />
-        <meta name="theme-color" content="#ffffff" />
+        <meta name="theme-color" content="#f8f9fa" />
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
         <meta name="apple-mobile-web-app-title" content="Media Discovery" />
       </head>
       <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased`}
+        className={`${manrope.variable} ${newsreader.variable} antialiased`}
       >
         <Providers>{children}</Providers>
       </body>

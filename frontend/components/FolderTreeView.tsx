@@ -5,19 +5,21 @@
 'use client';
 
 import { useState } from 'react';
-import { ChevronRight, ChevronDown, Eye, EyeOff, Folder } from 'lucide-react';
+import { ChevronRight, ChevronDown, Eye, EyeOff, Folder, HardDrive, Cloud } from 'lucide-react';
 
 interface FolderNode {
   path: string;
   name: string;
   mediaCount: number;
   hidden: boolean;
+  sourceId?: string;
+  source_type?: 'local' | 'rclone';
   children: FolderNode[];
 }
 
 interface FolderTreeViewProps {
   tree: FolderNode;
-  onToggleHide: (folderPath: string) => void;
+  onToggleHide: (folderPath: string, sourceId?: string) => void;
   isLoading?: boolean;
 }
 
@@ -31,13 +33,13 @@ export function FolderTreeView({ tree, onToggleHide, isLoading }: FolderTreeView
 
 interface FolderTreeNodeProps {
   node: FolderNode;
-  onToggleHide: (folderPath: string) => void;
+  onToggleHide: (folderPath: string, sourceId?: string) => void;
   isLoading?: boolean;
   level: number;
 }
 
 function FolderTreeNode({ node, onToggleHide, isLoading, level }: FolderTreeNodeProps) {
-  const [isExpanded, setIsExpanded] = useState(level < 2); // Auto-expand first 2 levels
+  const [isExpanded, setIsExpanded] = useState(true); // Auto-expand all levels to show nested structure
   const hasChildren = node.children.length > 0;
 
   return (
@@ -72,6 +74,23 @@ function FolderTreeNode({ node, onToggleHide, isLoading, level }: FolderTreeNode
             }`}
         />
 
+        {/* Source Type Badge - only show at level 1 (sources level) */}
+        {level === 1 && (
+          <div
+            className={`flex-shrink-0 p-1 rounded ${
+              node.path.startsWith('rclone:')
+                ? 'bg-purple-100 dark:bg-purple-900/30'
+                : 'bg-green-100 dark:bg-green-900/30'
+            }`}
+          >
+            {node.path.startsWith('rclone:') ? (
+              <Cloud className="w-3 h-3 text-purple-600 dark:text-purple-400" />
+            ) : (
+              <HardDrive className="w-3 h-3 text-green-600 dark:text-green-400" />
+            )}
+          </div>
+        )}
+
         {/* Folder Name and Media Count */}
         <div className="flex-1 flex items-center justify-between gap-4">
           <div className="flex items-center gap-2">
@@ -91,7 +110,7 @@ function FolderTreeNode({ node, onToggleHide, isLoading, level }: FolderTreeNode
           {/* Hide Toggle Button - Only show for non-root folders */}
           {level > 0 && (
             <button
-              onClick={() => onToggleHide(node.path)}
+              onClick={() => onToggleHide(node.path, node.sourceId)}
               disabled={isLoading}
               className={`p-1.5 rounded-lg transition-colors ${node.hidden
                 ? 'bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-400'

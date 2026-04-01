@@ -6,10 +6,12 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Folder, ChevronRight, Home, HardDrive } from 'lucide-react';
+import { Folder, ChevronRight, Home, HardDrive, Play } from 'lucide-react';
 import { getApiBase, authenticatedFetch } from '@/lib/api';
 import { RecentFolders } from './RecentFolders';
-import { addRecentFolder, setRootFolder } from '@/lib/storage';
+import { setRootFolder } from '@/lib/storage';
+import { RemoteSourcesSection } from './RemoteSourcesSection';
+import { useIndexingStore } from '@/lib/stores/indexing.store';
 
 interface FolderSelectionProps {
   onFolderSelected?: () => void;
@@ -36,6 +38,10 @@ export default function FolderSelection({ onFolderSelected }: FolderSelectionPro
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string>('');
   const [showBrowser, setShowBrowser] = useState(false);
+  const [activeJobId, setActiveJobId] = useState<string | null>(null);
+
+  const jobs = useIndexingStore((s) => s.jobs);
+  const activeJob = activeJobId ? jobs[activeJobId] : null;
 
   // Load root directories on mount
   useEffect(() => {
@@ -83,22 +89,23 @@ export default function FolderSelection({ onFolderSelected }: FolderSelectionPro
       // Store root folder in localStorage for privacy
       setRootFolder(path);
 
-      // Trigger indexing on backend (send path in request, but backend won't store it)
+      // Trigger indexing on backend (202 Accepted + jobId)
       const response = await authenticatedFetch(`${API_URL}/api/config/root-folder`, {
         method: 'POST',
         body: JSON.stringify({ path }),
       });
 
       if (!response.ok) {
-        // If indexing fails, clear the stored folder
         setRootFolder('');
         throw new Error('Failed to set root folder');
       }
 
-      // Extract folder name from path
-      const folderName = path.split('/').filter(Boolean).pop() || path;
-      addRecentFolder(path, folderName);
+      const data = await response.json();
+      if (data.jobId) {
+        setActiveJobId(data.jobId);
+      }
 
+      // Notify parent so feed loads with pending items immediately
       onFolderSelected?.();
     } catch (err: any) {
       setError(err.message || 'Failed to set folder');
@@ -111,16 +118,16 @@ export default function FolderSelection({ onFolderSelected }: FolderSelectionPro
     // Initial screen with option to browse or enter manually
     return (
       <div className="flex flex-col items-center gap-6 w-full max-w-2xl">
-        <div className="flex flex-col items-center gap-4 text-center">
-          <div className="rounded-full bg-blue-100 dark:bg-blue-900/30 p-6">
-            <Folder className="w-12 h-12 text-blue-600 dark:text-blue-400" />
+        <div className="surface-panel flex flex-col items-center gap-4 text-center p-8 w-full">
+          <div className="rounded-full bg-(--secondary-container) p-6">
+            <Folder className="w-12 h-12 text-(--on-secondary-container)" />
           </div>
 
-          <h1 className="text-3xl font-bold text-gray-900 dark:text-white">
+          <h1 className="editorial-title text-4xl text-(--surface-ink)">
             Select Your Media Folder
           </h1>
 
-          <p className="text-gray-600 dark:text-gray-400">
+          <p className="text-(--surface-muted)">
             Choose a folder on the host computer containing your photos and videos
           </p>
         </div>
@@ -128,21 +135,64 @@ export default function FolderSelection({ onFolderSelected }: FolderSelectionPro
         {/* Recent Folders Section */}
         <RecentFolders onFolderSelect={onFolderSelected} />
 
+        {/* Live indexing progress */}
+        {activeJob && (
+          <div className="w-full p-4 bg-blue-50 dark:bg-blue-900/20 rounded-2xl border border-blue-100 dark:border-blue-800">
+            <p className="text-sm text-blue-800 dark:text-blue-300 mb-2">
+              {activeJob.status === 'completed'
+                ? 'Indexing complete'
+                : activeJob.stage === 'discovery'
+                ? `Discovering files${activeJob.filesFound ? ` — ${activeJob.filesFound} found` : ''}…`
+                : activeJob.done !== undefined && activeJob.total
+                ? `Hashing ${activeJob.done}/${activeJob.total}`
+                : 'Queued…'}
+            </p>
+            {activeJob.total ? (
+              <div className="h-1.5 w-full rounded-full bg-blue-100 dark:bg-blue-950/60 overflow-hidden">
+                <div
+                  className="h-full bg-blue-600 transition-all duration-300 ease-out"
+                  style={{ width: `${Math.round(((activeJob.done ?? 0) / activeJob.total) * 100)}%` }}
+                />
+              </div>
+            ) : null}
+          </div>
+        )}
+
+        {/* Show Media button – always visible after folder is set */}
+        {activeJobId && (
+          <button
+            onClick={() => onFolderSelected?.()}
+            className="focus-ring w-full flex items-center justify-center gap-2 bg-green-600 hover:bg-green-700 text-white font-semibold py-4 px-6 rounded-full transition-colors"
+          >
+            <Play size={18} />
+            Show Media
+          </button>
+        )}
+
         <button
           onClick={() => setShowBrowser(true)}
           disabled={isLoading}
-          className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white font-semibold py-4 px-6 rounded-lg transition-colors"
+          className="focus-ring w-full bg-linear-to-r from-[var(--primary)] to-[var(--primary-container)] disabled:bg-(--outline) text-[var(--on-primary)] font-semibold py-4 px-6 rounded-full transition-opacity"
         >
           Browse Host Folders
         </button>
 
+        <RemoteSourcesSection
+          className="w-full"
+          titleClassName="text-lg font-semibold text-[var(--surface-ink)] mb-3 flex items-center gap-2"
+          containerClassName="surface-panel"
+          onSourcesUpdated={() => {
+            window.location.reload();
+          }}
+        />
+
         {error && (
-          <div className="w-full p-4 bg-red-50 dark:bg-red-900/20 rounded-lg">
-            <p className="text-sm text-red-800 dark:text-red-200">{error}</p>
+          <div className="w-full p-4 bg-[var(--error)]/10 rounded-2xl">
+            <p className="text-sm text-[var(--error)]">{error}</p>
           </div>
         )}
 
-        <div className="text-sm text-gray-500 dark:text-gray-400 text-center">
+        <div className="text-sm text-[var(--surface-muted)] text-center">
           <p>💡 All media stays local and private on your host computer</p>
         </div>
       </div>
