@@ -1,34 +1,34 @@
 @import "tailwindcss";
 
 :root {
-  --background: #f8f9fa;
-  --foreground: #191c1d;
+  --background: #0f1011;
+  --foreground: #e1e3e4;
 
-  /* Stitch-inspired editorial palette */
-  --surface: #f8f9fa;
-  --surface-low: #f3f4f5;
-  --surface-lowest: #ffffff;
-  --surface-high: #e7e8e9;
-  --surface-highest: #e1e3e4;
-  --surface-ink: #191c1d;
-  --surface-muted: #44474a;
-  --outline: #75777a;
-  --outline-variant: #c5c6ca;
+  /* Dark editorial palette */
+  --surface: #131517;
+  --surface-low: #1a1c1e;
+  --surface-lowest: #1e2124;
+  --surface-high: #282c30;
+  --surface-highest: #2e3338;
+  --surface-ink: #e1e3e4;
+  --surface-muted: #9ca3ab;
+  --outline: #6b7280;
+  --outline-variant: #374151;
 
-  --primary: #000101;
-  --primary-container: #1a1c1e;
-  --on-primary: #ffffff;
-  --secondary: #435e91;
-  --secondary-container: #a9c4fd;
-  --on-secondary-container: #355082;
+  --primary: #e1e3e4;
+  --primary-container: #b0b3b8;
+  --on-primary: #0f1011;
+  --secondary: #a9c4fd;
+  --secondary-container: #1e3461;
+  --on-secondary-container: #a9c4fd;
 
-  --error: #ba1a1a;
-  --on-error: #ffffff;
+  --error: #ffb4ab;
+  --on-error: #690005;
 
   --radius-lg: 1rem;
   --radius-xl: 1.5rem;
-  --glass-bg: rgba(248, 249, 250, 0.8);
-  --ambient-shadow: 0 12px 32px rgba(25, 28, 29, 0.06);
+  --glass-bg: rgba(19, 21, 23, 0.85);
+  --ambient-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
 }
 
 @theme inline {
@@ -41,8 +41,8 @@
 body {
   min-height: 100vh;
   background:
-    radial-gradient(1200px 480px at 100% -10%, rgba(67, 94, 145, 0.12), transparent 60%),
-    radial-gradient(900px 500px at -10% 10%, rgba(169, 196, 253, 0.2), transparent 56%),
+    radial-gradient(1200px 480px at 100% -10%, rgba(67, 94, 145, 0.15), transparent 60%),
+    radial-gradient(900px 500px at -10% 10%, rgba(30, 52, 97, 0.25), transparent 56%),
     var(--background);
   color: var(--foreground);
   font-family: var(--font-manrope), sans-serif;

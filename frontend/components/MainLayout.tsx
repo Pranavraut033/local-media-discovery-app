@@ -85,12 +85,12 @@ export default function MainLayout() {
 
   if (isChecking) {
     return (
-      <div className="flex min-h-screen items-center justify-center px-4 py-10 bg-neutral-950">
+      <div className="flex min-h-screen items-center justify-center px-4 py-10 bg-background">
         <div className="text-center space-y-6">
-          <div className="w-14 h-14 border-4 border-white/20 border-t-white rounded-full animate-spin mx-auto"></div>
+          <div className="w-14 h-14 border-4 border-(--outline-variant) border-t-(--primary) rounded-full animate-spin mx-auto"></div>
           <div className="space-y-2">
-            <h1 className="font-serif text-3xl tracking-tight text-neutral-100">Warming up</h1>
-            <p className="text-neutral-400">Loading your local workspace...</p>
+            <h1 className="font-serif text-3xl tracking-tight text-(--surface-ink)">Warming up</h1>
+            <p className="text-(--outline)">Loading your local workspace...</p>
           </div>
         </div>
       </div>
@@ -99,7 +99,7 @@ export default function MainLayout() {
 
   if (!rootFolderSet) {
     return (
-      <div className="flex min-h-screen items-center justify-center px-4 py-10 bg-neutral-950">
+      <div className="flex min-h-screen items-center justify-center px-4 py-10">
         <main className="flex flex-col items-center justify-center w-full max-w-2xl py-12">
           <FolderSelection onFolderSelected={handleFolderSelected} />
         </main>

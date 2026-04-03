@@ -4,15 +4,17 @@ import { useState, useEffect } from 'react';
 import { X, Upload, Loader, Play } from 'lucide-react';
 import { fetchRcloneRemotes, validateRcloneRemote, addRcloneSource, RcloneRemote } from '@/lib/api';
 import { useIndexingStore } from '@/lib/stores/indexing.store';
+import { useUIStore } from '@/lib/stores/ui.store';
 
 interface RcloneImportModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSuccess: () => void;
   onShowMedia?: () => void;
+  initialRemote?: string;
 }
 
-export function RcloneImportModal({ isOpen, onClose, onSuccess, onShowMedia }: RcloneImportModalProps) {
+export function RcloneImportModal({ isOpen, onClose, onSuccess, onShowMedia, initialRemote }: RcloneImportModalProps) {
   const [remotes, setRemotes] = useState<RcloneRemote[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -25,6 +27,8 @@ export function RcloneImportModal({ isOpen, onClose, onSuccess, onShowMedia }: R
 
   const jobs = useIndexingStore((s) => s.jobs);
   const activeJob = activeJobId ? jobs[activeJobId] : null;
+  const lastUsedRemote = useUIStore((s) => s.preferences.lastRcloneRemote);
+  const setPreferences = useUIStore((s) => s.setPreferences);
 
   // Load remotes when modal opens
   useEffect(() => {
@@ -39,7 +43,11 @@ export function RcloneImportModal({ isOpen, onClose, onSuccess, onShowMedia }: R
         const data = await fetchRcloneRemotes();
         setRemotes(data);
 
-        if (data.length > 0) {
+        // Pre-select initialRemote (from chip), or last-used, or first
+        const preferred = initialRemote ?? lastUsedRemote;
+        if (preferred && data.some((r: RcloneRemote) => r.name === preferred)) {
+          setSelectedRemote(preferred);
+        } else if (data.length > 0) {
           setSelectedRemote(data[0].name);
         }
       } catch (err) {
@@ -51,7 +59,7 @@ export function RcloneImportModal({ isOpen, onClose, onSuccess, onShowMedia }: R
     };
 
     loadRemotes();
-  }, [isOpen]);
+  }, [isOpen, initialRemote]);
 
   const handleValidate = async () => {
     if (!selectedRemote) {
@@ -107,6 +115,9 @@ export function RcloneImportModal({ isOpen, onClose, onSuccess, onShowMedia }: R
         setActiveJobId(result.jobId);
       }
 
+      // Persist last-used remote
+      setPreferences({ lastRcloneRemote: selectedRemote ?? undefined });
+
       // Notify parent so feed can refresh
       onSuccess();
     } catch (err) {
@@ -120,16 +131,16 @@ export function RcloneImportModal({ isOpen, onClose, onSuccess, onShowMedia }: R
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white dark:bg-gray-900 rounded-lg max-w-md w-full max-h-[90vh] flex flex-col">
+      <div className="bg-(--surface-lowest) rounded-2xl max-w-md w-full max-h-[90vh] flex flex-col shadow-(--ambient-shadow)">
         {/* Header */}
-        <div className="border-b border-gray-200 dark:border-gray-700 p-4 flex items-center justify-between sticky top-0">
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-white flex items-center gap-2">
-            <Upload size={20} />
+        <div className="bg-(--surface-low) rounded-t-2xl px-4 py-3 flex items-center justify-between shrink-0">
+          <h2 className="text-base font-semibold text-(--surface-ink) flex items-center gap-2">
+            <Upload size={18} />
             Import Rclone Remote
           </h2>
           <button
             onClick={onClose}
-            className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 transition-colors"
+            className="text-(--outline) hover:text-(--surface-ink) transition-colors"
             aria-label="Close"
           >
             <X size={20} />
@@ -140,12 +151,12 @@ export function RcloneImportModal({ isOpen, onClose, onSuccess, onShowMedia }: R
         <div className="flex-1 overflow-y-auto p-4">
           {isLoading ? (
             <div className="flex flex-col items-center justify-center py-8">
-              <Loader size={24} className="text-gray-400 dark:text-gray-600 animate-spin mb-2" />
-              <p className="text-sm text-gray-600 dark:text-gray-400">Loading rclone remotes...</p>
+              <Loader size={24} className="text-(--outline) animate-spin mb-2" />
+              <p className="text-sm text-(--surface-muted)">Loading rclone remotes...</p>
             </div>
           ) : remotes.length === 0 ? (
-            <div className="p-4 bg-yellow-50 dark:bg-yellow-900/20 rounded-lg border border-yellow-200 dark:border-yellow-800">
-              <p className="text-sm text-yellow-800 dark:text-yellow-700">
+            <div className="p-4 bg-(--surface-high) rounded-xl">
+              <p className="text-sm text-(--surface-muted)">
                 No remotes found. Make sure rclone is installed and configured with remotes using `rclone config`.
               </p>
             </div>
@@ -153,17 +164,17 @@ export function RcloneImportModal({ isOpen, onClose, onSuccess, onShowMedia }: R
             <div className="space-y-4">
               {/* Remote Selection */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                <label className="block text-sm font-medium text-(--surface-muted) mb-2">
                   Select Remote
                 </label>
                 <select
                   value={selectedRemote || ''}
                   onChange={(e) => setSelectedRemote(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full px-3 py-2 rounded-lg bg-(--surface-highest) text-(--surface-ink) focus:outline-none focus:ring-1 focus:ring-(--primary)/30"
                 >
                   {remotes.map((remote) => (
                     <option key={remote.name} value={remote.name}>
-                      {remote.name} ({remote.type})
+                      {remote.name} ({remote.type}){remote.name === lastUsedRemote ? ' · recent' : ''}
                     </option>
                   ))}
                 </select>
@@ -171,7 +182,7 @@ export function RcloneImportModal({ isOpen, onClose, onSuccess, onShowMedia }: R
 
               {/* Base Path */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                <label className="block text-sm font-medium text-(--surface-muted) mb-2">
                   Base Path
                 </label>
                 <input
@@ -179,9 +190,9 @@ export function RcloneImportModal({ isOpen, onClose, onSuccess, onShowMedia }: R
                   value={basePath}
                   onChange={(e) => setBasePath(e.target.value)}
                   placeholder="/"
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full px-3 py-2 rounded-lg bg-(--surface-highest) text-(--surface-ink) placeholder:text-(--outline) focus:outline-none focus:ring-1 focus:ring-(--primary)/30"
                 />
-                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                <p className="text-xs text-(--outline) mt-1">
                   Path within the remote to index (e.g., /media/pictures)
                 </p>
               </div>
@@ -195,12 +206,12 @@ export function RcloneImportModal({ isOpen, onClose, onSuccess, onShowMedia }: R
                   onChange={(e) => setUseCrypt(e.target.checked)}
                   className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
                 />
-                <label htmlFor="useCrypt" className="text-sm text-gray-700 dark:text-gray-300 cursor-pointer">
+                <label htmlFor="useCrypt" className="text-sm text-(--surface-muted) cursor-pointer">
                   Use as crypt remote
                 </label>
               </div>
               {useCrypt && (
-                <p className="text-xs text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-800 p-2 rounded">
+                <p className="text-xs text-(--outline) bg-(--surface-low) p-2 rounded-lg">
                   Will create a crypt: prefix for transparent encryption. Make sure you have a crypt remote configured
                   in rclone.
                 </p>
@@ -208,27 +219,27 @@ export function RcloneImportModal({ isOpen, onClose, onSuccess, onShowMedia }: R
 
               {/* Live indexing progress from SSE */}
               {activeJob && (
-                <div className="p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
+                <div className="p-3 bg-(--secondary-container)/30 rounded-xl">
                   <div className="flex items-center justify-between mb-2">
-                    <p className="text-sm text-blue-800 dark:text-blue-300">
+                    <p className="text-sm text-(--on-secondary-container)">
                       {activeJob.status === 'completed'
                         ? 'Indexing complete'
                         : activeJob.stage === 'discovery'
-                        ? `Discovering files${activeJob.filesFound ? ` — ${activeJob.filesFound} found` : ''}…`
-                        : activeJob.done !== undefined && activeJob.total
-                        ? `Hashing ${activeJob.done}/${activeJob.total}`
-                        : 'Queued…'}
+                          ? `Discovering files${activeJob.filesFound ? ` — ${activeJob.filesFound} found` : ''}…`
+                          : activeJob.done !== undefined && activeJob.total
+                            ? `Hashing ${activeJob.done}/${activeJob.total}`
+                            : 'Queued…'}
                     </p>
                     {activeJob.total ? (
-                      <p className="text-xs font-semibold text-blue-700 dark:text-blue-300">
+                      <p className="text-xs font-semibold text-(--on-secondary-container)">
                         {Math.round(((activeJob.done ?? 0) / activeJob.total) * 100)}%
                       </p>
                     ) : null}
                   </div>
                   {activeJob.total ? (
-                    <div className="h-2 w-full rounded-full bg-blue-100 dark:bg-blue-950/60 overflow-hidden">
+                    <div className="h-2 w-full rounded-full bg-(--secondary-container)/50 overflow-hidden">
                       <div
-                        className="h-full bg-blue-600 transition-all duration-300 ease-out"
+                        className="h-full bg-(--secondary) transition-all duration-300 ease-out"
                         style={{ width: `${Math.round(((activeJob.done ?? 0) / activeJob.total) * 100)}%` }}
                       />
                     </div>
@@ -238,8 +249,8 @@ export function RcloneImportModal({ isOpen, onClose, onSuccess, onShowMedia }: R
 
               {/* Error Message */}
               {error && (
-                <div className="p-3 bg-red-50 dark:bg-red-900/20 rounded-lg border border-red-200 dark:border-red-800">
-                  <p className="text-sm text-red-800 dark:text-red-700">{error}</p>
+                <div className="p-3 bg-(--error)/10 rounded-xl">
+                  <p className="text-sm text-(--error)">{error}</p>
                 </div>
               )}
             </div>
@@ -247,18 +258,18 @@ export function RcloneImportModal({ isOpen, onClose, onSuccess, onShowMedia }: R
         </div>
 
         {/* Footer */}
-        <div className="border-t border-gray-200 dark:border-gray-700 p-4 flex gap-2 sticky bottom-0 bg-white dark:bg-gray-900">
+        <div className="bg-(--surface-low) rounded-b-2xl px-4 py-3 flex gap-2 shrink-0">
           <button
             onClick={onClose}
             disabled={isValidating || isAdding}
-            className="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            className="flex-1 px-4 py-2 rounded-xl bg-(--surface-high) hover:bg-(--surface-highest) text-(--surface-ink) transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             Cancel
           </button>
           {activeJob ? (
             <button
               onClick={() => { onShowMedia?.(); onClose(); }}
-              className="flex-1 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors font-medium flex items-center justify-center gap-2"
+              className="flex-1 px-4 py-2 bg-(--primary) hover:opacity-90 text-(--on-primary) rounded-xl transition-opacity font-medium flex items-center justify-center gap-2"
             >
               <Play size={16} />
               Show Media
@@ -268,7 +279,7 @@ export function RcloneImportModal({ isOpen, onClose, onSuccess, onShowMedia }: R
               <button
                 onClick={handleValidate}
                 disabled={isValidating || isAdding || !selectedRemote}
-                className="flex-1 px-4 py-2 bg-yellow-600 hover:bg-yellow-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white rounded-lg transition-colors font-medium flex items-center justify-center gap-2"
+                className="flex-1 px-4 py-2 bg-(--secondary-container) hover:opacity-80 text-(--on-secondary-container) disabled:opacity-50 disabled:cursor-not-allowed rounded-xl transition-opacity font-medium flex items-center justify-center gap-2"
               >
                 {isValidating ? <Loader size={16} className="animate-spin" /> : null}
                 {isValidating ? 'Validating...' : 'Validate'}
@@ -276,7 +287,7 @@ export function RcloneImportModal({ isOpen, onClose, onSuccess, onShowMedia }: R
               <button
                 onClick={handleAdd}
                 disabled={isValidating || isAdding || !selectedRemote}
-                className="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white rounded-lg transition-colors font-medium flex items-center justify-center gap-2"
+                className="flex-1 px-4 py-2 bg-(--primary) hover:opacity-90 text-(--on-primary) disabled:opacity-50 disabled:cursor-not-allowed rounded-xl transition-opacity font-medium flex items-center justify-center gap-2"
               >
                 {isAdding ? <Loader size={16} className="animate-spin" /> : null}
                 {isAdding ? 'Adding...' : 'Add'}

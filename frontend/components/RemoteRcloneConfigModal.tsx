@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
+import { authenticatedFetch, getApiBase } from '@/lib/api';
 
 interface RemoteRcloneConfig {
   host: string;
@@ -19,6 +20,7 @@ export default function RemoteRcloneConfigModal({
   onClose,
   onConfigured,
 }: RemoteRcloneConfigModalProps) {
+  const API_URL = getApiBase();
   const [config, setConfig] = useState<RemoteRcloneConfig>({
     host: '',
     port: 5572,
@@ -36,7 +38,7 @@ export default function RemoteRcloneConfigModal({
   useEffect(() => {
     const loadConfig = async () => {
       try {
-        const response = await fetch('/api/rclone/remote-config');
+        const response = await authenticatedFetch(`${API_URL}/api/rclone/remote-config`);
         if (response.ok) {
           const data = await response.json();
           if (data.enabled) {
@@ -64,7 +66,7 @@ export default function RemoteRcloneConfigModal({
     setMessage('');
 
     try {
-      const response = await fetch('/api/rclone/remote-config/test', {
+      const response = await authenticatedFetch(`${API_URL}/api/rclone/remote-config/test`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -94,7 +96,7 @@ export default function RemoteRcloneConfigModal({
     setMessage('');
 
     try {
-      const response = await fetch('/api/rclone/remote-config/set', {
+      const response = await authenticatedFetch(`${API_URL}/api/rclone/remote-config/set`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -132,7 +134,7 @@ export default function RemoteRcloneConfigModal({
     setMessage('');
 
     try {
-      const response = await fetch('/api/rclone/remote-config/disable', {
+      const response = await authenticatedFetch(`${API_URL}/api/rclone/remote-config/disable`, {
         method: 'POST',
       });
 
@@ -162,17 +164,17 @@ export default function RemoteRcloneConfigModal({
 
   return (
     <div
-      className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/50 px-4"
+      className="fixed inset-0 z-1000 flex items-center justify-center bg-black/50 px-4"
       onClick={onClose}
     >
       <div
-        className="flex max-h-[90vh] w-full max-w-[500px] flex-col overflow-y-auto rounded-xl border border-white/10 bg-neutral-900 text-neutral-100 shadow-2xl"
+        className="flex max-h-[90vh] w-full max-w-125 flex-col overflow-y-auto rounded-2xl bg-(--surface-lowest) text-(--surface-ink) shadow-(--ambient-shadow)"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex shrink-0 items-center justify-between border-b border-white/10 px-5 py-4">
-          <h2 className="font-serif text-xl tracking-tight">Configure Android rclone Daemon</h2>
+        <div className="flex shrink-0 items-center justify-between bg-(--surface-low) rounded-t-2xl px-5 py-4">
+          <h2 className="font-serif text-xl tracking-tight text-(--surface-ink)">Configure Android rclone Daemon</h2>
           <button
-            className="flex h-8 w-8 items-center justify-center rounded-md text-xl text-neutral-300 transition-colors hover:bg-white/10 hover:text-neutral-100"
+            className="flex h-8 w-8 items-center justify-center rounded-lg text-xl text-(--outline) transition-colors hover:bg-(--surface-high) hover:text-(--surface-ink)"
             onClick={onClose}
           >
             ✕
@@ -180,13 +182,13 @@ export default function RemoteRcloneConfigModal({
         </div>
 
         <div className="flex-1 overflow-y-auto px-5 py-4">
-          <p className="mb-5 text-sm text-neutral-300">
+          <p className="mb-5 text-sm text-(--surface-muted)">
             Connect to an rclone daemon running on Android (via Termux). The daemon should be
             accessible on your local network.
           </p>
 
           <div className="mb-4">
-            <label htmlFor="host" className="mb-1.5 block text-sm font-semibold text-neutral-100">
+            <label htmlFor="host" className="mb-1.5 block text-sm font-semibold text-(--surface-ink)">
               Host / IP Address *
             </label>
             <input
@@ -196,16 +198,16 @@ export default function RemoteRcloneConfigModal({
               value={config.host}
               onChange={handleChange}
               placeholder="e.g., 192.168.1.100 or rclone-device.local"
-              className="w-full rounded-md border border-white/15 bg-neutral-950 px-3 py-2.5 text-sm text-neutral-100 placeholder:text-neutral-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300"
+              className="w-full rounded-lg bg-(--surface-highest) px-3 py-2.5 text-sm text-(--surface-ink) placeholder:text-(--outline) focus:outline-none focus:ring-1 focus:ring-(--primary)/30"
               required
             />
-            <small className="mt-1 block text-xs text-neutral-400">
+            <small className="mt-1 block text-xs text-(--outline)">
               IP address or hostname of Android device
             </small>
           </div>
 
           <div className="mb-4">
-            <label htmlFor="port" className="mb-1.5 block text-sm font-semibold text-neutral-100">
+            <label htmlFor="port" className="mb-1.5 block text-sm font-semibold text-(--surface-ink)">
               Port
             </label>
             <input
@@ -216,13 +218,13 @@ export default function RemoteRcloneConfigModal({
               onChange={handleChange}
               min="1"
               max="65535"
-              className="w-full rounded-md border border-white/15 bg-neutral-950 px-3 py-2.5 text-sm text-neutral-100 placeholder:text-neutral-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300"
+              className="w-full rounded-lg bg-(--surface-highest) px-3 py-2.5 text-sm text-(--surface-ink) placeholder:text-(--outline) focus:outline-none focus:ring-1 focus:ring-(--primary)/30"
             />
-            <small className="mt-1 block text-xs text-neutral-400">Default rclone RPC port: 5572</small>
+            <small className="mt-1 block text-xs text-(--outline)">Default rclone RPC port: 5572</small>
           </div>
 
           <div className="mb-4">
-            <label htmlFor="username" className="mb-1.5 block text-sm font-semibold text-neutral-100">
+            <label htmlFor="username" className="mb-1.5 block text-sm font-semibold text-(--surface-ink)">
               Username (optional)
             </label>
             <input
@@ -232,12 +234,12 @@ export default function RemoteRcloneConfigModal({
               value={config.username}
               onChange={handleChange}
               placeholder="rclone auth username"
-              className="w-full rounded-md border border-white/15 bg-neutral-950 px-3 py-2.5 text-sm text-neutral-100 placeholder:text-neutral-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300"
+              className="w-full rounded-lg bg-(--surface-highest) px-3 py-2.5 text-sm text-(--surface-ink) placeholder:text-(--outline) focus:outline-none focus:ring-1 focus:ring-(--primary)/30"
             />
           </div>
 
           <div className="mb-4">
-            <label htmlFor="password" className="mb-1.5 block text-sm font-semibold text-neutral-100">
+            <label htmlFor="password" className="mb-1.5 block text-sm font-semibold text-(--surface-ink)">
               Password (optional)
             </label>
             <input
@@ -247,59 +249,59 @@ export default function RemoteRcloneConfigModal({
               value={config.password}
               onChange={handleChange}
               placeholder="rclone auth password"
-              className="w-full rounded-md border border-white/15 bg-neutral-950 px-3 py-2.5 text-sm text-neutral-100 placeholder:text-neutral-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300"
+              className="w-full rounded-lg bg-(--surface-highest) px-3 py-2.5 text-sm text-(--surface-ink) placeholder:text-(--outline) focus:outline-none focus:ring-1 focus:ring-(--primary)/30"
             />
           </div>
 
           {message && (
-            <div className="mb-4 rounded-md border border-emerald-400/20 bg-emerald-500/15 px-3 py-2 text-sm text-emerald-300">
+            <div className="mb-4 rounded-xl bg-(--secondary-container)/30 px-3 py-2 text-sm text-(--on-secondary-container)">
               {message}
             </div>
           )}
           {error && (
-            <div className="mb-4 rounded-md border border-red-400/20 bg-red-500/15 px-3 py-2 text-sm text-red-300">
+            <div className="mb-4 rounded-xl bg-(--error)/10 px-3 py-2 text-sm text-(--error)">
               {error}
             </div>
           )}
 
-          <div className="mt-5 rounded-lg border border-white/10 bg-neutral-950/80 p-4 text-sm">
-            <h4 className="mb-3 text-sm font-semibold text-neutral-100">Android Installation Guide (Termux)</h4>
-            <ol className="list-decimal space-y-2 pl-5 text-neutral-300">
+          <div className="mt-5 rounded-2xl bg-(--surface-low) p-4 text-sm">
+            <h4 className="mb-3 text-sm font-semibold text-(--surface-ink)">Android Installation Guide (Termux)</h4>
+            <ol className="list-decimal space-y-2 pl-5 text-(--surface-muted)">
               <li>Install Termux from F-Droid (recommended) and open it once.</li>
               <li>Run setup commands in Termux:</li>
             </ol>
-            <pre className="my-3 overflow-x-auto rounded-md bg-black/50 px-3 py-2 text-xs leading-relaxed text-neutral-100">pkg update && pkg upgrade -y
-pkg install rclone -y
-rclone config</pre>
-            <p className="my-2 text-xs text-neutral-300">
+            <pre className="my-3 overflow-x-auto rounded-xl bg-(--surface-highest) px-3 py-2 text-xs leading-relaxed text-(--surface-ink)">pkg update && pkg upgrade -y
+              pkg install rclone -y
+              rclone config</pre>
+            <p className="my-2 text-xs text-(--surface-muted)">
               Create your remote in{' '}
-              <code className="rounded bg-white/10 px-1.5 py-0.5 text-neutral-100">rclone config</code>{' '}
+              <code className="rounded bg-(--surface-high) px-1.5 py-0.5 text-(--surface-ink)">rclone config</code>{' '}
               (SFTP/WebDAV/Drive/etc). For encrypted remotes, create a{' '}
-              <code className="rounded bg-white/10 px-1.5 py-0.5 text-neutral-100">crypt</code> remote that wraps
+              <code className="rounded bg-(--surface-high) px-1.5 py-0.5 text-(--surface-ink)">crypt</code> remote that wraps
               your base remote.
             </p>
-            <ol start={3} className="list-decimal space-y-2 pl-5 text-neutral-300">
+            <ol start={3} className="list-decimal space-y-2 pl-5 text-(--surface-muted)">
               <li>Start rclone daemon in Termux:</li>
             </ol>
-            <pre className="my-3 overflow-x-auto rounded-md bg-black/50 px-3 py-2 text-xs leading-relaxed text-neutral-100">rclone rcd --rc-addr=0.0.0.0:5572 --rc-no-auth</pre>
-            <p className="my-2 text-xs text-neutral-300">More secure option (recommended on shared networks):</p>
-            <pre className="my-3 overflow-x-auto rounded-md bg-black/50 px-3 py-2 text-xs leading-relaxed text-neutral-100">rclone rcd --rc-addr=0.0.0.0:5572 --rc-user=myuser --rc-pass=mypassword</pre>
-            <ol start={4} className="list-decimal space-y-2 pl-5 text-neutral-300">
+            <pre className="my-3 overflow-x-auto rounded-xl bg-(--surface-highest) px-3 py-2 text-xs leading-relaxed text-(--surface-ink)">rclone rcd --rc-addr=0.0.0.0:5572 --rc-no-auth</pre>
+            <p className="my-2 text-xs text-(--surface-muted)">More secure option (recommended on shared networks):</p>
+            <pre className="my-3 overflow-x-auto rounded-xl bg-(--surface-highest) px-3 py-2 text-xs leading-relaxed text-(--surface-ink)">rclone rcd --rc-addr=0.0.0.0:5572 --rc-user=myuser --rc-pass=mypassword</pre>
+            <ol start={4} className="list-decimal space-y-2 pl-5 text-(--surface-muted)">
               <li>Find Android phone IP on Wi-Fi (same network as this app).</li>
               <li>Enter Host and Port above, then click <strong>Test Connection</strong>.</li>
               <li>Click <strong>Save Configuration</strong>, then add/import rclone remotes.</li>
             </ol>
-            <p className="mt-2 text-xs text-neutral-300">
+            <p className="mt-2 text-xs text-(--surface-muted)">
               Tip: keep Termux awake while indexing large remote folders. If connection fails, verify phone and server
               are on the same LAN and port{' '}
-              <code className="rounded bg-white/10 px-1.5 py-0.5 text-neutral-100">5572</code> is reachable.
+              <code className="rounded bg-(--surface-high) px-1.5 py-0.5 text-(--surface-ink)">5572</code> is reachable.
             </p>
           </div>
         </div>
 
-        <div className="flex shrink-0 flex-wrap justify-end gap-2 border-t border-white/10 px-5 py-4">
+        <div className="flex shrink-0 flex-wrap justify-end gap-2 bg-(--surface-low) rounded-b-2xl px-5 py-4">
           <button
-            className="rounded-md bg-amber-500 px-4 py-2 text-sm font-semibold text-neutral-950 transition-colors hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-50"
+            className="rounded-xl bg-(--secondary-container) px-4 py-2 text-sm font-semibold text-(--on-secondary-container) transition-opacity hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-50"
             onClick={handleTestConnection}
             disabled={!config.host || testing || loading}
             title="Test connection to rclone daemon"
@@ -307,7 +309,7 @@ rclone config</pre>
             {testing ? 'Testing...' : 'Test Connection'}
           </button>
           <button
-            className="rounded-md bg-red-500 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-red-400 disabled:cursor-not-allowed disabled:opacity-50"
+            className="rounded-xl bg-(--error)/15 px-4 py-2 text-sm font-semibold text-(--error) transition-opacity hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-50"
             onClick={handleDisable}
             disabled={!config.enabled || loading}
             title="Disable remote rclone and use local mode"
@@ -315,14 +317,14 @@ rclone config</pre>
             Disable Remote
           </button>
           <button
-            className="rounded-md bg-sky-500 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-sky-400 disabled:cursor-not-allowed disabled:opacity-50"
+            className="rounded-xl bg-(--primary) px-4 py-2 text-sm font-semibold text-(--on-primary) transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
             onClick={handleSave}
             disabled={!config.host || loading}
           >
             {loading ? 'Saving...' : 'Save Configuration'}
           </button>
           <button
-            className="rounded-md bg-white/10 px-4 py-2 text-sm font-semibold text-neutral-200 transition-colors hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-50"
+            className="rounded-xl bg-(--surface-high) px-4 py-2 text-sm font-semibold text-(--surface-ink) transition-colors hover:bg-(--surface-highest) disabled:cursor-not-allowed disabled:opacity-50"
             onClick={onClose}
             disabled={loading}
           >

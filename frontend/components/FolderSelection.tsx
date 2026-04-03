@@ -142,10 +142,10 @@ export default function FolderSelection({ onFolderSelected }: FolderSelectionPro
               {activeJob.status === 'completed'
                 ? 'Indexing complete'
                 : activeJob.stage === 'discovery'
-                ? `Discovering files${activeJob.filesFound ? ` — ${activeJob.filesFound} found` : ''}…`
-                : activeJob.done !== undefined && activeJob.total
-                ? `Hashing ${activeJob.done}/${activeJob.total}`
-                : 'Queued…'}
+                  ? `Discovering files${activeJob.filesFound ? ` — ${activeJob.filesFound} found` : ''}…`
+                  : activeJob.done !== undefined && activeJob.total
+                    ? `Hashing ${activeJob.done}/${activeJob.total}`
+                    : 'Queued…'}
             </p>
             {activeJob.total ? (
               <div className="h-1.5 w-full rounded-full bg-blue-100 dark:bg-blue-950/60 overflow-hidden">
@@ -172,14 +172,14 @@ export default function FolderSelection({ onFolderSelected }: FolderSelectionPro
         <button
           onClick={() => setShowBrowser(true)}
           disabled={isLoading}
-          className="focus-ring w-full bg-linear-to-r from-[var(--primary)] to-[var(--primary-container)] disabled:bg-(--outline) text-[var(--on-primary)] font-semibold py-4 px-6 rounded-full transition-opacity"
+          className="focus-ring w-full bg-linear-to-r from-(--primary) to-(--primary-container) disabled:bg-(--outline) text-(--on-primary) font-semibold py-4 px-6 rounded-full transition-opacity"
         >
           Browse Host Folders
         </button>
 
         <RemoteSourcesSection
           className="w-full"
-          titleClassName="text-lg font-semibold text-[var(--surface-ink)] mb-3 flex items-center gap-2"
+          titleClassName="text-lg font-semibold text-(--surface-ink) mb-3 flex items-center gap-2"
           containerClassName="surface-panel"
           onSourcesUpdated={() => {
             window.location.reload();
@@ -187,12 +187,12 @@ export default function FolderSelection({ onFolderSelected }: FolderSelectionPro
         />
 
         {error && (
-          <div className="w-full p-4 bg-[var(--error)]/10 rounded-2xl">
-            <p className="text-sm text-[var(--error)]">{error}</p>
+          <div className="w-full p-4 bg-(--error)/10 rounded-2xl">
+            <p className="text-sm text-(--error)">{error}</p>
           </div>
         )}
 
-        <div className="text-sm text-[var(--surface-muted)] text-center">
+        <div className="text-sm text-(--surface-muted) text-center">
           <p>💡 All media stays local and private on your host computer</p>
         </div>
       </div>
@@ -204,7 +204,7 @@ export default function FolderSelection({ onFolderSelected }: FolderSelectionPro
     <div className="flex flex-col w-full max-w-2xl h-150">
       <div className="flex flex-col gap-4 mb-4">
         <div className="flex items-center justify-between">
-          <h2 className="text-2xl font-bold text-gray-900 dark:text-white">
+          <h2 className="text-2xl font-bold text-(--surface-ink)">
             Browse Folders
           </h2>
           <button
@@ -213,7 +213,7 @@ export default function FolderSelection({ onFolderSelected }: FolderSelectionPro
               setCurrentPath('');
               setDirectories([]);
             }}
-            className="text-sm text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white"
+            className="text-sm text-(--outline) hover:text-(--surface-ink)"
           >
             Cancel
           </button>
@@ -221,9 +221,9 @@ export default function FolderSelection({ onFolderSelected }: FolderSelectionPro
 
         {/* Current path display */}
         {currentPath && (
-          <div className="flex items-center gap-2 p-3 bg-gray-100 dark:bg-gray-800 rounded-lg overflow-x-auto">
-            <Folder size={16} className="shrink-0" />
-            <span className="text-sm font-mono text-gray-900 dark:text-white truncate">
+          <div className="flex items-center gap-2 p-3 bg-(--surface-high) rounded-xl overflow-x-auto">
+            <Folder size={16} className="shrink-0 text-(--outline)" />
+            <span className="text-sm font-mono text-(--surface-ink) truncate">
               {currentPath}
             </span>
           </div>
@@ -234,7 +234,7 @@ export default function FolderSelection({ onFolderSelected }: FolderSelectionPro
           <button
             onClick={() => handleSelectFolder(currentPath)}
             disabled={isLoading}
-            className="w-full bg-green-600 hover:bg-green-700 disabled:bg-gray-400 text-white font-semibold py-3 px-4 rounded-lg transition-colors"
+            className="w-full bg-(--primary) hover:opacity-90 disabled:opacity-50 text-(--on-primary) font-semibold py-3 px-4 rounded-full transition-opacity"
           >
             {isLoading ? 'Setting...' : 'Use This Folder'}
           </button>
@@ -242,58 +242,58 @@ export default function FolderSelection({ onFolderSelected }: FolderSelectionPro
       </div>
 
       {error && (
-        <div className="mb-4 p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
-          <p className="text-sm text-red-800 dark:text-red-200">{error}</p>
+        <div className="mb-4 p-3 bg-(--error)/10 rounded-xl">
+          <p className="text-sm text-(--error)">{error}</p>
         </div>
       )}
 
       {/* Directory listing */}
-      <div className="flex-1 overflow-y-auto border border-gray-200 dark:border-gray-700 rounded-lg">
+      <div className="flex-1 overflow-y-auto bg-(--surface-lowest) rounded-2xl">
         {isLoading ? (
           <div className="flex items-center justify-center h-full">
-            <div className="w-8 h-8 border-4 border-gray-300 dark:border-gray-600 border-t-blue-600 rounded-full animate-spin"></div>
+            <div className="w-8 h-8 border-4 border-(--outline-variant) border-t-[var(--secondary)] rounded-full animate-spin"></div>
           </div>
         ) : !currentPath ? (
           // Show root directories
-          <div className="divide-y divide-gray-200 dark:divide-gray-700">
+          <div className="divide-y divide-[var(--outline-variant)]/20">
             {roots.map((root) => (
               <button
                 key={root.path}
                 onClick={() => loadDirectory(root.path)}
-                className="w-full flex items-center gap-3 p-4 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors text-left"
+                className="w-full flex items-center gap-3 p-4 hover:bg-(--surface-low) transition-colors text-left"
               >
                 {root.type === 'home' ? (
-                  <Home size={20} className="text-blue-600 dark:text-blue-400 shrink-0" />
+                  <Home size={20} className="text-(--secondary) shrink-0" />
                 ) : root.type === 'system' ? (
-                  <HardDrive size={20} className="text-gray-600 dark:text-gray-400 shrink-0" />
+                  <HardDrive size={20} className="text-(--outline) shrink-0" />
                 ) : (
-                  <Folder size={20} className="text-gray-600 dark:text-gray-400 shrink-0" />
+                  <Folder size={20} className="text-(--outline) shrink-0" />
                 )}
-                <span className="flex-1 font-medium text-gray-900 dark:text-white">
+                <span className="flex-1 font-medium text-(--surface-ink)">
                   {root.name}
                 </span>
-                <ChevronRight size={20} className="text-gray-400 shrink-0" />
+                <ChevronRight size={20} className="text-(--outline) shrink-0" />
               </button>
             ))}
           </div>
         ) : (
           // Show directory contents
-          <div className="divide-y divide-gray-200 dark:divide-gray-700">
+          <div className="divide-y divide-[var(--outline-variant)]/20">
             {/* Parent directory button */}
             {parentPath && (
               <button
                 onClick={() => loadDirectory(parentPath)}
-                className="w-full flex items-center gap-3 p-4 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors text-left"
+                className="w-full flex items-center gap-3 p-4 hover:bg-(--surface-low) transition-colors text-left"
               >
-                <Folder size={20} className="text-gray-600 dark:text-gray-400 shrink-0" />
-                <span className="flex-1 font-medium text-gray-900 dark:text-white">..</span>
-                <ChevronRight size={20} className="text-gray-400 shrink-0" />
+                <Folder size={20} className="text-(--outline) shrink-0" />
+                <span className="flex-1 font-medium text-(--surface-ink)">..</span>
+                <ChevronRight size={20} className="text-(--outline) shrink-0" />
               </button>
             )}
 
             {/* Subdirectories */}
             {directories.length === 0 ? (
-              <div className="p-8 text-center text-gray-500 dark:text-gray-400">
+              <div className="p-8 text-center text-(--outline)">
                 No subdirectories found
               </div>
             ) : (
@@ -303,22 +303,22 @@ export default function FolderSelection({ onFolderSelected }: FolderSelectionPro
                   onClick={() => dir.accessible && loadDirectory(dir.path)}
                   disabled={!dir.accessible}
                   className={`w-full flex items-center gap-3 p-4 transition-colors text-left ${dir.accessible
-                    ? 'hover:bg-gray-50 dark:hover:bg-gray-800'
-                    : 'opacity-50 cursor-not-allowed'
+                      ? 'hover:bg-(--surface-low)'
+                      : 'opacity-50 cursor-not-allowed'
                     }`}
                 >
                   <Folder
                     size={20}
                     className={`shrink-0 ${dir.accessible
-                      ? 'text-gray-600 dark:text-gray-400'
-                      : 'text-gray-400 dark:text-gray-600'
+                        ? 'text-(--outline)'
+                        : 'text-(--outline-variant)'
                       }`}
                   />
-                  <span className="flex-1 text-gray-900 dark:text-white truncate">
+                  <span className="flex-1 text-(--surface-ink) truncate">
                     {dir.name}
                   </span>
                   {dir.accessible && (
-                    <ChevronRight size={20} className="text-gray-400 shrink-0" />
+                    <ChevronRight size={20} className="text-(--outline) shrink-0" />
                   )}
                 </button>
               ))

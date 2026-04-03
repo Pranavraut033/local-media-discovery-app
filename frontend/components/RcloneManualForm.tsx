@@ -158,16 +158,16 @@ export function RcloneManualForm({ isOpen, onClose, onSuccess }: RcloneManualFor
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white dark:bg-gray-900 rounded-lg max-w-md w-full max-h-[90vh] flex flex-col">
+      <div className="bg-(--surface-lowest) rounded-2xl max-w-md w-full max-h-[90vh] flex flex-col shadow-(--ambient-shadow)">
         {/* Header */}
-        <div className="border-b border-gray-200 dark:border-gray-700 p-4 flex items-center justify-between sticky top-0">
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-white flex items-center gap-2">
-            <Plus size={20} />
+        <div className="bg-(--surface-low) rounded-t-2xl px-4 py-3 flex items-center justify-between shrink-0">
+          <h2 className="text-base font-semibold text-(--surface-ink) flex items-center gap-2">
+            <Plus size={18} />
             Add Remote Manually
           </h2>
           <button
             onClick={onClose}
-            className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 transition-colors"
+            className="text-(--outline) hover:text-(--surface-ink) transition-colors"
             aria-label="Close"
           >
             <X size={20} />
@@ -178,7 +178,7 @@ export function RcloneManualForm({ isOpen, onClose, onSuccess }: RcloneManualFor
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
           {/* Remote Type */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+            <label className="block text-sm font-medium text-(--surface-muted) mb-2">
               Remote Type
             </label>
             <select
@@ -187,7 +187,7 @@ export function RcloneManualForm({ isOpen, onClose, onSuccess }: RcloneManualFor
                 setRemoteType(e.target.value);
                 setCredentials({});
               }}
-              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full px-3 py-2 rounded-lg bg-(--surface-highest) text-(--surface-ink) focus:outline-none focus:ring-1 focus:ring-(--primary)/30"
             >
               {REMOTE_TYPES.map((type) => (
                 <option key={type.value} value={type.value}>
@@ -199,7 +199,7 @@ export function RcloneManualForm({ isOpen, onClose, onSuccess }: RcloneManualFor
 
           {/* Remote Name */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+            <label className="block text-sm font-medium text-(--surface-muted) mb-2">
               Remote Name
             </label>
             <input
@@ -207,19 +207,19 @@ export function RcloneManualForm({ isOpen, onClose, onSuccess }: RcloneManualFor
               value={remoteName}
               onChange={(e) => setRemoteName(e.target.value)}
               placeholder="my-sftp-server"
-              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full px-3 py-2 rounded-lg bg-(--surface-highest) text-(--surface-ink) placeholder:text-(--outline) focus:outline-none focus:ring-1 focus:ring-(--primary)/30"
             />
-            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+            <p className="text-xs text-(--outline) mt-1">
               A friendly name for this remote (letters, numbers, hyphens)
             </p>
           </div>
 
           {/* Credentials Fields */}
           {fields.length > 0 && (
-            <div className="space-y-3 p-3 bg-gray-50 dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700">
+            <div className="space-y-3 p-3 bg-(--surface-low) rounded-xl">
               {fields.map((field) => (
                 <div key={field.name}>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  <label className="block text-sm font-medium text-(--surface-muted) mb-1">
                     {field.label}
                   </label>
                   <input
@@ -227,7 +227,7 @@ export function RcloneManualForm({ isOpen, onClose, onSuccess }: RcloneManualFor
                     value={credentials[field.name] || (field.defaultValue ? field.defaultValue : '')}
                     onChange={(e) => handleCredentialChange(field.name, e.target.value)}
                     placeholder={field.placeholder}
-                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="w-full px-3 py-2 rounded-lg bg-(--surface-highest) text-(--surface-ink) placeholder:text-(--outline) text-sm focus:outline-none focus:ring-1 focus:ring-(--primary)/30"
                   />
                 </div>
               ))}
@@ -236,7 +236,7 @@ export function RcloneManualForm({ isOpen, onClose, onSuccess }: RcloneManualFor
 
           {/* Base Path */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+            <label className="block text-sm font-medium text-(--surface-muted) mb-2">
               Base Path
             </label>
             <input
@@ -244,9 +244,9 @@ export function RcloneManualForm({ isOpen, onClose, onSuccess }: RcloneManualFor
               value={basePath}
               onChange={(e) => setBasePath(e.target.value)}
               placeholder="/"
-              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full px-3 py-2 rounded-lg bg-(--surface-highest) text-(--surface-ink) placeholder:text-(--outline) focus:outline-none focus:ring-1 focus:ring-(--primary)/30"
             />
-            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+            <p className="text-xs text-(--outline) mt-1">
               Path within the remote to index (e.g., /media or /photos)
             </p>
           </div>
@@ -258,28 +258,28 @@ export function RcloneManualForm({ isOpen, onClose, onSuccess }: RcloneManualFor
               id="useCrypt"
               checked={useCrypt}
               onChange={(e) => setUseCrypt(e.target.checked)}
-              className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+              className="w-4 h-4 rounded cursor-pointer"
             />
-            <label htmlFor="useCrypt" className="text-sm text-gray-700 dark:text-gray-300 cursor-pointer">
+            <label htmlFor="useCrypt" className="text-sm text-(--surface-muted) cursor-pointer">
               Wrap with crypt remote
             </label>
           </div>
           {useCrypt && (
-            <p className="text-xs text-gray-500 dark:text-gray-400 bg-blue-50 dark:bg-blue-900/20 p-2 rounded border border-blue-200 dark:border-blue-800">
+            <p className="text-xs text-(--outline) bg-(--secondary-container)/20 p-2 rounded-lg">
               Creates a transparent encryption layer. The remote will be accessible as crypt:{remoteName}.
             </p>
           )}
 
           {/* Add Progress */}
           {isAdding && (
-            <div className="p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
+            <div className="p-3 bg-(--secondary-container)/30 rounded-xl">
               <div className="flex items-center justify-between mb-2">
-                <p className="text-sm text-blue-800 dark:text-blue-300">{addStatus || 'Adding source...'}</p>
-                <p className="text-xs font-semibold text-blue-700 dark:text-blue-300">{addProgress}%</p>
+                <p className="text-sm text-(--on-secondary-container)">{addStatus || 'Adding source...'}</p>
+                <p className="text-xs font-semibold text-(--on-secondary-container)">{addProgress}%</p>
               </div>
-              <div className="h-2 w-full rounded-full bg-blue-100 dark:bg-blue-950/60 overflow-hidden">
+              <div className="h-2 w-full rounded-full bg-(--secondary-container)/50 overflow-hidden">
                 <div
-                  className="h-full bg-blue-600 transition-all duration-300 ease-out"
+                  className="h-full bg-(--secondary) transition-all duration-300 ease-out"
                   style={{ width: `${addProgress}%` }}
                 />
               </div>
@@ -288,32 +288,32 @@ export function RcloneManualForm({ isOpen, onClose, onSuccess }: RcloneManualFor
 
           {/* Validation Success */}
           {validationSuccess && (
-            <div className="p-3 bg-green-50 dark:bg-green-900/20 rounded-lg border border-green-200 dark:border-green-800">
-              <p className="text-sm text-green-800 dark:text-green-700">✓ Remote validated successfully!</p>
+            <div className="p-3 bg-(--secondary-container)/20 rounded-xl">
+              <p className="text-sm text-(--on-secondary-container)">✓ Remote validated successfully!</p>
             </div>
           )}
 
           {/* Error Message */}
           {error && (
-            <div className="p-3 bg-red-50 dark:bg-red-900/20 rounded-lg border border-red-200 dark:border-red-800">
-              <p className="text-sm text-red-800 dark:text-red-700">{error}</p>
+            <div className="p-3 bg-(--error)/10 rounded-xl">
+              <p className="text-sm text-(--error)">{error}</p>
             </div>
           )}
         </div>
 
         {/* Footer */}
-        <div className="border-t border-gray-200 dark:border-gray-700 p-4 flex gap-2 sticky bottom-0 bg-white dark:bg-gray-900">
+        <div className="bg-(--surface-low) rounded-b-2xl px-4 py-3 flex gap-2 shrink-0">
           <button
             onClick={onClose}
             disabled={isValidating || isAdding}
-            className="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            className="flex-1 px-4 py-2 rounded-xl bg-(--surface-high) hover:bg-(--surface-highest) text-(--surface-ink) transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             Cancel
           </button>
           <button
             onClick={handleValidate}
             disabled={isValidating || isAdding || !remoteName}
-            className="flex-1 px-4 py-2 bg-yellow-600 hover:bg-yellow-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white rounded-lg transition-colors font-medium flex items-center justify-center gap-2"
+            className="flex-1 px-4 py-2 bg-(--secondary-container) hover:opacity-80 text-(--on-secondary-container) disabled:opacity-50 disabled:cursor-not-allowed rounded-xl transition-opacity font-medium flex items-center justify-center gap-2"
           >
             {isValidating ? <Loader size={16} className="animate-spin" /> : null}
             {isValidating ? 'Validating...' : 'Validate'}
@@ -321,7 +321,7 @@ export function RcloneManualForm({ isOpen, onClose, onSuccess }: RcloneManualFor
           <button
             onClick={handleAdd}
             disabled={isValidating || isAdding || !remoteName}
-            className="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white rounded-lg transition-colors font-medium flex items-center justify-center gap-2"
+            className="flex-1 px-4 py-2 bg-(--primary) hover:opacity-90 text-(--on-primary) disabled:opacity-50 disabled:cursor-not-allowed rounded-xl transition-opacity font-medium flex items-center justify-center gap-2"
           >
             {isAdding ? <Loader size={16} className="animate-spin" /> : null}
             {isAdding ? 'Adding...' : 'Add'}

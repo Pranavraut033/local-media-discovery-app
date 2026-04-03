@@ -12,6 +12,8 @@ import { useSources, useFolderTree, useHideFolderMutation } from '@/lib/hooks';
 import { FolderTreeView } from './FolderTreeView';
 import { RemoteSourcesSection } from './RemoteSourcesSection';
 import { useFullscreen } from '@/lib/useFullscreen';
+import { useUIStore } from '@/lib/stores/ui.store';
+import type { FeedSourceType } from '@/lib/stores/ui.store';
 
 interface AppStats {
   totalMedia: number;
@@ -31,6 +33,7 @@ export function Settings({ onBack, onViewHidden }: SettingsProps) {
   const API_URL = getApiBase();
   const [preferences, setLocalPreferences] = useState<ReturnType<typeof getPreferences> | null>(null);
   const { isFullscreen, toggleFullscreen } = useFullscreen();
+  const feedSourceType = useUIStore((s) => s.preferences.feedSourceType ?? 'local');
   const [stats, setStats] = useState<AppStats | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -124,6 +127,11 @@ export function Settings({ onBack, onViewHidden }: SettingsProps) {
     setLocalPreferences(updated);
     setPreferences({ showSourceBadge: !preferences.showSourceBadge });
     setTimeout(() => setIsSaving(false), 300);
+  };
+
+  const handleFeedSourceTypeChange = (type: FeedSourceType) => {
+    useUIStore.getState().setPreferences({ feedSourceType: type });
+    window.location.reload();
   };
 
   const handleResetRootFolder = async () => {
@@ -301,7 +309,7 @@ export function Settings({ onBack, onViewHidden }: SettingsProps) {
           </h2>
           <div className="p-4 bg-gray-50 dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700">
             <div className="mb-4 p-3 bg-white dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-700">
-  
+
               <p className="text-xs text-gray-500 dark:text-gray-400 font-medium mt-2 mb-1">Current Source</p>
               <p className="text-sm text-gray-900 dark:text-white font-mono break-all">
                 {currentSource ? `${currentSource.displayName} (${currentSource.id})` : 'No active source'}
@@ -462,6 +470,30 @@ export function Settings({ onBack, onViewHidden }: SettingsProps) {
                   }`}
               />
             </button>
+          </div>
+
+          {/* Feed Source Type */}
+          <div className="mb-6 p-4 bg-gray-50 dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700">
+            <p className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Feed Source</p>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">Choose which media sources appear in your feed. Changing this will reload the page.</p>
+            <div className="flex gap-3">
+              {(['local', 'remote', 'all'] as FeedSourceType[]).map((type) => {
+                const active = feedSourceType === type;
+                const labels: Record<FeedSourceType, string> = { local: 'Local', remote: 'Remote', all: 'All' };
+                return (
+                  <button
+                    key={type}
+                    onClick={() => handleFeedSourceTypeChange(type)}
+                    className={`flex-1 py-2 px-4 rounded-lg font-medium transition-all ${active
+                        ? 'bg-blue-600 text-white shadow-lg'
+                        : 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white border border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-600'
+                      }`}
+                  >
+                    {labels[type]}
+                  </button>
+                );
+              })}
+            </div>
           </div>
         </div>
 
