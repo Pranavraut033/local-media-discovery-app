@@ -7,6 +7,7 @@
 import { useState, useEffect } from 'react';
 import { FolderOpen, Clock } from 'lucide-react';
 import { getApiBase, authenticatedFetch } from '@/lib/api';
+import { setRootFolder } from '@/lib/storage';
 
 interface RecentFoldersProps {
   onFolderSelect?: (path: string, name: string) => void;
@@ -55,6 +56,7 @@ export function RecentFolders({ onFolderSelect }: RecentFoldersProps) {
 
       if (!response.ok) throw new Error('Failed to set root folder');
 
+      setRootFolder(path);
       onFolderSelect?.(path, name);
     } catch (error) {
       console.error('Failed to select folder:', error);
@@ -66,11 +68,11 @@ export function RecentFolders({ onFolderSelect }: RecentFoldersProps) {
   if (isLoading && recentFolders.length === 0) {
     return (
       <div className="mb-6 px-4">
-        <h2 className="text-lg font-semibold text-gray-900 dark:text-white flex items-center gap-2">
+        <h2 className="text-lg font-semibold text-(--surface-ink) flex items-center gap-2">
           <Clock size={20} />
           Recent Folders
         </h2>
-        <p className="text-sm text-gray-500 dark:text-gray-400 mt-2">Loading recent folders...</p>
+        <p className="text-sm text-(--outline) mt-2">Loading recent folders...</p>
       </div>
     );
   }
@@ -83,11 +85,11 @@ export function RecentFolders({ onFolderSelect }: RecentFoldersProps) {
     <div className="mb-6 px-4">
       {/* Header with title and clear button */}
       <div className="flex items-center justify-between mb-3">
-        <h2 className="text-lg font-semibold text-gray-900 dark:text-white flex items-center gap-2">
+        <h2 className="text-lg font-semibold text-(--surface-ink) flex items-center gap-2">
           <Clock size={20} />
           Recent Folders
         </h2>
-        <span className="text-xs text-gray-500 dark:text-gray-400">From your indexed history</span>
+        <span className="text-xs text-(--outline)">From your indexed history</span>
       </div>
 
       {/* Recent folders list */}
@@ -95,7 +97,7 @@ export function RecentFolders({ onFolderSelect }: RecentFoldersProps) {
         {recentFolders.map((folder) => (
           <div
             key={folder.path}
-            className="group relative bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4 hover:shadow-md transition-shadow cursor-pointer overflow-hidden"
+            className="group relative bg-(--surface-lowest) rounded-2xl p-4 hover:bg-(--surface-low) transition-colors cursor-pointer overflow-hidden"
           >
             <button
               onClick={() => handleSelectFolder(folder.path, folder.name)}
@@ -103,16 +105,16 @@ export function RecentFolders({ onFolderSelect }: RecentFoldersProps) {
               className="w-full text-left flex items-start gap-3 disabled:opacity-50"
             >
               <div className="shrink-0 mt-1">
-                <FolderOpen size={20} className="text-blue-600 dark:text-blue-400" />
+                <FolderOpen size={20} className="text-(--secondary)" />
               </div>
               <div className="flex-1 min-w-0">
-                <p className="font-medium text-gray-900 dark:text-white truncate">
+                <p className="font-medium text-(--surface-ink) truncate">
                   {folder.name || 'Unnamed Folder'}
                 </p>
-                <p className="text-xs text-gray-500 dark:text-gray-400 truncate mt-1">
+                <p className="text-xs text-(--surface-muted) truncate mt-1">
                   {folder.path}
                 </p>
-                <p className="text-xs text-gray-400 dark:text-gray-500 mt-2">
+                <p className="text-xs text-(--outline) mt-2">
                   Last indexed {new Date(folder.lastIndexedAt * 1000).toLocaleDateString()}
                 </p>
               </div>
