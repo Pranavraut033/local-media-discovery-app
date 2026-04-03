@@ -15,6 +15,7 @@ import {
   discoverAndCreatePendingRclone,
   finalizeRclonePendingFiles,
 } from '../services/rclone-indexer.js';
+import { invalidateFeedCache } from '../services/feed.js';
 
 async function processJob(job: { data: IndexingJobData }): Promise<void> {
   const { jobId, userId, type } = job.data;
@@ -91,6 +92,9 @@ async function processJob(job: { data: IndexingJobData }): Promise<void> {
     db.prepare(
       `UPDATE indexing_jobs SET status = 'completed', updated_at = ? WHERE id = ?`
     ).run(Math.floor(Date.now() / 1000), jobId);
+
+    // Invalidate cached feed rankings so the newly indexed files appear immediately.
+    invalidateFeedCache(userId);
 
     sseEventBus.emit(userId, { type: 'job_completed', jobId, payload: { success: true } });
   } catch (err) {
