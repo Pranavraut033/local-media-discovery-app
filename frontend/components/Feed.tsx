@@ -18,6 +18,7 @@ import {
   MEDIA_MASONRY_COLUMN_CLASS,
 } from '@/lib/layout';
 import { useIndexingStore } from '@/lib/stores/indexing.store';
+import { useUIStore } from '@/lib/stores/ui.store';
 
 export type FeedMode = 'reels' | 'feed';
 
@@ -33,6 +34,7 @@ export function Feed({ initialMode, onViewSource, onModeChange }: FeedProps) {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [isResuming, setIsResuming] = useState(true);
   const [feedSeed] = useState(() => `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`);
+  const feedSourceType = useUIStore((s) => s.preferences.feedSourceType);
   const containerRef = useRef<HTMLDivElement>(null);
   const touchStartY = useRef(0);
   const { isFullscreen, toggleFullscreen } = useFullscreen();
@@ -43,7 +45,7 @@ export function Feed({ initialMode, onViewSource, onModeChange }: FeedProps) {
     isFetchingNextPage,
     hasNextPage,
     fetchNextPage,
-  } = useInfiniteFeed(30, undefined, feedSeed);
+  } = useInfiniteFeed(30, undefined, feedSeed, feedSourceType);
   const likeMutation = useLikeMutation();
   const saveMutation = useSaveMutation();
 
@@ -404,11 +406,10 @@ export function Feed({ initialMode, onViewSource, onModeChange }: FeedProps) {
             <button
               onClick={handleLike}
               disabled={likeMutation.isPending}
-              className={`h-9 w-9 rounded-full backdrop-blur-md border transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300 flex items-center justify-center shrink-0 ${
-                currentMedia?.liked
+              className={`h-9 w-9 rounded-full backdrop-blur-md border transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300 flex items-center justify-center shrink-0 ${currentMedia?.liked
                   ? 'bg-red-500/80 text-white border-red-400'
                   : 'bg-black/35 text-white/80 border-white/20 hover:text-white'
-              } disabled:opacity-50`}
+                } disabled:opacity-50`}
               aria-label={currentMedia?.liked ? 'Unlike' : 'Like'}
             >
               <Heart
@@ -420,11 +421,10 @@ export function Feed({ initialMode, onViewSource, onModeChange }: FeedProps) {
             <button
               onClick={handleSave}
               disabled={saveMutation.isPending}
-              className={`h-9 w-9 rounded-full backdrop-blur-md border transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300 flex items-center justify-center shrink-0 ${
-                currentMedia?.saved
+              className={`h-9 w-9 rounded-full backdrop-blur-md border transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300 flex items-center justify-center shrink-0 ${currentMedia?.saved
                   ? 'bg-amber-400/80 text-neutral-950 border-amber-300'
                   : 'bg-black/35 text-white/80 border-white/20 hover:text-white'
-              } disabled:opacity-50`}
+                } disabled:opacity-50`}
               aria-label={currentMedia?.saved ? 'Unsave' : 'Save'}
             >
               <Bookmark

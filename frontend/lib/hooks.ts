@@ -245,10 +245,10 @@ const normalizeSourceMediaResponse = (response: unknown): SourceMediaResponse =>
   return {
     success: Boolean(payload.success),
     media: rawMedia.map((item) => ({
-    ...normalizeFeedItem(item),
-    viewCount: toNumber(isRecord(item) ? item.viewCount : undefined, 0),
-    lastViewed: isRecord(item) ? (item.lastViewed as number | null | undefined) ?? null : null,
-  })),
+      ...normalizeFeedItem(item),
+      viewCount: toNumber(isRecord(item) ? item.viewCount : undefined, 0),
+      lastViewed: isRecord(item) ? (item.lastViewed as number | null | undefined) ?? null : null,
+    })),
   };
 };
 
@@ -391,15 +391,16 @@ export const useFeed = (
 /**
  * Fetch feed with infinite pagination
  */
-export const useInfiniteFeed = (limit: number = 20, sourceId?: string, feedSeed?: string) => {
+export const useInfiniteFeed = (limit: number = 20, sourceId?: string, feedSeed?: string, sourceType?: string) => {
   return useInfiniteQuery({
-    queryKey: ['feed', 'infinite', limit, sourceId, feedSeed],
+    queryKey: ['feed', 'infinite', limit, sourceId, feedSeed, sourceType],
     queryFn: async ({ pageParam = 0 }): Promise<FeedResponse> => {
       const params = new URLSearchParams({
         page: String(pageParam),
         limit: String(limit),
         ...(sourceId ? { sourceId } : {}),
         ...(feedSeed ? { feedSeed } : {}),
+        ...(sourceType ? { sourceType } : {}),
       });
 
       const response = await authenticatedFetch(`${API_BASE}/api/feed?${params}`);
@@ -659,9 +660,9 @@ export const useHideMutation = () => {
       const nextHidden = !(targetItem?.hidden ?? false);
       const hiddenCandidate = targetItem
         ? {
-            ...targetItem,
-            hidden: true,
-          }
+          ...targetItem,
+          hidden: true,
+        }
         : undefined;
 
       patchItemInAllCollections(

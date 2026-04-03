@@ -8,6 +8,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import { getDatabase } from '../db/index.js';
 import { generatePaginatedFeed } from '../services/feed.js';
+import type { FeedSourceType } from '../services/feed.js';
 import { readRemoteFile } from '../services/rclone.js';
 
 interface FeedQuery {
@@ -16,6 +17,7 @@ interface FeedQuery {
   lastSourceId?: string;
   sourceId?: string;
   feedSeed?: string;
+  sourceType?: string;
 }
 
 interface InteractionBody {
@@ -130,9 +132,12 @@ export default async function feedRoutes(fastify: FastifyInstance): Promise<void
         const lastSourceId = request.query.lastSourceId;
         const sourceId = request.query.sourceId;
         const feedSeed = request.query.feedSeed;
+        const rawSourceType = request.query.sourceType;
+        const sourceType: FeedSourceType =
+          rawSourceType === 'remote' || rawSourceType === 'all' ? rawSourceType : 'local';
         const userId = request.user!.userId;
 
-        const feedData = generatePaginatedFeed(db, page, limit, lastSourceId, userId, sourceId, feedSeed);
+        const feedData = generatePaginatedFeed(db, page, limit, lastSourceId, userId, sourceId, feedSeed, sourceType);
 
         return {
           success: true,
@@ -500,9 +505,9 @@ export default async function feedRoutes(fastify: FastifyInstance): Promise<void
           `
           )
           .get(userId, userId, id) as {
-          path: string;
-          type: string;
-        } | undefined;
+            path: string;
+            type: string;
+          } | undefined;
 
         if (!media) {
           return reply.code(404).send({ error: 'Media not found' });
@@ -523,13 +528,15 @@ export default async function feedRoutes(fastify: FastifyInstance): Promise<void
 
         const contentType = mimeTypes[ext] || 'application/octet-stream';
 
+        // TODO: remote (rclone) serving is temporarily disabled — local only for now
         if (media.path.startsWith('rclone:')) {
-          const remoteBuffer = await readRemoteFile(media.path);
-          return reply
-            .type(contentType)
-            .header('Content-Length', remoteBuffer.length.toString())
-            .header('Cache-Control', 'public, max-age=300')
-            .send(remoteBuffer);
+          return reply.code(503).send({ error: 'Remote media serving is temporarily disabled' });
+          // const remoteBuffer = await readRemoteFile(media.path);
+          // return reply
+          //   .type(contentType)
+          //   .header('Content-Length', remoteBuffer.length.toString())
+          //   .header('Cache-Control', 'public, max-age=300')
+          //   .send(remoteBuffer);
         }
 
         const fileStats = await fs.stat(media.path);

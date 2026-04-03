@@ -19,6 +19,8 @@ interface FeedItem {
   tempFileId?: string;
 }
 
+export type FeedSourceType = 'local' | 'remote' | 'all';
+
 interface FeedOptions {
   limit?: number;
   offset?: number;
@@ -26,6 +28,7 @@ interface FeedOptions {
   userId?: string; // User ID for scoped interactions
   sourceId?: string; // Optional source filtering
   feedSeed?: string; // Session seed to vary ordering between feed sessions
+  sourceType?: FeedSourceType; // Filter by source origin (local/remote/all), defaults to 'local'
 }
 
 function normalizeRelativePath(relativePath: string): string {
@@ -125,11 +128,19 @@ export function generateFeed(db: Database.Database, options: FeedOptions = {}): 
     userId,
     sourceId,
     feedSeed,
+    sourceType = 'local',
   } = options;
 
   if (!userId) {
     return [];
   }
+
+  const sourceClause =
+    sourceType === 'local'
+      ? "AND lp.absolute_path NOT LIKE 'rclone:%'"
+      : sourceType === 'remote'
+        ? "AND lp.absolute_path LIKE 'rclone:%'"
+        : '';
 
   const allMedia = db.prepare(
     `
@@ -163,6 +174,7 @@ export function generateFeed(db: Database.Database, options: FeedOptions = {}): 
       LEFT JOIN user_saved_files usf ON usf.user_id = ? AND usf.file_id = f.id
       LEFT JOIN user_hidden_files uhf ON uhf.user_id = ? AND uhf.file_id = f.id
       WHERE uhf.file_id IS NULL
+        ${sourceClause}
       ORDER BY f.created_at ASC
     `
   ).all(userId, userId, userId, userId, userId) as Array<{
@@ -289,7 +301,8 @@ export function generatePaginatedFeed(
   lastSourceId?: string,
   userId?: string,
   sourceId?: string,
-  feedSeed?: string
+  feedSeed?: string,
+  sourceType?: FeedSourceType
 ): {
   items: FeedItem[];
   hasMore: boolean;
@@ -303,6 +316,7 @@ export function generatePaginatedFeed(
     userId,
     sourceId,
     feedSeed,
+    sourceType,
   });
 
   const hasMore = feed.length > itemsPerPage;

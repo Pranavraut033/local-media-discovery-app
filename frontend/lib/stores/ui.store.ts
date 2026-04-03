@@ -6,11 +6,14 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
 export type ViewMode = 'reels' | 'feed';
+export type FeedSourceType = 'local' | 'remote' | 'all';
 
 interface UserPreferences {
   viewMode: ViewMode;
   autoPlayVideos: boolean;
   showSourceBadge: boolean;
+  lastRcloneRemote?: string;
+  feedSourceType: FeedSourceType;
 }
 
 interface UIState {
@@ -38,6 +41,7 @@ const DEFAULT_PREFERENCES: UserPreferences = {
   viewMode: 'reels',
   autoPlayVideos: true,
   showSourceBadge: true,
+  feedSourceType: 'local',
 };
 
 export const useUIStore = create<UIState>()(
