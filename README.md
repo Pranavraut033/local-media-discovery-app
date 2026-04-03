@@ -1,100 +1,165 @@
 # Local Media Discovery App
 
-A local-first, web-based media discovery application that transforms your media folders into an exploratory, social-media-like experience—accessible from any device on your local network.
+Local-first media discovery for personal photo and video libraries. Instead of browsing nested folders manually, you get a swipeable, source-diverse feed optimized for phones and accessible from any device on your LAN.
 
-## ✨ Features
+## Overview
 
-- 📱 **Mobile-first design** - Access from any device on your local network
-- 🔒 **100% local and private** - No internet required, all data stays on your machine
-- 🔐 **Privacy-first architecture** - Root folder path stored in browser localStorage, never on the backend
-- 🎬 **Media support** - Images (JPG, PNG, WebP, GIF) and videos (MP4, WebM, MOV, MKV)
-- 🎯 **Smart discovery algorithm** - Unseen priority, source diversity, like/save bias
-- ❤️ **Like and save** - Track your favorite media with optimistic updates
-- 🔖 **Saved items view** - Browse all your saved media in one place
-- 👤 **Source system** - Auto-generated pseudo-users from top-level folders
-- 🎭 **Multiple view modes** - Reels (vertical swipe) or Feed (grid) mode
-- 💾 **Resume position** - Automatically remember where you left off
-- 🔄 **Live file watching** - Automatically detect added/removed media
-- 🌐 **Remote folder browser** - Browse host folders from mobile devices
-- 📡 **LAN accessible** - Connect from any device on your network
+- 100% local: no cloud sync, no telemetry, no external dependency for core usage.
+- Mobile-first: Reels-style flow is the primary interaction model.
+- Private by design: authentication and user-scoped data are built in.
+- Folder-agnostic discovery: folder names are treated as structure, not categories.
 
-## 🚀 Quick Start
+## Feature Highlights
+
+### Discovery and Feed
+
+- Reels mode: full-screen vertical swipe experience.
+- Feed mode: grid browsing for fast scanning.
+- Discovery ranking combines unseen priority, source diversity, interaction bias, and entropy.
+- Infinite loading with prefetching for smoother browsing.
+
+### Media and Indexing
+
+- Supported images: JPG, JPEG, PNG, WebP, GIF.
+- Supported videos: MP4, WebM, MOV.
+- Recursive indexing with live watcher updates.
+- Source system generates deterministic pseudo identities (for example: @quiet_river) from top-level structure.
+
+### Interactions and Views
+
+- Like media.
+- Save media for later.
+- Hide media from the main feed.
+- Track views and revisit behavior.
+- Dedicated views for Saved, Liked, and Hidden items.
+- Source-specific browsing for "more from this source" workflows.
+
+### Authentication and User Scope
+
+- 6-digit PIN login.
+- JWT-backed sessions (30-day validity).
+- Multi-user support on one host.
+- Folder associations and interactions are isolated per user.
+
+### Remote Sources
+
+- Android Termux rclone daemon integration.
+- Remote connection testing and configuration from Settings.
+- Local storage mode and remote storage mode support.
+
+## Quick Start
 
 ### Prerequisites
 
-- Node.js 18+ installed
-- A folder with media files (photos/videos)
+- Node.js 18+
+- npm
+- Media files available on local disk or via an rclone-accessible remote
 
-### Installation
+### 1. Install dependencies
 
-1. Install backend dependencies:
+From the repository root:
+
 ```bash
-cd backend
-npm install
+npm run install:all
 ```
 
-2. Install frontend dependencies:
+Or install per app:
+
 ```bash
-cd frontend
-npm install
+cd backend && npm install
+cd ../frontend && npm install
 ```
 
-### Development
+### 2. Initialize database and create first user
 
-1. Start the backend server:
+Start backend once so schema initialization runs:
+
 ```bash
 cd backend
 npm run dev
 ```
 
-The backend will run in watch mode and automatically restart on file changes.
+After the server logs database initialization, stop it and create your user:
 
-2. In a new terminal, start the frontend dev server:
+```bash
+cd backend
+npm run create-user 123456
+```
+
+Replace 123456 with your own 6-digit PIN.
+
+### 3. Run development servers
+
+Terminal 1 (backend API):
+
+```bash
+cd backend
+npm run dev
+```
+
+Terminal 2 (frontend UI):
+
 ```bash
 cd frontend
 npm run dev
 ```
 
-3. Open http://localhost:3000 in your browser
+Development URLs:
 
-### Production Build
+- Frontend: http://localhost:3000
+- Backend API: http://localhost:3001
 
-1. Build the backend:
-```bash
-cd backend
-npm run build
-```
+### 4. First login and first index
 
-2. Build the frontend:
-```bash
-cd frontend
-npm run build
-```
+1. Open the frontend in your browser.
+2. Enter your 6-digit PIN on the login screen.
+3. Open folder setup and choose your root folder.
+4. Start indexing.
+5. Wait for initial indexing to complete, then begin browsing feed/reels.
 
-3. Start the backend (serves both API and frontend):
-```bash
-cd backend
-npm start
-```
+### 5. Access from phone/tablet on LAN
 
-4. Access the app:
-   - Desktop: http://localhost:3001
-   - Mobile: http://`<your-local-ip>`:3001
+Use your host IP address in the mobile browser:
 
-To find your local IP:
-- macOS/Linux: `ifconfig | grep "inet "`
-- Windows: `ipconfig`
+- Frontend dev URL: http://<your-local-ip>:3000
+- Backend API is used by the frontend on port 3001.
 
-## Android rclone Installation Guide (Termux)
+Find your host IP:
 
-Use this guide when you want the app (running in a browser) to connect to an rclone daemon running on your Android phone.
+- macOS/Linux: ifconfig
+- Windows: ipconfig
 
-### 1. Install Termux
+## Using the App
 
-- Install Termux from F-Droid (recommended build).
-- Open Termux once to initialize packages.
+### Reels vs Feed
 
-### 2. Install and configure rclone
+- Reels mode is best for immersive, one-item-at-a-time browsing.
+- Feed mode is best for quick scanning in a grid layout.
+- The selected view mode persists per user preference.
+
+### Like, Save, Hide semantics
+
+- Like: mark favorites and influence ranking.
+- Save: explicit bookmark list for later revisits.
+- Hide: remove items from normal feed flow without deleting files.
+
+### Sources
+
+- A source is a deterministic pseudo identity mapped from folder structure.
+- Real folder names are not exposed as social labels in the feed UI.
+
+### Settings and preferences
+
+- View mode preference.
+- Video autoplay behavior.
+- Source badge visibility.
+- Reindex/reset maintenance actions.
+
+## Remote Sources (rclone)
+
+### Android Termux setup
+
+Install and configure rclone in Termux:
 
 ```bash
 pkg update && pkg upgrade -y
@@ -102,179 +167,189 @@ pkg install rclone -y
 rclone config
 ```
 
-- In `rclone config`, create your base remote (SFTP/WebDAV/Drive/etc).
-- For encrypted storage, create a `crypt` remote that points to the base remote.
-
-### 3. Start rclone daemon on Android
-
-Quick start:
+Start rclone daemon (no auth):
 
 ```bash
 rclone rcd --rc-addr=0.0.0.0:5572 --rc-no-auth
 ```
 
-Recommended for shared networks:
+Start rclone daemon (recommended auth on shared networks):
 
 ```bash
 rclone rcd --rc-addr=0.0.0.0:5572 --rc-user=myuser --rc-pass=mypassword
 ```
 
-### 4. Connect from the app
+Then in app Settings, configure Android rclone connection and test before saving.
 
-- Open the app Settings.
-- Go to Remote Sources and select Android rclone (Termux).
-- Enter Android phone IP and port (default `5572`).
-- If using auth, enter username and password.
-- Click Test Connection, then Save Configuration.
+### Notes
 
-### 5. Troubleshooting
-
-- Ensure phone and app host are on the same Wi-Fi network.
+- Keep phone and host on the same network.
 - Keep Termux session alive while scanning/indexing.
-- Verify port `5572` is reachable on the phone.
-- If connection fails after sleep, restart the rclone daemon command.
+- If connectivity drops after sleep, restart rclone daemon.
+
+## Development and Scripts
+
+Root scripts:
+
+- npm run install:all
+- npm run dev:backend
+- npm run dev:frontend
+- npm run build
+- npm start (builds and launches PM2 ecosystem)
+
+Backend scripts:
+
+- npm run dev
+- npm run build
+- npm run type-check
+- npm run create-user <6-digit-pin>
+- npm run db:migrate
+
+Frontend scripts:
+
+- npm run dev
+- npm run build
+- npm run lint
+
+## Production Runbook
+
+From project root:
+
+```bash
+npm run build
+npm start
+```
+
+Useful PM2 commands:
+
+- npm run status
+- npm run logs
+- npm run restart
+- npm run stop
+
+PM2 services are defined in ecosystem.config.cjs.
+
+## Environment Variables
+
+- PORT: backend port (defaults to 3001).
+- NODE_ENV: environment mode.
+- JWT_SECRET: recommended in production for secure token signing.
+
+Example:
+
+```bash
+export JWT_SECRET="replace-with-a-strong-random-secret"
+```
+
+## API Summary
+
+Authentication:
+
+- POST /api/auth/login
+- POST /api/auth/verify
+- GET /api/auth/check-setup
+
+Configuration and filesystem:
+
+- POST /api/config/root-folder
+- DELETE /api/config/root-folder
+- GET /api/filesystem/roots
+- GET /api/filesystem/list
+
+Indexing:
+
+- POST /api/index/start
+- GET /api/index/status
+- POST /api/index/stop
+
+Feed and interactions:
+
+- GET /api/feed
+- POST /api/like
+- POST /api/save
+- POST /api/hide
+- POST /api/view
+- GET /api/saved
+- GET /api/liked
+- GET /api/hidden
+- GET /api/source/:sourceId/media
+- GET /api/media/:id
+- GET /api/media/file/:id
+
+## Troubleshooting
+
+### Invalid PIN or login issues
+
+- Confirm PIN is exactly 6 digits.
+- Clear browser local storage and retry.
+- Verify you created at least one user using create-user.
+
+### No media appears after folder selection
+
+- Check indexing status in app.
+- Verify folder path still exists and is readable.
+- Restart backend and trigger reindex.
+
+### rclone connection issues
+
+- Confirm phone/host are on same Wi-Fi.
+- Confirm daemon is running and reachable on configured port.
+- Re-test credentials if using rc auth.
+
+## Privacy and Security Notes
+
+- All data remains local to your environment.
+- No telemetry or cloud sync is added by default.
+- PINs are hashed; JWT is used for API authorization.
+- User data is isolated per account.
 
 ## Project Structure
 
-```
+```text
 local-media-discovery-app/
-├── backend/           # Node.js + Fastify API server (TypeScript)
-│   ├── src/
-│   │   ├── db/       # SQLite database and schema
-│   │   ├── routes/   # API endpoints
-│   │   ├── services/ # Business logic
-│   │   └── index.ts  # Server entry point
-│   ├── dist/         # Compiled JavaScript (generated)
-│   ├── tsconfig.json # TypeScript configuration
-│   └── package.json
-├── frontend/          # Next.js + React UI (TypeScript)
-│   ├── app/          # Next.js app router
-│   ├── components/   # React components
-│   └── package.json
-├── PRD.md            # Product requirements
-├── plan.md           # Implementation plan
-└── agents.md         # Agent automation docs
+├── backend/                 # Fastify + SQLite + indexing/services/routes
+├── frontend/                # Next.js app router + UI + Zustand + query hooks
+├── AUTH_SETUP.md            # Authentication setup and troubleshooting
+├── PRD.md                   # Product requirements
+├── plan.md                  # Phased implementation plan
+├── agents.md                # Agent workflow constraints
+└── ecosystem.config.cjs     # PM2 process definitions
 ```
 
 ## Tech Stack
 
-**Backend:**
-- TypeScript 5.x
+Backend:
+
+- TypeScript
 - Node.js + Fastify
-- SQLite (better-sqlite3)
-- chokidar (file watching)
-- sharp (image processing)
-- ffmpeg (video thumbnails)
+- SQLite (better-sqlite3, Drizzle ORM)
+- chokidar
+- sharp
+- ffmpeg-static + fluent-ffmpeg
 
-**Frontend:**
-- TypeScript 5.x
-- Next.js 15
-- React 19
+Frontend:
+
+- TypeScript
+- Next.js + React
+- TanStack Query
+- Zustand
+- Headless UI
 - Tailwind CSS
-- TanStack Query (data fetching)
-- Headless UI (accessible components)
-- lucide-react (icons)
-- @use-gesture/react (touch gestures)
-- react-player (video playback)
+- react-player
 
-## 🎯 Implementation Status
+## Current Status
 
-### ✅ Phase 1: Project Setup & Core Infrastructure (COMPLETED)
-- [x] Monorepo structure with backend/frontend
-- [x] Fastify backend with TypeScript
-- [x] Next.js frontend with Tailwind CSS
-- [x] SQLite database with better-sqlite3
-- [x] Basic folder selection UI
+- Core architecture, indexing, feed, interactions, and mobile-first browsing are implemented.
+- Auth, user scoping, and remote source integration are implemented.
+- Ongoing work is tracked in plan.md.
 
-### ✅ Phase 2: Media Indexing & Source System (COMPLETED)
-- [x] Recursive media indexing with chokidar
-- [x] File type detection with mime-types
-- [x] Incremental indexing (detect add/remove)
-- [x] Source generation from top-level folders
-- [x] Deterministic display names (@adjective_noun)
-- [x] Avatar color generation from seeds
-- [x] Live file watching and updates
+## Additional Documentation
 
-### ✅ Phase 3: Feed & Discovery Engine (COMPLETED)
-- [x] Feed API with pagination
-- [x] Discovery algorithm (unseen priority, diversity, entropy)
-- [x] Like/Save/View tracking endpoints
-- [x] Source diversity rules (avoid consecutive same source)
-- [x] Frontend feed UI with Reels and Feed modes
-- [x] MediaCard, VideoPlayer, ImageViewer components
-- [x] InteractionButtons with optimistic updates
-- [x] Infinite scroll with TanStack Query
-- [x] Touch gesture support for mobile
-- [x] Media preloading
+- Product requirements: PRD.md
+- Auth setup details: AUTH_SETUP.md
+- Implementation plan: plan.md
+- Zustand migration notes: MIGRATION_ZUSTAND.md
 
-### ✅ Phase 4: User Interactions & Persistence (COMPLETED)
-- [x] LocalStorage for UI preferences
-- [x] Resume position logic (remember last viewed)
-- [x] View mode persistence (Reels/Feed)
-- [x] Saved items view UI with grid layout
-- [x] Source-specific media browsing ("More from this source")
-- [x] Navigation bar (Feed/Saved/Settings)
-- [x] Clickable source badges
-- [x] Remote folder browser for mobile devices
-- [x] Backend filesystem API for browsing host folders
-
-### 🚧 Phase 5: Performance & Reliability (NEXT)
-- [ ] Thumbnail generation (sharp for images, ffmpeg for videos)
-- [ ] Media caching and optimization
-- [ ] Virtualized lists for large libraries
-- [ ] Large library stress testing
-- [ ] Error handling and graceful degradation
-- [ ] Reset/reindex functionality
-
-### 📋 Phase 6: Documentation & Polish
-- [ ] User guide and setup instructions
-- [ ] API documentation
-- [ ] Desktop packaging with Tauri (optional)
-- [ ] PWA support (optional)
-
-## 📁 API Endpoints
-
-**Configuration:**
-- `POST /api/config/root-folder` - Set root folder and trigger indexing (path sent from frontend, not stored on backend)
-- `DELETE /api/config/root-folder` - Clear database (root folder stored in browser localStorage)
-
-**Filesystem:**
-- `GET /api/filesystem/roots` - Get common root directories
-- `GET /api/filesystem/list?path=...` - List directory contents
-
-**Indexing:**
-- `POST /api/index/start` - Start indexing
-- `GET /api/index/status` - Get indexing status
-- `POST /api/index/stop` - Stop indexing
-
-**Feed & Media:**
-- `GET /api/feed?page=0&limit=20` - Get paginated feed
-- `POST /api/like` - Toggle like status
-- `POST /api/save` - Toggle save status
-- `POST /api/view` - Record view
-- `GET /api/media/:id` - Get media metadata
-- `GET /api/media/file/:id` - Serve media file
-- `GET /api/saved` - Get all saved items
-- `GET /api/source/:sourceId/media` - Get media from specific source
-
-## 🎨 User Interface
-
-**Main Views:**
-- **Folder Selection** - Remote browser or manual path entry
-- **Feed (Reels Mode)** - Full-screen vertical swipe navigation
-- **Feed (Grid Mode)** - Card-based grid layout
-- **Saved View** - Grid of all saved items
-- **Source View** - Browse all media from a specific source
-- **Settings** - Coming soon
-
-**Components:**
-- MediaCard - Unified media display with auto view tracking
-- ImageViewer - Optimized image display
-- VideoPlayer - Native HTML5 video with controls
-- InteractionButtons - Like/Save with feedback
-- SourceBadge - Clickable source display
-- NavigationBar - Bottom navigation for mobile
-
-## 📝 License
+## License
 
 ISC
