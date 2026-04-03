@@ -5,6 +5,61 @@
  */
 import type Database from 'better-sqlite3';
 
+// ---------------------------------------------------------------------------
+// In-memory feed cache
+// ---------------------------------------------------------------------------
+// The ranked+diversity-ordered feed for a given (userId, feedSeed, sourceType,
+// sourceId) is fully deterministic. Caching it avoids re-scoring and re-ranking
+// all media on every page request (infinite scroll issues N requests per session).
+//
+// Key: `userId:feedSeed:sourceType:sourceId`
+// TTL: 10 minutes — old sessions auto-expire; interactions (like/hide) are
+//      reflected on the next session (new feedSeed).
+interface FeedCacheEntry {
+  createdAt: number;
+  items: FeedItem[];
+}
+
+const feedCache = new Map<string, FeedCacheEntry>();
+const FEED_CACHE_TTL_MS = 10 * 60 * 1000;
+
+function feedCacheKey(
+  userId: string,
+  feedSeed: string | undefined,
+  sourceType: FeedSourceType,
+  sourceId: string | undefined
+): string {
+  return `${userId}:${feedSeed ?? ''}:${sourceType}:${sourceId ?? ''}`;
+}
+
+function getFromFeedCache(key: string): FeedItem[] | null {
+  const entry = feedCache.get(key);
+  if (!entry) return null;
+  if (Date.now() - entry.createdAt > FEED_CACHE_TTL_MS) {
+    feedCache.delete(key);
+    return null;
+  }
+  return entry.items;
+}
+
+function setInFeedCache(key: string, items: FeedItem[]): void {
+  // Cap cache size — evict all expired entries when we reach 100 live sessions.
+  if (feedCache.size >= 100) {
+    const now = Date.now();
+    for (const [k, v] of feedCache) {
+      if (now - v.createdAt > FEED_CACHE_TTL_MS) feedCache.delete(k);
+    }
+  }
+  feedCache.set(key, { createdAt: Date.now(), items });
+}
+
+/** Invalidate any cached feeds for a user (e.g. after indexing completes). */
+export function invalidateFeedCache(userId: string): void {
+  for (const key of feedCache.keys()) {
+    if (key.startsWith(`${userId}:`)) feedCache.delete(key);
+  }
+}
+
 interface FeedItem {
   id: string;
   path: string;
@@ -252,23 +307,46 @@ export function generateFeed(db: Database.Database, options: FeedOptions = {}): 
     })
     .sort((a, b) => b.score - a.score); // Sort descending by score
 
-  // Step 3: Apply source diversity rule while preserving full result set.
-  // If no alternative source exists, fall back to the highest-ranked remaining item.
-  const remaining = [...scoredMedia];
+  // Step 3: Apply source diversity using a bucket-based O(n) pass.
+  // Items are already sorted by score (desc). We group them into per-source
+  // buckets (preserving score order within each bucket), then greedily pull
+  // the highest-scored item that comes from a different source than the last.
+  // If only one source remains, we drain it without penalty.
+  type ScoredItem = (typeof scoredMedia)[number];
+  const buckets = new Map<string, ScoredItem[]>();
+  for (const item of scoredMedia) {
+    let bucket = buckets.get(item.sourceId);
+    if (!bucket) {
+      bucket = [];
+      buckets.set(item.sourceId, bucket);
+    }
+    bucket.push(item);
+  }
+
   const ordered: FeedItem[] = [];
   let lastUsedSourceId = lastSourceId;
 
-  while (remaining.length > 0) {
-    let nextIndex = 0;
-
-    if (lastUsedSourceId) {
-      const alternateIndex = remaining.findIndex((media) => media.sourceId !== lastUsedSourceId);
-      if (alternateIndex !== -1) {
-        nextIndex = alternateIndex;
+  while (buckets.size > 0) {
+    // Pick the bucket whose top item has the highest score, excluding lastUsedSourceId
+    // when an alternative exists.
+    let bestKey: string | null = null;
+    let bestScore = -Infinity;
+    for (const [key, items] of buckets) {
+      const topScore = items[0].score;
+      if (key !== lastUsedSourceId && topScore > bestScore) {
+        bestScore = topScore;
+        bestKey = key;
       }
     }
+    // Fallback: all remaining items are from the same source as the last one.
+    if (bestKey === null) {
+      bestKey = buckets.keys().next().value as string;
+    }
 
-    const [media] = remaining.splice(nextIndex, 1);
+    const bucket = buckets.get(bestKey)!;
+    const media = bucket.shift()!;
+    if (bucket.length === 0) buckets.delete(bestKey);
+
     ordered.push({
       id: media.id,
       path: media.path,
@@ -291,8 +369,11 @@ export function generateFeed(db: Database.Database, options: FeedOptions = {}): 
 }
 
 /**
- * Generate feed with pagination support
- * This is useful for infinite scroll implementations
+ * Generate feed with pagination support.
+ * The full ranked+diversity ordered list is computed once per (userId, feedSeed,
+ * sourceType, sourceId) session and cached in memory for 10 minutes, so
+ * subsequent page requests (infinite scroll) are O(1) slices rather than
+ * re-ranking the entire library each time.
  */
 export function generatePaginatedFeed(
   db: Database.Database,
@@ -308,23 +389,31 @@ export function generatePaginatedFeed(
   hasMore: boolean;
   page: number;
 } {
+  if (!userId) return { items: [], hasMore: false, page };
+
+  const resolvedSourceType: FeedSourceType = sourceType ?? 'local';
+  const cacheKey = feedCacheKey(userId, feedSeed, resolvedSourceType, sourceId);
+
+  let allItems = getFromFeedCache(cacheKey);
+
+  if (!allItems) {
+    // Compute the full ordered list (no limit/offset — we cache it all).
+    allItems = generateFeed(db, {
+      userId,
+      sourceId,
+      feedSeed,
+      sourceType: resolvedSourceType,
+      lastSourceId,
+      // Fetch everything; the cache makes subsequent pages free.
+      limit: Number.MAX_SAFE_INTEGER,
+      offset: 0,
+    });
+    setInFeedCache(cacheKey, allItems);
+  }
+
   const offset = page * itemsPerPage;
-  const feed = generateFeed(db, {
-    limit: itemsPerPage + 1, // Fetch one extra to determine hasMore
-    offset,
-    lastSourceId,
-    userId,
-    sourceId,
-    feedSeed,
-    sourceType,
-  });
+  const items = allItems.slice(offset, offset + itemsPerPage);
+  const hasMore = offset + itemsPerPage < allItems.length;
 
-  const hasMore = feed.length > itemsPerPage;
-  const items = feed.slice(0, itemsPerPage);
-
-  return {
-    items,
-    hasMore,
-    page,
-  };
+  return { items, hasMore, page };
 }
