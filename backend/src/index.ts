@@ -29,16 +29,22 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const fastify = Fastify({
-  logger: {
-    transport: {
-      target: 'pino-pretty',
-      options: {
-        translateTime: 'HH:MM:ss',
-        ignore: 'pid,hostname',
-        colorize: true,
+  // In production, emit JSON logs (no colour/formatting worker overhead).
+  // In development, use pino-pretty for human-readable output.
+  logger:
+    process.env.NODE_ENV === 'production'
+      ? { level: 'warn' }
+      : {
+        transport: {
+          target: 'pino-pretty',
+          options: {
+            translateTime: 'HH:MM:ss',
+            ignore: 'pid,hostname',
+            colorize: true,
+            singleLine: true,
+          },
+        },
       },
-    },
-  },
 });
 
 // Register CORS for LAN access
