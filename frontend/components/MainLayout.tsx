@@ -15,6 +15,7 @@ import { SourceView } from '@/components/SourceView';
 import { NavigationBar, type NavTab } from '@/components/NavigationBar';
 import { getRootFolder } from '@/lib/storage';
 import type { FeedMode } from '@/components/Feed';
+import { useUIStore } from '@/lib/stores/ui.store';
 
 type AppView = 'feed' | 'saved' | 'liked' | 'hidden' | 'source' | 'settings';
 
@@ -49,6 +50,10 @@ export default function MainLayout() {
   }, []);
 
   const handleFolderSelected = () => {
+    // Selecting a local folder should always scope the feed to local-only content.
+    // This prevents stale 'all'/'remote' feedSourceType from a previous session
+    // from causing rclone fetches after a fresh local-folder selection.
+    useUIStore.getState().setPreferences({ feedSourceType: 'local' });
     setRootFolderSet(true);
   };
 
