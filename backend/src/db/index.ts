@@ -25,6 +25,12 @@ export function getDatabase(): Database.Database {
     // Enable foreign key constraints
     db.pragma('foreign_keys = ON');
 
+    // Performance tuning
+    db.pragma('cache_size = -65536');   // 64 MB page cache (negative = kibibytes)
+    db.pragma('synchronous = NORMAL'); // fsync only at WAL checkpoints, not every write
+    db.pragma('temp_store = MEMORY');  // keep temp tables/indexes in RAM
+    db.pragma('mmap_size = 268435456'); // 256 MB memory-mapped I/O
+
     // Initialize typed ORM and run SQL migrations
     drizzleDb = drizzle(db, { schema });
     runMigrations(db);
