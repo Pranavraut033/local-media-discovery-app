@@ -1,10 +1,10 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { X, Upload, Loader, Play } from 'lucide-react';
+import { X, Upload, Loader, Play, CheckCircle } from 'lucide-react';
 import { fetchRcloneRemotes, validateRcloneRemote, addRcloneSource, RcloneRemote } from '@/lib/api';
 import { useIndexingStore } from '@/lib/stores/indexing.store';
-import { useUIStore } from '@/lib/stores/ui.store';
+import { useUIStore, RecentRcloneConfig } from '@/lib/stores/ui.store';
 
 interface RcloneImportModalProps {
   isOpen: boolean;
@@ -12,9 +12,10 @@ interface RcloneImportModalProps {
   onSuccess: () => void;
   onShowMedia?: () => void;
   initialRemote?: string;
+  initialBasePath?: string;
 }
 
-export function RcloneImportModal({ isOpen, onClose, onSuccess, onShowMedia, initialRemote }: RcloneImportModalProps) {
+export function RcloneImportModal({ isOpen, onClose, onSuccess, onShowMedia, initialRemote, initialBasePath }: RcloneImportModalProps) {
   const [remotes, setRemotes] = useState<RcloneRemote[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -24,10 +25,13 @@ export function RcloneImportModal({ isOpen, onClose, onSuccess, onShowMedia, ini
   const [isValidating, setIsValidating] = useState(false);
   const [isAdding, setIsAdding] = useState(false);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
+  const [isValidated, setIsValidated] = useState(false);
+  const [isAdded, setIsAdded] = useState(false);
 
   const jobs = useIndexingStore((s) => s.jobs);
   const activeJob = activeJobId ? jobs[activeJobId] : null;
   const lastUsedRemote = useUIStore((s) => s.preferences.lastRcloneRemote);
+  const recentRcloneConfigs = useUIStore((s) => s.preferences.recentRcloneConfigs);
   const setPreferences = useUIStore((s) => s.setPreferences);
 
   // Load remotes when modal opens
@@ -35,6 +39,8 @@ export function RcloneImportModal({ isOpen, onClose, onSuccess, onShowMedia, ini
     if (!isOpen) return;
 
     setActiveJobId(null);
+    setIsValidated(false);
+    setIsAdded(false);
 
     const loadRemotes = async () => {
       try {
@@ -45,10 +51,17 @@ export function RcloneImportModal({ isOpen, onClose, onSuccess, onShowMedia, ini
 
         // Pre-select initialRemote (from chip), or last-used, or first
         const preferred = initialRemote ?? lastUsedRemote;
-        if (preferred && data.some((r: RcloneRemote) => r.name === preferred)) {
-          setSelectedRemote(preferred);
-        } else if (data.length > 0) {
-          setSelectedRemote(data[0].name);
+        const pickedRemote = preferred && data.some((r: RcloneRemote) => r.name === preferred)
+          ? preferred
+          : data.length > 0 ? data[0].name : null;
+        setSelectedRemote(pickedRemote);
+
+        // Pre-fill basePath from prop, or from last recent entry for this remote
+        if (initialBasePath !== undefined) {
+          setBasePath(initialBasePath);
+        } else if (pickedRemote) {
+          const lastRecent = recentRcloneConfigs.find((c: RecentRcloneConfig) => c.remoteName === pickedRemote);
+          if (lastRecent) setBasePath(lastRecent.basePath);
         }
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load rclone remotes');
@@ -59,7 +72,8 @@ export function RcloneImportModal({ isOpen, onClose, onSuccess, onShowMedia, ini
     };
 
     loadRemotes();
-  }, [isOpen, initialRemote]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, initialRemote, initialBasePath]);
 
   const handleValidate = async () => {
     if (!selectedRemote) {
@@ -76,7 +90,9 @@ export function RcloneImportModal({ isOpen, onClose, onSuccess, onShowMedia, ini
 
       // If validation succeeds, show success
       setError(null);
+      setIsValidated(true);
     } catch (err) {
+      setIsValidated(false);
       setError(err instanceof Error ? err.message : 'Validation failed');
     } finally {
       setIsValidating(false);
@@ -115,8 +131,16 @@ export function RcloneImportModal({ isOpen, onClose, onSuccess, onShowMedia, ini
         setActiveJobId(result.jobId);
       }
 
-      // Persist last-used remote
-      setPreferences({ lastRcloneRemote: selectedRemote ?? undefined });
+      // Persist last-used remote and recent config; expand feed to show rclone content
+      const updated = [
+        { remoteName: selectedRemote, basePath },
+        ...recentRcloneConfigs.filter(
+          (c: RecentRcloneConfig) => !(c.remoteName === selectedRemote && c.basePath === basePath)
+        ),
+      ].slice(0, 10);
+      setPreferences({ lastRcloneRemote: selectedRemote ?? undefined, feedSourceType: 'all', recentRcloneConfigs: updated });
+
+      setIsAdded(true);
 
       // Notify parent so feed can refresh
       onSuccess();
@@ -169,7 +193,7 @@ export function RcloneImportModal({ isOpen, onClose, onSuccess, onShowMedia, ini
                 </label>
                 <select
                   value={selectedRemote || ''}
-                  onChange={(e) => setSelectedRemote(e.target.value)}
+                  onChange={(e) => { setSelectedRemote(e.target.value); setIsValidated(false); }}
                   className="w-full px-3 py-2 rounded-lg bg-(--surface-highest) text-(--surface-ink) focus:outline-none focus:ring-1 focus:ring-(--primary)/30"
                 >
                   {remotes.map((remote) => (
@@ -188,7 +212,7 @@ export function RcloneImportModal({ isOpen, onClose, onSuccess, onShowMedia, ini
                 <input
                   type="text"
                   value={basePath}
-                  onChange={(e) => setBasePath(e.target.value)}
+                  onChange={(e) => { setBasePath(e.target.value); setIsValidated(false); }}
                   placeholder="/"
                   className="w-full px-3 py-2 rounded-lg bg-(--surface-highest) text-(--surface-ink) placeholder:text-(--outline) focus:outline-none focus:ring-1 focus:ring-(--primary)/30"
                 />
@@ -244,6 +268,26 @@ export function RcloneImportModal({ isOpen, onClose, onSuccess, onShowMedia, ini
                       />
                     </div>
                   ) : null}
+                </div>
+              )}
+
+              {/* Validated banner */}
+              {isValidated && !error && (
+                <div className="p-3 bg-(--secondary-container)/40 rounded-xl flex items-center gap-2">
+                  <CheckCircle size={16} className="text-green-500 shrink-0" />
+                  <p className="text-sm text-(--on-secondary-container)">
+                    Remote is accessible — ready to add
+                  </p>
+                </div>
+              )}
+
+              {/* Added success banner */}
+              {isAdded && (
+                <div className="p-3 bg-green-500/10 rounded-xl flex items-center gap-2">
+                  <CheckCircle size={16} className="text-green-500 shrink-0" />
+                  <p className="text-sm text-green-700 dark:text-green-400">
+                    Remote added — indexing started in the background
+                  </p>
                 </div>
               )}
 
