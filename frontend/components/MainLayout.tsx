@@ -32,6 +32,8 @@ export default function MainLayout() {
   const [sourceViewState, setSourceViewState] = useState<SourceViewState | null>(null);
   const [feedMode, setFeedMode] = useState<FeedMode>('feed');
 
+  const feedSourceType = useUIStore((s) => s.preferences.feedSourceType);
+
   // Check if root folder is already set (in localStorage for privacy)
   useEffect(() => {
     const checkRootFolder = () => {
@@ -102,7 +104,7 @@ export default function MainLayout() {
     );
   }
 
-  if (!rootFolderSet) {
+  if (!rootFolderSet && feedSourceType === 'local') {
     return (
       <div className="flex min-h-screen items-center justify-center px-4 py-10">
         <main className="flex flex-col items-center justify-center w-full max-w-2xl py-12">

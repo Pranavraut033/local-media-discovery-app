@@ -485,8 +485,8 @@ export function Settings({ onBack, onViewHidden }: SettingsProps) {
                     key={type}
                     onClick={() => handleFeedSourceTypeChange(type)}
                     className={`flex-1 py-2 px-4 rounded-lg font-medium transition-all ${active
-                        ? 'bg-blue-600 text-white shadow-lg'
-                        : 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white border border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-600'
+                      ? 'bg-blue-600 text-white shadow-lg'
+                      : 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white border border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-600'
                       }`}
                   >
                     {labels[type]}

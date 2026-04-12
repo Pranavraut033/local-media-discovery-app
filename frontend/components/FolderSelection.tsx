@@ -182,7 +182,7 @@ export default function FolderSelection({ onFolderSelected }: FolderSelectionPro
           titleClassName="text-lg font-semibold text-(--surface-ink) mb-3 flex items-center gap-2"
           containerClassName="surface-panel"
           onSourcesUpdated={() => {
-            window.location.reload();
+            onFolderSelected?.();
           }}
         />
 
@@ -303,15 +303,15 @@ export default function FolderSelection({ onFolderSelected }: FolderSelectionPro
                   onClick={() => dir.accessible && loadDirectory(dir.path)}
                   disabled={!dir.accessible}
                   className={`w-full flex items-center gap-3 p-4 transition-colors text-left ${dir.accessible
-                      ? 'hover:bg-(--surface-low)'
-                      : 'opacity-50 cursor-not-allowed'
+                    ? 'hover:bg-(--surface-low)'
+                    : 'opacity-50 cursor-not-allowed'
                     }`}
                 >
                   <Folder
                     size={20}
                     className={`shrink-0 ${dir.accessible
-                        ? 'text-(--outline)'
-                        : 'text-(--outline-variant)'
+                      ? 'text-(--outline)'
+                      : 'text-(--outline-variant)'
                       }`}
                   />
                   <span className="flex-1 text-(--surface-ink) truncate">
