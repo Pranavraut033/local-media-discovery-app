@@ -3,7 +3,8 @@
  * Handles remote source management via rclone
  */
 
-import { execSync, exec } from 'child_process';
+import { execSync, exec, spawn } from 'child_process';
+import type { Readable } from 'stream';
 import { promisify } from 'util';
 import crypto from 'crypto';
 import type { FileInfo } from '../types/rclone.js';
@@ -180,6 +181,63 @@ export async function scanRemoteForMedia(
 }
 
 /**
+ * Fast single-shot scan using `rclone lsjson --fast-list --recursive`.
+ * Returns the full flat file list in one subprocess call — much faster than the
+ * per-directory recursive approach for large remotes.
+ * Falls back to the slow recursive scan if the command fails (e.g. backend doesn't
+ * support --fast-list).
+ */
+export async function scanRemoteForMediaFastList(
+  remotePath: string
+): Promise<Array<{ path: string; type: 'image' | 'video'; size?: number }>> {
+  const mediaExtensions: Record<string, 'image' | 'video'> = {
+    '.jpg': 'image',
+    '.jpeg': 'image',
+    '.png': 'image',
+    '.gif': 'image',
+    '.webp': 'image',
+    '.mp4': 'video',
+    '.webm': 'video',
+    '.mov': 'video',
+  };
+
+  const normalizedRoot = remotePath.endsWith('/') ? remotePath.slice(0, -1) : remotePath;
+
+  try {
+    const { stdout } = await execAsync(
+      `rclone lsjson "${normalizedRoot}" --fast-list --recursive --files-only --no-mimetype`,
+      {
+        maxBuffer: 512 * 1024 * 1024, // 512 MB for very large remotes
+        timeout: 30 * 60 * 1000,      // 30 min hard limit
+      }
+    );
+
+    const items = JSON.parse(stdout || '[]') as Array<{
+      Path: string;
+      Name: string;
+      Size?: number;
+    }>;
+
+    const results: Array<{ path: string; type: 'image' | 'video'; size?: number }> = [];
+    for (const item of items) {
+      const ext = item.Name.includes('.') ? item.Name.slice(item.Name.lastIndexOf('.')).toLowerCase() : '';
+      const mediaType = mediaExtensions[ext];
+      if (mediaType) {
+        results.push({
+          path: `${normalizedRoot}/${item.Path}`,
+          type: mediaType,
+          size: item.Size,
+        });
+      }
+    }
+    return results;
+  } catch (error) {
+    console.warn('[rclone] fast-list failed, falling back to recursive scan:', (error as Error).message);
+    return scanRemoteForMedia(remotePath);
+  }
+}
+
+/**
  * Read file content from rclone remote
  * Returns buffer of file data
  */
@@ -195,6 +253,27 @@ export async function readRemoteFile(remotePath: string): Promise<Buffer> {
     console.error(`Failed to read file ${remotePath}:`, error);
     throw new Error(`Cannot read file from remote: ${remotePath}`);
   }
+}
+
+/**
+ * Stream file content from rclone remote via `rclone cat`.
+ * Returns a Node.js Readable (stdout of the subprocess) so Fastify can pipe
+ * it directly — no buffering of the full file in memory.
+ */
+export function rcloneStream(remotePath: string): Readable {
+  const child = spawn('rclone', ['cat', remotePath], { stdio: ['ignore', 'pipe', 'pipe'] });
+
+  child.stderr.on('data', (chunk: Buffer) => {
+    const msg = chunk.toString().trim();
+    if (msg) console.warn(`[rclone stream] ${msg}`);
+  });
+
+  // Surface process errors on the readable so Fastify/Node handles them cleanly.
+  child.on('error', (err) => {
+    child.stdout.destroy(err);
+  });
+
+  return child.stdout;
 }
 
 /**
