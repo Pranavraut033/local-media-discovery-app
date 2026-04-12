@@ -15,8 +15,6 @@ import {
   isRcloneAvailable,
   scanRemoteForMedia,
 } from '../services/rclone.js';
-import { getRemoteRcloneConfig } from '../services/rclone-remote-config.js';
-import { RemoteRcloneClient } from '../services/rclone-remote.js';
 import { enqueueIndexingJob } from '../queue/index.js';
 
 interface AddRcloneSourceBody {
@@ -228,27 +226,10 @@ export default async function rcloneRoutes(fastify: FastifyInstance): Promise<vo
     },
     async (_request: FastifyRequest, reply: FastifyReply) => {
       try {
-        const db = getDatabase();
-
-        const remoteConfig = getRemoteRcloneConfig(db);
-        if (remoteConfig.enabled) {
-          const client = new RemoteRcloneClient(remoteConfig);
-          try {
-            const remotes = await client.listRemotes();
-            return reply.send({ remotes });
-          } catch (error) {
-            console.error('Failed to list remotes from remote rclone daemon:', error);
-            return reply.code(503).send({
-              error: 'Cannot connect to remote rclone daemon',
-              message: 'Check if the Android device is running and accessible',
-            });
-          }
-        }
-
         if (!rcloneAvailable) {
           return reply.code(503).send({
             error: 'rclone is not installed',
-            message: 'Please install rclone or configure a remote rclone daemon',
+            message: 'Please install rclone on the server machine',
           });
         }
 
@@ -284,26 +265,6 @@ export default async function rcloneRoutes(fastify: FastifyInstance): Promise<vo
       }
 
       try {
-        const db = getDatabase();
-
-        const remoteConfig = getRemoteRcloneConfig(db);
-        if (remoteConfig.enabled) {
-          const client = new RemoteRcloneClient(remoteConfig);
-          try {
-            const result = await client.validateRemote(remote_path);
-            if (result.success) {
-              return reply.send({ success: true, message: 'Remote is accessible' });
-            }
-            return reply.code(400).send({ success: false, error: result.error });
-          } catch (error) {
-            console.error('Validation error (remote):', error);
-            return reply.code(503).send({
-              error: 'Cannot connect to remote rclone daemon',
-              message: 'Check if the Android device is running',
-            });
-          }
-        }
-
         const result = await validateRemote(remote_path);
 
         if (result.success) {

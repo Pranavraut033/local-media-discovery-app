@@ -10,6 +10,26 @@ import { getDatabase } from '../db/index.js';
 import { generatePaginatedFeed } from '../services/feed.js';
 import type { FeedSourceType } from '../services/feed.js';
 import { readRemoteFile } from '../services/rclone.js';
+import { signStreamToken } from '../tokens.js';
+
+const MEDIA_SERVER_SECRET =
+  process.env.MEDIA_SERVER_SECRET || 'media-server-default-secret-change-me';
+
+/** Derive extension and type then attach a stream token to any object with a path + type. */
+function withStreamToken<T extends { id: string; path: string; type: string }>(item: T): T & { streamToken?: string } {
+  const ext = path.extname(item.path).toLowerCase();
+  if (!ext) return item;
+  const kind = item.type === 'video' || item.type.startsWith('video/') ? 'video' as const : 'image' as const;
+  try {
+    const streamToken = signStreamToken(
+      { mediaId: item.id, path: item.path, ext, type: kind },
+      MEDIA_SERVER_SECRET
+    );
+    return { ...item, streamToken };
+  } catch {
+    return item;
+  }
+}
 
 interface FeedQuery {
   page?: string;
@@ -141,7 +161,7 @@ export default async function feedRoutes(fastify: FastifyInstance): Promise<void
 
         return {
           success: true,
-          feed: feedData.items,
+          feed: feedData.items.map(withStreamToken),
           page: feedData.page,
           hasMore: feedData.hasMore,
           limit,
@@ -199,7 +219,7 @@ export default async function feedRoutes(fastify: FastifyInstance): Promise<void
 
         return {
           success: true,
-          media: mediaItems.map((m) => buildMediaResponse(m)),
+          media: mediaItems.map((m) => withStreamToken(buildMediaResponse(m))),
           count: mediaItems.length,
         };
       } catch (error) {
@@ -357,7 +377,7 @@ export default async function feedRoutes(fastify: FastifyInstance): Promise<void
 
         return {
           success: true,
-          media: buildMediaResponse(media),
+          media: withStreamToken(buildMediaResponse(media)),
         };
       } catch (error) {
         console.error('Get media error:', error);
@@ -405,7 +425,7 @@ export default async function feedRoutes(fastify: FastifyInstance): Promise<void
 
         return {
           success: true,
-          savedMedia: savedMedia.map((m) => buildMediaResponse(m)),
+          savedMedia: savedMedia.map((m) => withStreamToken(buildMediaResponse(m))),
         };
       } catch (error) {
         console.error('Get saved error:', error);
@@ -453,7 +473,7 @@ export default async function feedRoutes(fastify: FastifyInstance): Promise<void
 
         return {
           success: true,
-          likedMedia: likedMedia.map((m) => buildMediaResponse(m)),
+          likedMedia: likedMedia.map((m) => withStreamToken(buildMediaResponse(m))),
         };
       } catch (error) {
         console.error('Get liked error:', error);
@@ -497,7 +517,7 @@ export default async function feedRoutes(fastify: FastifyInstance): Promise<void
           .prepare(
             `
             ${latestPathsCte}
-            SELECT lp.absolute_path AS path, f.media_kind AS type
+            SELECT lp.absolute_path AS path, f.media_kind AS type, lp.storage_mode AS storageMode
             FROM files f
             JOIN latest_paths lp ON lp.file_id = f.id
             WHERE f.id = ?
@@ -507,6 +527,7 @@ export default async function feedRoutes(fastify: FastifyInstance): Promise<void
           .get(userId, userId, id) as {
             path: string;
             type: string;
+            storageMode: string;
           } | undefined;
 
         if (!media) {
@@ -528,15 +549,24 @@ export default async function feedRoutes(fastify: FastifyInstance): Promise<void
 
         const contentType = mimeTypes[ext] || 'application/octet-stream';
 
-        // TODO: remote (rclone) serving is temporarily disabled — local only for now
-        if (media.path.startsWith('rclone:')) {
-          return reply.code(503).send({ error: 'Remote media serving is temporarily disabled' });
-          // const remoteBuffer = await readRemoteFile(media.path);
-          // return reply
-          //   .type(contentType)
-          //   .header('Content-Length', remoteBuffer.length.toString())
-          //   .header('Cache-Control', 'public, max-age=300')
-          //   .send(remoteBuffer);
+        // Remote (rclone) files are served via rclone cat piped to the response.
+        if (media.storageMode === 'rclone') {
+          const { rcloneStream } = await import('../services/rclone.js');
+          const stream = rcloneStream(media.path);
+
+          reply
+            .header('Content-Type', contentType)
+            .header('Cache-Control', 'public, max-age=300')
+            .header('Accept-Ranges', 'none');
+
+          const range = request.headers.range;
+          if (range) {
+            // rclone cat does not support range natively; send 200 with full stream.
+            // Browser players handle this gracefully on first request.
+            reply.code(200);
+          }
+
+          return reply.send(stream);
         }
 
         const fileStats = await fs.stat(media.path);
@@ -664,7 +694,7 @@ export default async function feedRoutes(fastify: FastifyInstance): Promise<void
 
         return {
           success: true,
-          hiddenMedia: hiddenMedia.map((m) => buildMediaResponse(m)),
+          hiddenMedia: hiddenMedia.map((m) => withStreamToken(buildMediaResponse(m))),
           count: hiddenMedia.length,
         };
       } catch (error) {

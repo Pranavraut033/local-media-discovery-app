@@ -190,11 +190,15 @@ export function generateFeed(db: Database.Database, options: FeedOptions = {}): 
     return [];
   }
 
-  const sourceClause =
+  // Filter applied inside the CTE so the MAX(last_seen_at) dedup only
+  // considers paths of the requested storage_mode. Without this, a file that
+  // exists in both local and rclone would have its local path win the MAX()
+  // and the remote storage_mode filter in the outer WHERE would find nothing.
+  const storageModeFilter =
     sourceType === 'local'
-      ? "AND lp.absolute_path NOT LIKE 'rclone:%'"
+      ? "AND storage_mode = 'local'"
       : sourceType === 'remote'
-        ? "AND lp.absolute_path LIKE 'rclone:%'"
+        ? "AND storage_mode = 'rclone'"
         : '';
 
   const allMedia = db.prepare(
@@ -205,12 +209,12 @@ export function generateFeed(db: Database.Database, options: FeedOptions = {}): 
         JOIN (
           SELECT file_id, MAX(last_seen_at) AS max_seen
           FROM file_paths
-          WHERE user_id = ? AND is_present = 1
+          WHERE user_id = ? AND is_present = 1 ${storageModeFilter}
           GROUP BY file_id
         ) latest
           ON latest.file_id = fp.file_id
          AND latest.max_seen = fp.last_seen_at
-        WHERE fp.user_id = ? AND fp.is_present = 1
+        WHERE fp.user_id = ? AND fp.is_present = 1 ${storageModeFilter}
       )
       SELECT
         f.id,
@@ -229,7 +233,6 @@ export function generateFeed(db: Database.Database, options: FeedOptions = {}): 
       LEFT JOIN user_saved_files usf ON usf.user_id = ? AND usf.file_id = f.id
       LEFT JOIN user_hidden_files uhf ON uhf.user_id = ? AND uhf.file_id = f.id
       WHERE uhf.file_id IS NULL
-        ${sourceClause}
       ORDER BY f.created_at ASC
     `
   ).all(userId, userId, userId, userId, userId) as Array<{
