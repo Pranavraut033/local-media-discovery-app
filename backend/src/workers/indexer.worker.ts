@@ -14,6 +14,7 @@ import {
 import {
   discoverAndCreatePendingRclone,
   finalizeRclonePendingFiles,
+  indexRcloneFilesStreaming,
 } from '../services/rclone-indexer.js';
 import { invalidateFeedCache } from '../services/feed.js';
 
@@ -63,30 +64,36 @@ async function processJob(job: { data: IndexingJobData }): Promise<void> {
       const { remoteName, basePath, remoteType } = job.data;
       if (!remoteName || basePath === undefined) throw new Error('remoteName and basePath required for rclone job');
 
-      // Phase 1: discover remote files and create pending records
-      const pending = await discoverAndCreatePendingRclone(db, remoteName, basePath!, remoteType || 'unknown', userId, jobId, (count) => {
-        sseEventBus.emit(userId, {
-          type: 'job_progress',
-          jobId,
-          payload: { stage: 'discovery', filesFound: count },
-        });
-      });
+      // Streaming single-phase indexer: discover via fast-list then write ready in batches
+      const indexedCount = await indexRcloneFilesStreaming(
+        db,
+        remoteName,
+        basePath,
+        remoteType || 'unknown',
+        userId,
+        jobId,
+        // onDiscovery – fires once with total count after fast-list completes
+        (count) => {
+          db.prepare(`UPDATE indexing_jobs SET total_files = ?, updated_at = ? WHERE id = ?`).run(count, Math.floor(Date.now() / 1000), jobId);
+          sseEventBus.emit(userId, {
+            type: 'job_progress',
+            jobId,
+            payload: { stage: 'discovery', filesFound: count },
+          });
+        },
+        // onBatchReady – fires after each batch of 50 is written as ready
+        (done, total, _batchIds) => {
+          db.prepare(`UPDATE indexing_jobs SET processed_files = ?, updated_at = ? WHERE id = ?`).run(done, Math.floor(Date.now() / 1000), jobId);
+          sseEventBus.emit(userId, {
+            type: 'file_hashed',
+            jobId,
+            payload: { done, total },
+          });
+        }
+      );
 
-      db.prepare(
-        `UPDATE indexing_jobs SET total_files = ?, updated_at = ? WHERE id = ?`
-      ).run(pending.length, Math.floor(Date.now() / 1000), jobId);
-
-      // Phase 2: finalize rclone files (path-based hash, no re-download)
-      await finalizeRclonePendingFiles(db, pending, userId, jobId, (done, total, tempId, finalId) => {
-        sseEventBus.emit(userId, {
-          type: 'file_hashed',
-          jobId,
-          payload: { done, total, tempId, finalId },
-        });
-        db.prepare(
-          `UPDATE indexing_jobs SET processed_files = ?, updated_at = ? WHERE id = ?`
-        ).run(done, Math.floor(Date.now() / 1000), jobId);
-      });
+      db.prepare(`UPDATE indexing_jobs SET total_files = ?, processed_files = ?, updated_at = ? WHERE id = ?`)
+        .run(indexedCount, indexedCount, Math.floor(Date.now() / 1000), jobId);
     }
 
     db.prepare(
@@ -116,6 +123,8 @@ export function startIndexingWorker(): Worker {
   _worker = new Worker<IndexingJobData>(INDEXING_QUEUE, processJob, {
     connection: redisConnection,
     concurrency: 2,
+    lockDuration: 5 * 60 * 1000,   // 5 minutes – renewed every 2.5 min
+    lockRenewTime: 2.5 * 60 * 1000, // explicit to match half of lockDuration
   });
 
   _worker.on('failed', (job, err) => {
