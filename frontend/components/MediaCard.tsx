@@ -10,20 +10,22 @@ import { SourceBadge } from './SourceBadge';
 import { LikeButton, SaveButton, HideButton } from './InteractionButtons';
 import { useEffect, useRef, useState } from 'react';
 import { useLikeMutation, useSaveMutation, useViewMutation, useHideMutation, FeedItem } from '@/lib/hooks';
-import { getMediaUrl } from '@/lib/api';
+import { getStreamUrl } from '@/lib/api';
+import { Maximize2 } from 'lucide-react';
 
 
 interface MediaCardProps {
   media: FeedItem;
   onVisible?: () => void;
   onViewSource?: (sourceId: string, displayName: string, avatarSeed: string) => void;
+  onVideoExpand?: (src: string, title?: string) => void;
   mode?: 'feed' | 'reels';
   className?: string;
   enableHoverAutoplay?: boolean;
   enableMobileAutoplay?: boolean;
 }
 
-export function MediaCard({ media, onVisible, onViewSource, mode = 'feed', className = '', enableHoverAutoplay = true, enableMobileAutoplay = true }: MediaCardProps) {
+export function MediaCard({ media, onVisible, onViewSource, onVideoExpand, mode = 'feed', className = '', enableHoverAutoplay = true, enableMobileAutoplay = true }: MediaCardProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const hasRecordedView = useRef(false);
   const [currentLiked, setCurrentLiked] = useState(media?.liked ?? false);
@@ -99,8 +101,9 @@ export function MediaCard({ media, onVisible, onViewSource, mode = 'feed', class
     await hideMutation.mutateAsync({ mediaId: media.id, sourceId: media.sourceId });
   };
 
-  // Get media source - use data URL if available, otherwise construct from API
-  const mediaSource = getMediaUrl(media.id);
+  // Prefer the fast media-server stream URL when the backend has issued a token;
+  // fall back to the backend media file route if the media server is not available.
+  const mediaSource = getStreamUrl(media.streamToken, media.id);
 
   return (
     <div
@@ -134,6 +137,18 @@ export function MediaCard({ media, onVisible, onViewSource, mode = 'feed', class
               shouldAutoPlayOnMobileVisible={enableMobileAutoplay}
               isCardHovered={isHovered}
             />
+            {!isReelsMode && onVideoExpand && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onVideoExpand(mediaSource, media.displayName);
+                }}
+                className="absolute top-2 right-2 z-10 flex h-8 w-8 items-center justify-center rounded-full bg-black/50 text-white opacity-0 group-hover:opacity-100 transition-opacity hover:bg-black/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400"
+                aria-label="Open in video player"
+              >
+                <Maximize2 size={15} />
+              </button>
+            )}
           </div>
         ) : (
           <div className="w-full min-h-50 flex items-center justify-center text-neutral-500">

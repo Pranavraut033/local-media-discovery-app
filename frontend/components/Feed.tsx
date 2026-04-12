@@ -6,8 +6,10 @@
 
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useInfiniteFeed, useLikeMutation, useSaveMutation, useMediaPreload } from '@/lib/hooks';
+import { useQueryClient } from '@tanstack/react-query';
 import type { FeedItem } from '@/lib/hooks';
 import { MediaCard } from './MediaCard';
+import { PlyrVideoModal } from './PlyrVideoModal';
 import { Grid3x3, Layers, Heart, Bookmark, Maximize, Minimize } from 'lucide-react';
 import { getViewMode, setViewMode, getLastViewedMedia, setLastViewedMedia } from '@/lib/storage';
 import Masonry from 'react-masonry-css';
@@ -34,7 +36,10 @@ export function Feed({ initialMode, onViewSource, onModeChange }: FeedProps) {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [isResuming, setIsResuming] = useState(true);
   const [feedSeed] = useState(() => `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`);
+  const [expandedVideo, setExpandedVideo] = useState<{ src: string; title?: string } | null>(null);
   const feedSourceType = useUIStore((s) => s.preferences.feedSourceType);
+  const jobs = useIndexingStore((s) => s.jobs);
+  const queryClient = useQueryClient();
   const containerRef = useRef<HTMLDivElement>(null);
   const touchStartY = useRef(0);
   const { isFullscreen, toggleFullscreen } = useFullscreen();
@@ -48,6 +53,17 @@ export function Feed({ initialMode, onViewSource, onModeChange }: FeedProps) {
   } = useInfiniteFeed(30, undefined, feedSeed, feedSourceType);
   const likeMutation = useLikeMutation();
   const saveMutation = useSaveMutation();
+
+  const activeJob = Object.values(jobs).find((j) => j.status === 'queued' || j.status === 'processing');
+
+  // When an indexing job completes and the feed is still empty, refetch automatically
+  useEffect(() => {
+    const completedJob = Object.values(jobs).find((j) => j.status === 'completed');
+    if (completedJob && allItems.length === 0) {
+      queryClient.invalidateQueries({ queryKey: ['feed'] });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jobs]);
 
   const mergedFeedItems = useMemo(() => {
     if (!feedPages?.pages?.length) return [];
@@ -333,7 +349,37 @@ export function Feed({ initialMode, onViewSource, onModeChange }: FeedProps) {
     );
   }
 
+
   if (allItems.length === 0) {
+    if (activeJob) {
+      const progressPct = activeJob.total ? Math.round(((activeJob.done ?? 0) / activeJob.total) * 100) : null;
+      const label = activeJob.stage === 'discovery'
+        ? `Discovering files${activeJob.filesFound ? ` — ${activeJob.filesFound} found` : ''}…`
+        : activeJob.done !== undefined && activeJob.total
+          ? `Hashing ${activeJob.done} / ${activeJob.total}`
+          : 'Queued…';
+      return (
+        <div className="w-full h-screen flex items-center justify-center px-4 bg-neutral-950">
+          <div className="text-center space-y-6 max-w-md w-full">
+            <div className="w-14 h-14 border-4 border-white/20 border-t-white rounded-full animate-spin mx-auto" />
+            <div className="space-y-2">
+              <h1 className="font-serif text-2xl tracking-tight text-neutral-100">Indexing your media</h1>
+              <p className="text-neutral-400 text-sm">{label}</p>
+            </div>
+            {progressPct !== null && (
+              <div className="w-full bg-white/10 rounded-full h-1.5 overflow-hidden">
+                <div
+                  className="h-full bg-white transition-all duration-300 ease-out"
+                  style={{ width: `${progressPct}%` }}
+                />
+              </div>
+            )}
+            <p className="text-neutral-600 text-xs">Media will appear here once indexing completes</p>
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div className="w-full h-screen flex items-center justify-center px-4 bg-neutral-950">
         <div className="text-center space-y-4 max-w-md">
@@ -407,8 +453,8 @@ export function Feed({ initialMode, onViewSource, onModeChange }: FeedProps) {
               onClick={handleLike}
               disabled={likeMutation.isPending}
               className={`h-9 w-9 rounded-full backdrop-blur-md border transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300 flex items-center justify-center shrink-0 ${currentMedia?.liked
-                  ? 'bg-red-500/80 text-white border-red-400'
-                  : 'bg-black/35 text-white/80 border-white/20 hover:text-white'
+                ? 'bg-red-500/80 text-white border-red-400'
+                : 'bg-black/35 text-white/80 border-white/20 hover:text-white'
                 } disabled:opacity-50`}
               aria-label={currentMedia?.liked ? 'Unlike' : 'Like'}
             >
@@ -422,8 +468,8 @@ export function Feed({ initialMode, onViewSource, onModeChange }: FeedProps) {
               onClick={handleSave}
               disabled={saveMutation.isPending}
               className={`h-9 w-9 rounded-full backdrop-blur-md border transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300 flex items-center justify-center shrink-0 ${currentMedia?.saved
-                  ? 'bg-amber-400/80 text-neutral-950 border-amber-300'
-                  : 'bg-black/35 text-white/80 border-white/20 hover:text-white'
+                ? 'bg-amber-400/80 text-neutral-950 border-amber-300'
+                : 'bg-black/35 text-white/80 border-white/20 hover:text-white'
                 } disabled:opacity-50`}
               aria-label={currentMedia?.saved ? 'Unsave' : 'Save'}
             >
@@ -505,6 +551,7 @@ export function Feed({ initialMode, onViewSource, onModeChange }: FeedProps) {
                   media={item}
                   onVisible={() => { }}
                   onViewSource={onViewSource}
+                  onVideoExpand={(src, title) => setExpandedVideo({ src, title })}
                   mode="feed"
                   enableHoverAutoplay={true}
                   className="w-full rounded-2xl overflow-hidden"
@@ -522,6 +569,13 @@ export function Feed({ initialMode, onViewSource, onModeChange }: FeedProps) {
           )}
         </div>
       </div>
+
+      <PlyrVideoModal
+        isOpen={expandedVideo !== null}
+        src={expandedVideo?.src ?? ''}
+        title={expandedVideo?.title}
+        onClose={() => setExpandedVideo(null)}
+      />
     </div>
   );
 }

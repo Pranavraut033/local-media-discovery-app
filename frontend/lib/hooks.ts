@@ -4,7 +4,7 @@
  */
 import { useQuery, useMutation, useQueryClient, useInfiniteQuery } from '@tanstack/react-query';
 import React, { useEffect, useRef, useCallback } from 'react';
-import { getApiBase, authenticatedFetch } from '@/lib/api';
+import { getApiBase, authenticatedFetch, prefetchMediaFiles } from '@/lib/api';
 
 const API_BASE = getApiBase();
 
@@ -25,6 +25,8 @@ export interface FeedItem {
   saved: boolean;
   hidden: boolean;
   depth: number;
+  /** Short-lived HMAC-signed token issued by the backend. Present for local-mount files. */
+  streamToken?: string;
   source?: {
     id: string;
     displayName: string;
@@ -184,6 +186,7 @@ const normalizeFeedItem = (rawInput: unknown, options?: { hidden?: boolean }): F
     saved: toBoolean(raw.saved),
     hidden: toBoolean(raw.hidden, options?.hidden ?? false),
     depth: toNumber(raw.depth, 0),
+    streamToken: typeof raw.streamToken === 'string' ? raw.streamToken : undefined,
     source: {
       id: sourceId,
       displayName,
@@ -801,6 +804,36 @@ export const useMediaPreload = (mediaIds: string[], config: PreloadConfig = {}) 
     const indicesToPreload = mediaIds.slice(0, prefetchDistance);
     indicesToPreload.forEach((id) => preloadMedia(id));
   }, [mediaIds, prefetchDistance, preloadMedia]);
+
+  // Collect stream tokens for items that haven't been prefetched yet and fire
+  // a single batch request to the media server so it can warm the cache.
+  const tokensPrefetchedRef = useRef(new Set<string>());
+  useEffect(() => {
+    // Gather tokens from the query cache for upcoming items.
+    const tokens: string[] = [];
+    const lookahead = Math.min(mediaIds.length, prefetchDistance + 5);
+    for (let i = 0; i < lookahead; i++) {
+      const id = mediaIds[i];
+      if (!id || tokensPrefetchedRef.current.has(id)) continue;
+      // Walk all feed pages via getQueriesData to find this item's token.
+      const allFeedEntries = queryClient.getQueriesData<{ pages?: Array<{ feed?: Array<{ id: string; streamToken?: string }> }> }>({ queryKey: ['feed', 'infinite'] });
+      for (const [, data] of allFeedEntries) {
+        if (!data?.pages) continue;
+        for (const page of data.pages) {
+          const item = page.feed?.find((f) => f.id === id);
+          if (item?.streamToken) {
+            tokens.push(item.streamToken);
+            tokensPrefetchedRef.current.add(id);
+            break;
+          }
+        }
+        if (tokensPrefetchedRef.current.has(id)) break;
+      }
+    }
+    if (tokens.length > 0) {
+      prefetchMediaFiles(tokens);
+    }
+  }, [mediaIds, prefetchDistance, queryClient]);
 
   return { preloadedIds: preloadedRef.current };
 };

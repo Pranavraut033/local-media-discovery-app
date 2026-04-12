@@ -76,3 +76,60 @@ h6,
   outline: 2px solid var(--outline);
   outline-offset: 2px;
 }
+
+/* ─── Plyr video player theming ─────────────────────────────────────────── */
+:root {
+  --plyr-color-main: #f59e0b;           /* amber-400 — matches app accent */
+  --plyr-range-fill-background: #f59e0b;
+  --plyr-video-background: #0f1011;
+  --plyr-video-control-color: #e1e3e4;
+  --plyr-video-control-color-hover: #ffffff;
+  --plyr-video-control-background-hover: rgba(245, 158, 11, 0.25);
+  --plyr-menu-background: #1a1c1e;
+  --plyr-menu-color: #e1e3e4;
+  --plyr-menu-border-color: #374151;
+  --plyr-menu-border-shadow-color: #0f1011;
+  --plyr-menu-item-arrow-color: #9ca3ab;
+  --plyr-tooltip-background: #1a1c1e;
+  --plyr-tooltip-color: #e1e3e4;
+  --plyr-font-size-base: 14px;
+  --plyr-font-size-small: 12px;
+  --plyr-control-icon-size: 18px;
+  --plyr-control-spacing: 10px;
+  --plyr-control-radius: 8px;
+  --plyr-range-thumb-background: #f59e0b;
+  --plyr-range-thumb-height: 14px;
+  --plyr-range-track-height: 4px;
+}
+
+/* Slightly larger play-large button */
+.plyr--video .plyr__control--overlaid {
+  background: rgba(245, 158, 11, 0.85) !important;
+  border-radius: 50% !important;
+  padding: 20px !important;
+}
+
+.plyr--video .plyr__control--overlaid:hover {
+  background: #f59e0b !important;
+}
+
+/* Rounded control bar */
+.plyr--video .plyr__controls {
+  border-radius: 0 0 1rem 1rem;
+  padding: 8px 12px 12px;
+  background: linear-gradient(to top, rgba(0,0,0,0.75) 0%, transparent 100%);
+}
+
+/* Prevent Plyr from overflowing the modal on portrait/tall videos */
+[role="dialog"] .plyr,
+[role="dialog"] .plyr--video,
+[role="dialog"] .plyr__video-wrapper {
+  height: 100% !important;
+  max-height: calc(100dvh - 5rem) !important;
+}
+
+[role="dialog"] .plyr__video-wrapper video {
+  height: 100%;
+  width: 100%;
+  object-fit: contain;
+}
