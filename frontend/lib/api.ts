@@ -78,6 +78,46 @@ export function getMediaUrl(mediaId: string): string {
   return url.toString();
 }
 
+export function getMediaServerBase(): string {
+  if (process.env.NEXT_PUBLIC_MEDIA_SERVER_URL) {
+    return process.env.NEXT_PUBLIC_MEDIA_SERVER_URL;
+  }
+  const port = process.env.MEDIA_SERVER_PORT || '3002';
+  if (typeof window !== 'undefined' && window.location?.hostname) {
+    return `http://${window.location.hostname}:${port}`;
+  }
+  return `http://localhost:${port}`;
+}
+
+/**
+ * Build a media URL that routes through the fast media-cache server when a
+ * stream token is available, with automatic fallback to the backend.
+ */
+export function getStreamUrl(streamToken: string | undefined, mediaId: string): string {
+  if (streamToken) {
+    const base = getMediaServerBase();
+    const url = new URL(`${base}/stream`);
+    url.searchParams.set('token', streamToken);
+    return url.toString();
+  }
+  return getMediaUrl(mediaId);
+}
+
+export async function prefetchMediaFiles(tokens: string[]): Promise<void> {
+  if (!tokens.length) return;
+  try {
+    await fetch(`${getMediaServerBase()}/prefetch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tokens }),
+      // Non-critical — ignore errors silently.
+      signal: AbortSignal.timeout(5000),
+    });
+  } catch {
+    // Media server may not be running; ignore.
+  }
+}
+
 /**
  * Folder tree API
  */
