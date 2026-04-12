@@ -8,12 +8,18 @@ import { persist } from 'zustand/middleware';
 export type ViewMode = 'reels' | 'feed';
 export type FeedSourceType = 'local' | 'remote' | 'all';
 
+export interface RecentRcloneConfig {
+  remoteName: string;
+  basePath: string;
+}
+
 interface UserPreferences {
   viewMode: ViewMode;
   autoPlayVideos: boolean;
   showSourceBadge: boolean;
   lastRcloneRemote?: string;
   feedSourceType: FeedSourceType;
+  recentRcloneConfigs: RecentRcloneConfig[];
 }
 
 interface UIState {
@@ -42,6 +48,7 @@ const DEFAULT_PREFERENCES: UserPreferences = {
   autoPlayVideos: true,
   showSourceBadge: true,
   feedSourceType: 'local',
+  recentRcloneConfigs: [],
 };
 
 export const useUIStore = create<UIState>()(
@@ -81,7 +88,21 @@ export const useUIStore = create<UIState>()(
     }),
     {
       name: 'app-ui-store',
-      version: 1,
+      version: 2,
+      migrate: (persistedState: unknown, version: number) => {
+        const state = persistedState as Partial<UIState>;
+        if (version < 2) {
+          return {
+            ...state,
+            preferences: {
+              ...DEFAULT_PREFERENCES,
+              ...(state.preferences ?? {}),
+              recentRcloneConfigs: [],
+            },
+          };
+        }
+        return state;
+      },
     }
   )
 );
