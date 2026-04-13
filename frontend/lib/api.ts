@@ -218,6 +218,42 @@ export interface AddRcloneSourceBody {
   crypt_password?: string;
 }
 
+export interface RcloneMountEnsureResponse {
+  mounted: boolean;
+  status: 'mounted' | 'mounting' | 'error' | 'unmounted';
+  message?: string;
+  mountDir?: string;
+  pm2Status?: string | null;
+}
+
+let _ensureMountInFlight: Promise<RcloneMountEnsureResponse> | null = null;
+
+export function ensureRcloneMount(): Promise<RcloneMountEnsureResponse> {
+  if (_ensureMountInFlight) return _ensureMountInFlight;
+
+  _ensureMountInFlight = fetch(`${base}/api/rclone/mount/ensure`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: '{}',
+  })
+    .then(async (response) => {
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        return {
+          mounted: false,
+          status: 'error' as const,
+          message: (data && typeof data.message === 'string' ? data.message : undefined) || 'Failed to ensure rclone mount',
+        };
+      }
+      return data as RcloneMountEnsureResponse;
+    })
+    .finally(() => {
+      _ensureMountInFlight = null;
+    });
+
+  return _ensureMountInFlight;
+}
+
 export async function fetchRcloneRemotes(): Promise<RcloneRemote[]> {
   const response = await authenticatedFetch(`${base}/api/rclone/remotes`);
 
