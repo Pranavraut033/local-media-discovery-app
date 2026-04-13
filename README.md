@@ -1,355 +1,202 @@
-# Local Media Discovery App
+# Local Media Discovery
 
-Local-first media discovery for personal photo and video libraries. Instead of browsing nested folders manually, you get a swipeable, source-diverse feed optimized for phones and accessible from any device on your LAN.
+**A local-first, privacy-first media discovery app** — transforms your personal photo and video library into a swipeable, algorithmically ranked feed you can access from any device on your home network.
 
-## Overview
+[![License: ISC](https://img.shields.io/badge/license-ISC-blue.svg)](LICENSE)
+[![Node.js](https://img.shields.io/badge/node-%3E%3D18-brightgreen.svg)](https://nodejs.org)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5-blue.svg)](https://www.typescriptlang.org/)
 
-- 100% local: no cloud sync, no telemetry, no external dependency for core usage.
-- Mobile-first: Reels-style flow is the primary interaction model.
-- Private by design: authentication and user-scoped data are built in.
-- Folder-agnostic discovery: folder names are treated as structure, not categories.
+> **Live showcase:** open `landing/index.html` in your browser for an interactive overview.
 
-## Feature Highlights
+No cloud. No accounts. No telemetry. Your files stay on your machine.
 
-### Discovery and Feed
+---
 
-- Reels mode: full-screen vertical swipe experience.
-- Feed mode: grid browsing for fast scanning.
-- Discovery ranking combines unseen priority, source diversity, interaction bias, and entropy.
-- Infinite loading with prefetching for smoother browsing.
+## Features
 
-### Media and Indexing
+- **Reels mode** — full-screen vertical swipe, one item at a time
+- **Feed mode** — grid browsing for fast scanning
+- **Algorithmic ranking** — unseen priority, source diversity, interaction bias, entropy
+- **Like / Save / Hide** — interactions that refine your feed; accessible from any LAN device
+- **Source identities** — deterministic pseudo-handles (e.g. `@quiet_river`) derived from folder structure
+- **Remote sources** — Android Termux rclone daemon integration for phone libraries
+- **Multi-user** — per-user folders, interactions, and preferences; isolated by 6-digit PIN
+- **PWA-ready** — installable, works over LAN from any phone or tablet
 
-- Supported images: JPG, JPEG, PNG, WebP, GIF.
-- Supported videos: MP4, WebM, MOV.
-- Recursive indexing with live watcher updates.
-- Source system generates deterministic pseudo identities (for example: @quiet_river) from top-level structure.
+**Supported media:** JPG, JPEG, PNG, WebP, GIF · MP4, WebM, MOV
 
-### Interactions and Views
+---
 
-- Like media.
-- Save media for later.
-- Hide media from the main feed.
-- Track views and revisit behavior.
-- Dedicated views for Saved, Liked, and Hidden items.
-- Source-specific browsing for "more from this source" workflows.
+## Architecture
 
-### Authentication and User Scope
+Three independent processes managed by PM2:
 
-- 6-digit PIN login.
-- JWT-backed sessions (30-day validity).
-- Multi-user support on one host.
-- Folder associations and interactions are isolated per user.
+| Process | Port | Responsibility |
+|---|---|---|
+| `backend/` | 3001 | Auth, indexing, feed ranking, SQLite (Drizzle ORM), BullMQ workers |
+| `frontend/` | 3000 | Next.js static export, TanStack Query, Zustand |
+| `media-server/` | 3002 | HMAC-gated streaming, thumbnail cache *(optional for local files)* |
 
-### Remote Sources
+The media server is stateless — it verifies 2-hour HMAC tokens signed by the backend without touching the database.
 
-- Android Termux rclone daemon integration.
-- Remote connection testing and configuration from Settings.
-- Local storage mode and remote storage mode support.
+---
+
+## Prerequisites
+
+- **Node.js 18+** and npm
+- **ffmpeg** (for video thumbnail generation) — installed automatically via `ffmpeg-static`
+- Media files on local disk or accessible via rclone remote
+- **PM2** for production: `npm install -g pm2`
+
+---
 
 ## Quick Start
 
-### Prerequisites
-
-- Node.js 18+
-- npm
-- Media files available on local disk or via an rclone-accessible remote
-
 ### 1. Install dependencies
-
-From the repository root:
 
 ```bash
 npm run install:all
 ```
 
-Or install per app:
+### 2. Initialize the database
 
 ```bash
-cd backend && npm install
-cd ../frontend && npm install
+cd backend && npm run dev
+# Wait for "Database initialized" in logs, then Ctrl+C
 ```
 
-### 2. Initialize database and create first user
-
-Start backend once so schema initialization runs:
+### 3. Create your first user
 
 ```bash
-cd backend
-npm run dev
+cd backend && npm run create-user 123456
+# Replace 123456 with your own 6-digit PIN
 ```
 
-After the server logs database initialization, stop it and create your user:
+### 4. Start development servers
 
 ```bash
-cd backend
-npm run create-user 123456
+# Terminal 1
+cd backend && npm run dev      # API on :3001
+
+# Terminal 2
+cd frontend && npm run dev     # UI on :3000
+
+# Terminal 3 (optional — needed for video streaming on LAN)
+cd media-server && npm run dev # Media server on :3002
 ```
 
-Replace 123456 with your own 6-digit PIN.
+Open **http://localhost:3000**, enter your PIN, add a folder, and start indexing.
 
-### 3. Run development servers
+### 5. Access from phone / tablet
 
-Terminal 1 (backend API):
+Find your host IP (`ifconfig` / `ipconfig`), then open `http://<host-ip>:3000` in your mobile browser.
+
+---
+
+## Production
 
 ```bash
-cd backend
-npm run dev
+npm run build   # Compiles all three services
+npm start       # Build + launch via PM2
 ```
 
-Terminal 2 (frontend UI):
-
 ```bash
-cd frontend
-npm run dev
+npm run status   # PM2 process list
+npm run logs     # Stream all logs
+npm run restart  # Rolling restart
+npm run stop     # Stop all processes
 ```
 
-Development URLs:
+---
 
-- Frontend: http://localhost:3000
-- Backend API: http://localhost:3001
+## Configuration
 
-### 4. First login and first index
+### Environment variables
 
-1. Open the frontend in your browser.
-2. Enter your 6-digit PIN on the login screen.
-3. Open folder setup and choose your root folder.
-4. Start indexing.
-5. Wait for initial indexing to complete, then begin browsing feed/reels.
+| Variable | Default | Description |
+|---|---|---|
+| `JWT_SECRET` | auto-generated | Secret for signing JWTs — **set this in production** |
+| `MEDIA_SERVER_SECRET` | auto-generated | Shared HMAC secret between backend and media-server — **must match on both** |
+| `PORT` | `3001` | Backend API port |
+| `NODE_ENV` | `development` | Set to `production` for hardened headers and logging |
 
-### 5. Access from phone/tablet on LAN
-
-Use your host IP address in the mobile browser:
-
-- Frontend dev URL: http://<your-local-ip>:3000
-- Backend API is used by the frontend on port 3001.
-
-Find your host IP:
-
-- macOS/Linux: ifconfig
-- Windows: ipconfig
-
-## Using the App
-
-### Reels vs Feed
-
-- Reels mode is best for immersive, one-item-at-a-time browsing.
-- Feed mode is best for quick scanning in a grid layout.
-- The selected view mode persists per user preference.
-
-### Like, Save, Hide semantics
-
-- Like: mark favorites and influence ranking.
-- Save: explicit bookmark list for later revisits.
-- Hide: remove items from normal feed flow without deleting files.
-
-### Sources
-
-- A source is a deterministic pseudo identity mapped from folder structure.
-- Real folder names are not exposed as social labels in the feed UI.
-
-### Settings and preferences
-
-- View mode preference.
-- Video autoplay behavior.
-- Source badge visibility.
-- Reindex/reset maintenance actions.
-
-## Remote Sources (rclone)
-
-### Android Termux setup
-
-Install and configure rclone in Termux:
+Example `.env` for production:
 
 ```bash
-pkg update && pkg upgrade -y
-pkg install rclone -y
-rclone config
+JWT_SECRET=replace-with-a-strong-random-secret
+MEDIA_SERVER_SECRET=same-secret-used-in-media-server
+NODE_ENV=production
 ```
 
-Start rclone daemon (no auth):
+> **Important:** both `backend/` and `media-server/` must share the same `MEDIA_SERVER_SECRET` or streaming will fail.
+
+---
+
+## Remote Sources (Android Termux)
+
+Install rclone in Termux and start the daemon:
 
 ```bash
+pkg update && pkg install rclone -y
+rclone config    # set up your remote(s)
+
+# Start daemon (add --rc-user / --rc-pass on shared networks)
 rclone rcd --rc-addr=0.0.0.0:5572 --rc-no-auth
 ```
 
-Start rclone daemon (recommended auth on shared networks):
+Then go to **Settings → Remote sources** in the app, enter your phone's IP and port, test the connection, and save.
+
+Keep the Termux session alive while indexing. If the phone sleeps and drops the connection, restart the daemon.
+
+---
+
+## Development
 
 ```bash
-rclone rcd --rc-addr=0.0.0.0:5572 --rc-user=myuser --rc-pass=mypassword
+# Quality checks — run before finishing any change
+cd backend  && npm run type-check
+cd frontend && npm run lint
+
+# Database migrations
+cd backend && npm run db:migrate
 ```
 
-Then in app Settings, configure Android rclone connection and test before saving.
+Schema lives in `backend/src/db/schema.ts`. Run migrations after any schema change.
 
-### Notes
-
-- Keep phone and host on the same network.
-- Keep Termux session alive while scanning/indexing.
-- If connectivity drops after sleep, restart rclone daemon.
-
-## Development and Scripts
-
-Root scripts:
-
-- npm run install:all
-- npm run dev:backend
-- npm run dev:frontend
-- npm run build
-- npm start (builds and launches PM2 ecosystem)
-
-Backend scripts:
-
-- npm run dev
-- npm run build
-- npm run type-check
-- npm run create-user <6-digit-pin>
-- npm run db:migrate
-
-Frontend scripts:
-
-- npm run dev
-- npm run build
-- npm run lint
-
-## Production Runbook
-
-From project root:
-
-```bash
-npm run build
-npm start
-```
-
-Useful PM2 commands:
-
-- npm run status
-- npm run logs
-- npm run restart
-- npm run stop
-
-PM2 services are defined in ecosystem.config.cjs.
-
-## Environment Variables
-
-- PORT: backend port (defaults to 3001).
-- NODE_ENV: environment mode.
-- JWT_SECRET: recommended in production for secure token signing.
-
-Example:
-
-```bash
-export JWT_SECRET="replace-with-a-strong-random-secret"
-```
-
-## API Summary
-
-Authentication:
-
-- POST /api/auth/login
-- POST /api/auth/verify
-- GET /api/auth/check-setup
-
-Configuration and filesystem:
-
-- POST /api/config/root-folder
-- DELETE /api/config/root-folder
-- GET /api/filesystem/roots
-- GET /api/filesystem/list
-
-Indexing:
-
-- POST /api/index/start
-- GET /api/index/status
-- POST /api/index/stop
-
-Feed and interactions:
-
-- GET /api/feed
-- POST /api/like
-- POST /api/save
-- POST /api/hide
-- POST /api/view
-- GET /api/saved
-- GET /api/liked
-- GET /api/hidden
-- GET /api/source/:sourceId/media
-- GET /api/media/:id
-- GET /api/media/file/:id
-
-## Troubleshooting
-
-### Invalid PIN or login issues
-
-- Confirm PIN is exactly 6 digits.
-- Clear browser local storage and retry.
-- Verify you created at least one user using create-user.
-
-### No media appears after folder selection
-
-- Check indexing status in app.
-- Verify folder path still exists and is readable.
-- Restart backend and trigger reindex.
-
-### rclone connection issues
-
-- Confirm phone/host are on same Wi-Fi.
-- Confirm daemon is running and reachable on configured port.
-- Re-test credentials if using rc auth.
-
-## Privacy and Security Notes
-
-- All data remains local to your environment.
-- No telemetry or cloud sync is added by default.
-- PINs are hashed; JWT is used for API authorization.
-- User data is isolated per account.
+---
 
 ## Project Structure
 
-```text
+```
 local-media-discovery-app/
-├── backend/                 # Fastify + SQLite + indexing/services/routes
-├── frontend/                # Next.js app router + UI + Zustand + query hooks
-├── AUTH_SETUP.md            # Authentication setup and troubleshooting
-├── PRD.md                   # Product requirements
-├── plan.md                  # Phased implementation plan
-├── agents.md                # Agent workflow constraints
-└── ecosystem.config.cjs     # PM2 process definitions
+├── backend/          # Fastify API, SQLite, BullMQ indexing workers
+├── frontend/         # Next.js static export, Zustand stores, TanStack Query
+├── media-server/     # HMAC-gated media streaming and thumbnail cache
+├── landing/          # Standalone showcase page (open index.html in browser)
+├── ecosystem.config.cjs  # PM2 process definitions
+└── PRD.md            # Product requirements and design decisions
 ```
 
-## Tech Stack
+---
 
-Backend:
+## Troubleshooting
 
-- TypeScript
-- Node.js + Fastify
-- SQLite (better-sqlite3, Drizzle ORM)
-- chokidar
-- sharp
-- ffmpeg-static + fluent-ffmpeg
+| Problem | Fix |
+|---|---|
+| Login fails | PIN must be exactly 6 digits; confirm user was created with `create-user` |
+| No media after indexing | Verify the folder path exists and is readable; trigger reindex from Settings |
+| Streaming broken on LAN | Ensure both `backend` and `media-server` share the same `MEDIA_SERVER_SECRET` |
+| rclone won't connect | Phone and host must be on the same Wi-Fi; check daemon is running on the configured port |
+| Database errors on start | Delete `backend/media-discovery.db` and re-run `npm run dev` to reinitialize |
 
-Frontend:
+---
 
-- TypeScript
-- Next.js + React
-- TanStack Query
-- Zustand
-- Headless UI
-- Tailwind CSS
-- react-player
+## Contributing
 
-## Current Status
+This is a personal project but issues and PRs are welcome. Before contributing, run the quality checks above and review `CLAUDE.md` for codebase conventions.
 
-- Core architecture, indexing, feed, interactions, and mobile-first browsing are implemented.
-- Auth, user scoping, and remote source integration are implemented.
-- Ongoing work is tracked in plan.md.
-
-## Additional Documentation
-
-- Product requirements: PRD.md
-- Auth setup details: AUTH_SETUP.md
-- Implementation plan: plan.md
-- Zustand migration notes: MIGRATION_ZUSTAND.md
+---
 
 ## License
 
-ISC
+ISC — see [LICENSE](LICENSE) for details.
