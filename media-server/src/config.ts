@@ -20,8 +20,10 @@ export const config = {
   cacheDir: resolveHome(process.env.CACHE_DIR || '~/media-cache'),
   // Auto-generated AES-256 key persisted in this file (hex-encoded, 64 chars).
   keyfilePath: resolveHome(process.env.KEYFILE_PATH || '~/.media-server-key'),
-  // Max total cache size in GB before LRU eviction kicks in.
-  cacheMaxGb: parseFloat(process.env.CACHE_MAX_GB || '50'),
+  // Minimum cache budget in GB.
+  cacheMinGb: parseFloat(process.env.CACHE_MIN_GB || '10'),
+  // Dynamic budget based on currently available free disk bytes (0..1).
+  cacheFreeSpacePercent: parseFloat(process.env.CACHE_FREE_SPACE_PERCENT || '0.25'),
   // Max concurrent background cache-fill downloads from the mount.
   downloadConcurrency: parseInt(process.env.DOWNLOAD_CONCURRENCY || '3', 10),
   // Warning if running with the default insecure secret.

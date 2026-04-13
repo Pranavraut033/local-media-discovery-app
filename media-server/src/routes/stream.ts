@@ -18,7 +18,7 @@ import fsp from 'fs/promises';
 import path from 'path';
 import { verifyStreamToken } from '../tokens.js';
 import { config } from '../config.js';
-import { getCachedFileInfo, createDecryptRangeStream } from '../services/cache.js';
+import { getCachedFileInfo, createDecryptRangeStream, markCacheAccessed } from '../services/cache.js';
 import { enqueueDownload, DownloadPriority } from '../services/queue.js';
 
 interface StreamQuery {
@@ -86,6 +86,9 @@ export default async function streamRoute(fastify: FastifyInstance): Promise<voi
       const cached = await getCachedFileInfo(mediaId);
 
       if (cached) {
+        // Keep LRU metadata fresh for eviction ordering.
+        void markCacheAccessed(mediaId);
+
         const { plaintextSize } = cached;
         const rangeHeader = request.headers.range;
 

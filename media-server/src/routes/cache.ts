@@ -6,6 +6,7 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import fsp from 'fs/promises';
 import path from 'path';
 import { config } from '../config.js';
+import { getEffectiveCacheLimitBytes } from '../services/cache.js';
 import { getQueueStatus } from '../services/queue.js';
 
 export default async function cacheRoute(fastify: FastifyInstance): Promise<void> {
@@ -14,6 +15,7 @@ export default async function cacheRoute(fastify: FastifyInstance): Promise<void
     async (_request: FastifyRequest, reply: FastifyReply) => {
       let totalBytes = 0;
       let fileCount = 0;
+      const effectiveMaxBytes = await getEffectiveCacheLimitBytes();
       try {
         const files = await fsp.readdir(config.cacheDir);
         const enc = files.filter((f) => f.endsWith('.enc'));
@@ -31,7 +33,10 @@ export default async function cacheRoute(fastify: FastifyInstance): Promise<void
         fileCount,
         totalBytes,
         totalMb: Math.round(totalBytes / 1024 / 1024),
-        maxGb: config.cacheMaxGb,
+        minGb: config.cacheMinGb,
+        freeSpacePercent: config.cacheFreeSpacePercent,
+        effectiveMaxBytes,
+        effectiveMaxGb: +(effectiveMaxBytes / 1024 / 1024 / 1024).toFixed(2),
         queue: getQueueStatus(),
       });
     }

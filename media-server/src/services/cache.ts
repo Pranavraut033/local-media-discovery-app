@@ -36,6 +36,30 @@ export function ensureCacheDir(): void {
   fs.mkdirSync(config.cacheDir, { recursive: true });
 }
 
+function gbToBytes(gb: number): number {
+  return Math.max(0, gb) * 1024 ** 3;
+}
+
+async function getAvailableDiskBytes(): Promise<number> {
+  try {
+    const stats = await fsp.statfs(config.cacheDir);
+    const bsize = typeof stats.bsize === 'bigint' ? stats.bsize : BigInt(stats.bsize);
+    const bavail = typeof stats.bavail === 'bigint' ? stats.bavail : BigInt(stats.bavail);
+    const free = bsize * bavail;
+    return free > BigInt(Number.MAX_SAFE_INTEGER) ? Number.MAX_SAFE_INTEGER : Number(free);
+  } catch {
+    return 0;
+  }
+}
+
+export async function getEffectiveCacheLimitBytes(): Promise<number> {
+  const minBytes = gbToBytes(config.cacheMinGb);
+  const freeBytes = await getAvailableDiskBytes();
+  const pct = Math.min(1, Math.max(0, config.cacheFreeSpacePercent));
+  const freePctBytes = Math.floor(freeBytes * pct);
+  return Math.max(minBytes, freePctBytes);
+}
+
 /**
  * Read the IV and derive the plaintext size from a cached file's stat.
  * Returns null if the file doesn't exist or is corrupted (< 16 bytes).
@@ -58,6 +82,15 @@ export async function getCachedFileInfo(mediaId: string): Promise<CachedFileInfo
   } finally {
     await fd.close();
   }
+}
+
+/**
+ * Best-effort access-time update so LRU eviction reflects real playback activity
+ * even on systems where read-atime updates are disabled or delayed.
+ */
+export async function markCacheAccessed(mediaId: string): Promise<void> {
+  const now = new Date();
+  await fsp.utimes(getCachePath(mediaId), now, now).catch(() => undefined);
 }
 
 /**
@@ -168,10 +201,12 @@ export async function writeToCache(sourcePath: string, mediaId: string): Promise
 
 /**
  * Evict the oldest-accessed files from the cache until the total size is
- * below `config.cacheMaxGb`. Runs after each successful download.
+ * below the effective cache limit. Effective limit is:
+ *   max(10 GB minimum, configured percent of current free disk bytes).
+ * Runs after each successful download.
  */
 export async function evictIfNeeded(): Promise<void> {
-  const maxBytes = config.cacheMaxGb * 1024 ** 3;
+  const maxBytes = await getEffectiveCacheLimitBytes();
 
   let entries: Array<{ file: string; size: number; atime: number }>;
   try {
