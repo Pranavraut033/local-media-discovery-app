@@ -1,0 +1,947 @@
+<!DOCTYPE html>
+<html lang="en" class="scroll-smooth">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>Local Media Discovery — Your photos, rediscovered</title>
+  <meta name="description" content="A local-first, privacy-first media discovery app. Algorithmic feed from your personal library. No cloud. No tracking." />
+  <meta property="og:title" content="Local Media Discovery" />
+  <meta property="og:description" content="Transform your personal photo & video library into a swipeable algorithmic feed. Local-first, no cloud." />
+
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,600;1,6..72,400&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet" />
+
+  <!-- Tailwind Play CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            bg:              '#0f1011',
+            surface:         '#131517',
+            'surface-low':   '#1a1c1e',
+            'surface-lowest':'#1e2124',
+            'surface-high':  '#282c30',
+            primary:         '#e1e3e4',
+            secondary:       '#a9c4fd',
+            'sec-container': '#1e3461',
+            muted:           '#9ca3ab',
+            outline:         '#374151',
+          },
+          fontFamily: {
+            editorial: ['Newsreader', 'Georgia', 'serif'],
+            sans:      ['Manrope', 'system-ui', 'sans-serif'],
+          },
+        },
+      },
+    }
+  </script>
+
+  <style>
+    /* ── Design tokens ───────────────────────────────────────────────────── */
+    :root {
+      --bg:             #0f1011;
+      --surface:        #131517;
+      --surface-low:    #1a1c1e;
+      --surface-lowest: #1e2124;
+      --primary:        #e1e3e4;
+      --secondary:      #a9c4fd;
+      --sec-container:  #1e3461;
+      --muted:          #9ca3ab;
+      --glass-bg:       rgba(19, 21, 23, 0.82);
+      --ambient:        0 16px 40px rgba(0,0,0,0.45);
+      --r-lg:           1rem;
+      --r-xl:           1.5rem;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html {
+      font-family: 'Manrope', system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--primary);
+      overflow-x: hidden;
+    }
+
+    body {
+      background:
+        radial-gradient(1200px 480px at 100% -8%, rgba(67,94,145,.15), transparent 60%),
+        radial-gradient(900px 500px at -10% 12%, rgba(30,52,97,.22), transparent 56%),
+        var(--bg);
+      overflow-x: hidden;
+    }
+
+    /* ── Canvas layers ───────────────────────────────────────────────────── */
+    #spotlight-canvas {
+      position: fixed; inset: 0; width: 100%; height: 100%;
+      pointer-events: none; z-index: 0;
+    }
+    #headline-canvas {
+      display: block; cursor: default;
+    }
+
+    /* ── Glassmorphism ───────────────────────────────────────────────────── */
+    .glass {
+      background: var(--glass-bg);
+      backdrop-filter: blur(18px);
+      -webkit-backdrop-filter: blur(18px);
+      border: 1px solid rgba(225,227,228,.08);
+      border-radius: var(--r-xl);
+      box-shadow: var(--ambient), inset 0 1px 0 rgba(255,255,255,.04);
+    }
+
+    /* ── Floating parallax cards ─────────────────────────────────────────── */
+    .f-card {
+      position: absolute;
+      transition: none;
+    }
+
+    /* ── Feature cards ───────────────────────────────────────────────────── */
+    .feat-card {
+      background: var(--surface);
+      border-radius: var(--r-xl);
+      padding: 1.75rem;
+      transform-style: preserve-3d;
+      transition: transform .5s cubic-bezier(.25,.46,.45,.94);
+    }
+    .feat-card:hover { box-shadow: 0 24px 60px rgba(0,0,0,.5); }
+
+    /* ── Scroll reveal ───────────────────────────────────────────────────── */
+    [data-rv] {
+      opacity: 0;
+      transform: translateY(26px);
+      transition: opacity .65s ease, transform .65s cubic-bezier(.25,.46,.45,.94);
+    }
+    [data-rv].on { opacity: 1; transform: translateY(0); }
+
+    /* ── Architecture nodes ──────────────────────────────────────────────── */
+    .a-node {
+      opacity: 0; transform: scale(.9);
+      transition: opacity .45s ease, transform .45s ease;
+    }
+    .a-node.on { opacity: 1; transform: scale(1); }
+
+    .a-conn {
+      opacity: 0; transform: scaleX(0); transform-origin: left center;
+      transition: opacity .35s ease, transform .35s ease;
+    }
+    .a-conn.on { opacity: 1; transform: scaleX(1); }
+
+    /* ── Phone frame ─────────────────────────────────────────────────────── */
+    .phone {
+      position: relative;
+      width: 270px; height: 540px;
+      background: var(--surface-low);
+      border-radius: 38px;
+      border: 2px solid rgba(225,227,228,.1);
+      box-shadow: 0 40px 100px rgba(0,0,0,.65), inset 0 1px 0 rgba(255,255,255,.05);
+      flex-shrink: 0;
+      overflow: hidden;
+    }
+    .phone-screen {
+      position: absolute; inset: 8px;
+      border-radius: 32px; overflow: hidden;
+      background: var(--bg); touch-action: none;
+    }
+    .card-track {
+      display: flex; width: 300%; height: 100%;
+      transition: transform .38s cubic-bezier(.25,.46,.45,.94);
+    }
+    .m-card { width: calc(100%/3); height: 100%; position: relative; flex-shrink: 0; }
+    .m-bg   { position: absolute; inset: 0; }
+
+    .bg-1 { background: linear-gradient(150deg,#0c1a30 0%,#1a3461 50%,#091526 100%); }
+    .bg-2 { background: linear-gradient(150deg,#1a0e20 0%,#3d1a38 50%,#140c1b 100%); }
+    .bg-3 { background: linear-gradient(150deg,#0e1a0f 0%,#1a3420 50%,#0a1a0e 100%); }
+
+    .orb {
+      position: absolute; border-radius: 50%; filter: blur(36px); opacity: .28;
+    }
+
+    .act-btn {
+      display: flex; flex-direction: column; align-items: center; gap: 3px;
+      cursor: pointer;
+    }
+    .act-btn .ico {
+      width: 42px; height: 42px;
+      display: flex; align-items: center; justify-content: center;
+      background: rgba(0,0,0,.4); backdrop-filter: blur(8px);
+      border-radius: 50%; font-size: 17px;
+      transition: transform .15s ease, background .2s ease;
+    }
+    .act-btn:active .ico { transform: scale(.85); }
+    .act-btn.liked  .ico { color: #f87171; background: rgba(248,113,113,.15); }
+    .act-btn.saved  .ico { color: var(--secondary); background: rgba(169,196,253,.12); }
+
+    .dot-ind {
+      width: 6px; height: 6px; border-radius: 4px;
+      background: rgba(255,255,255,.3);
+      transition: all .3s ease;
+    }
+    .dot-ind.on { width: 18px; background: rgba(255,255,255,.85); }
+
+    /* ── Magnetic / CTA buttons ──────────────────────────────────────────── */
+    .mag { transition: transform .08s ease; display: inline-flex; }
+
+    /* ── Reduced motion ──────────────────────────────────────────────────── */
+    @media (prefers-reduced-motion: reduce) {
+      [data-rv]       { transition: none; opacity: 1; transform: none; }
+      .a-node, .a-conn{ transition: none; opacity: 1; transform: none !important; }
+      .card-track     { transition: none; }
+      .feat-card      { transition: none; }
+      #spotlight-canvas, #headline-canvas { display: none; }
+      * { animation-duration: .01ms !important; }
+    }
+  </style>
+</head>
+
+<body class="font-sans">
+
+  <!-- Fixed spotlight canvas -->
+  <canvas id="spotlight-canvas" aria-hidden="true"></canvas>
+
+  <!-- ═══════════════════════════════════════ HERO ════════════════════════════ -->
+  <section id="hero" class="relative min-h-screen flex flex-col items-center justify-center overflow-hidden px-6 pt-24 pb-16">
+
+    <!-- Parallax floating cards (hidden on small screens) -->
+    <div class="absolute inset-0 pointer-events-none" id="parallax-field" aria-hidden="true">
+
+      <!-- Card A: feed chip -->
+      <div class="f-card glass w-44 p-3 hidden md:block" data-depth="0.022" data-rx="-4"
+           style="top:22%;left:6%">
+        <div class="flex items-center gap-2 mb-2">
+          <div class="w-5 h-5 rounded-full flex-shrink-0" style="background:var(--sec-container)"></div>
+          <span class="text-xs font-medium" style="color:var(--muted)">@quiet_river</span>
+        </div>
+        <div class="w-full rounded-lg h-20" style="background:var(--surface-low)"></div>
+        <div class="flex gap-3 mt-2">
+          <span class="text-[11px]" style="color:var(--muted)">♥ 12</span>
+          <span class="text-[11px]" style="color:var(--secondary)">✦ ranked</span>
+        </div>
+      </div>
+
+      <!-- Card B: stats -->
+      <div class="f-card glass w-36 p-4 hidden md:block" data-depth="0.040" data-rx="2"
+           style="top:30%;right:7%">
+        <div class="text-[10px] uppercase tracking-widest mb-1" style="color:var(--muted)">Indexed</div>
+        <div class="text-3xl font-bold leading-none mb-1" style="color:var(--secondary);font-family:'Newsreader',serif">2,847</div>
+        <div class="text-[10px]" style="color:var(--muted)">files · 3 sources</div>
+      </div>
+
+      <!-- Card C: now playing -->
+      <div class="f-card glass w-44 p-3 hidden lg:block" data-depth="0.060" data-rx="3"
+           style="bottom:26%;right:9%">
+        <div class="text-[10px] uppercase tracking-widest mb-2" style="color:var(--muted)">Now playing</div>
+        <div class="flex items-center gap-2">
+          <div class="w-9 h-9 rounded-xl flex-shrink-0" style="background:linear-gradient(135deg,var(--sec-container),#0a1628)"></div>
+          <div>
+            <div class="text-xs font-semibold leading-tight">IMG_3847.jpg</div>
+            <div class="text-[10px]" style="color:var(--muted)">@morning_light</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Hero content -->
+    <div class="relative z-10 flex flex-col items-center text-center max-w-4xl mx-auto w-full">
+
+      <!-- Eyebrow badge -->
+      <div class="inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium uppercase tracking-widest mb-10"
+           style="background:var(--surface);color:var(--muted)">
+        <span class="w-1.5 h-1.5 rounded-full inline-block animate-pulse" style="background:var(--secondary)"></span>
+        Local-first &nbsp;·&nbsp; Privacy-first &nbsp;·&nbsp; No cloud
+      </div>
+
+      <!-- Pretext-rendered headline canvas -->
+      <canvas id="headline-canvas" aria-label="Your photos, rediscovered."></canvas>
+      <noscript>
+        <h1 style="font-family:'Newsreader',serif;font-size:clamp(2.5rem,8vw,5.5rem);font-weight:600;line-height:1.1;color:var(--primary)">
+          Your photos,<br>rediscovered.
+        </h1>
+      </noscript>
+
+      <p class="text-base md:text-lg leading-relaxed max-w-lg mt-6 mb-10" style="color:var(--muted)">
+        Transform your personal photo &amp; video library into a swipeable,
+        algorithmic feed. Runs entirely on your local network.
+        No accounts. No cloud. No tracking.
+      </p>
+
+      <div class="flex items-center gap-4 flex-wrap justify-center">
+        <a href="#demo"
+           class="mag items-center gap-2 px-7 py-3.5 rounded-full text-sm font-semibold"
+           style="background:var(--secondary);color:var(--bg)">
+          See the demo ↓
+        </a>
+        <a href="https://github.com" target="_blank" rel="noopener"
+           class="mag items-center gap-2 px-7 py-3.5 rounded-full text-sm font-medium border"
+           style="border-color:rgba(225,227,228,.12);color:var(--primary)">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" class="inline-block mr-1.5" style="vertical-align:-2px"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg>
+          GitHub
+        </a>
+      </div>
+    </div>
+
+    <!-- Scroll hint -->
+    <div class="absolute bottom-8 left-1/2 -translate-x-1/2 flex flex-col items-center gap-1.5 opacity-30 animate-bounce" aria-hidden="true">
+      <span class="text-[11px]" style="color:var(--muted)">scroll</span>
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12l7 7 7-7"/></svg>
+    </div>
+  </section>
+
+  <!-- ═════════════════════════════════════ DEMO ══════════════════════════════ -->
+  <section id="demo" class="relative z-10 px-6 py-24 flex flex-col items-center">
+
+    <div class="text-center mb-16" data-rv data-rv-i="0">
+      <div class="text-xs uppercase tracking-widest font-medium mb-3" style="color:var(--secondary)">Live Demo</div>
+      <h2 style="font-family:'Newsreader',serif;font-size:clamp(2rem,5vw,3.25rem);font-weight:600;line-height:1.1">See it in action</h2>
+      <p class="text-sm mt-3 max-w-xs mx-auto" style="color:var(--muted)">Drag the cards. Tap like &amp; save. Just like the real app.</p>
+    </div>
+
+    <div class="flex flex-col lg:flex-row items-center gap-14 max-w-4xl w-full">
+
+      <!-- Phone mockup -->
+      <div class="phone" data-rv data-rv-i="1">
+        <!-- Dynamic island -->
+        <div class="absolute top-3 left-1/2 -translate-x-1/2 z-20 flex items-center gap-1.5 px-3 py-1.5 rounded-full"
+             style="background:var(--bg);width:88px;height:26px">
+          <div class="w-2 h-2 rounded-full" style="background:var(--surface-low)"></div>
+          <div class="flex-1 h-1 rounded-full" style="background:var(--surface)"></div>
+        </div>
+
+        <div class="phone-screen" id="phone-screen">
+          <!-- Card track -->
+          <div class="card-track" id="card-track">
+
+            <!-- Card 1 — blue night -->
+            <div class="m-card">
+              <div class="m-bg bg-1">
+                <div class="orb w-44 h-44 -top-6 -right-6" style="background:#3b82f6"></div>
+                <div class="orb w-32 h-32 bottom-16 -left-6" style="background:#6366f1"></div>
+              </div>
+              <div class="absolute inset-0" style="background:linear-gradient(to top,rgba(0,0,0,.82) 0%,transparent 55%)"></div>
+              <div class="absolute bottom-14 left-4 right-14">
+                <div class="text-[11px] mb-0.5" style="color:rgba(255,255,255,.55)">@quiet_river · 2 days ago</div>
+                <div class="text-sm font-semibold text-white leading-tight">IMG_3847.JPG</div>
+                <div class="text-[11px] mt-0.5" style="color:rgba(255,255,255,.4)">Vacation · 2.4 MB</div>
+              </div>
+            </div>
+
+            <!-- Card 2 — warm dusk -->
+            <div class="m-card">
+              <div class="m-bg bg-2">
+                <div class="orb w-40 h-40 top-8 left-4" style="background:#f43f5e"></div>
+                <div class="orb w-28 h-28 bottom-24 right-3" style="background:#ec4899"></div>
+              </div>
+              <div class="absolute inset-0" style="background:linear-gradient(to top,rgba(0,0,0,.82) 0%,transparent 55%)"></div>
+              <div class="absolute bottom-14 left-4 right-14">
+                <div class="text-[11px] mb-0.5" style="color:rgba(255,255,255,.55)">@morning_light · 5 days ago</div>
+                <div class="text-sm font-semibold text-white leading-tight">VID_2023.MP4</div>
+                <div class="text-[11px] mt-0.5" style="color:rgba(255,255,255,.4)">30 sec · 12.7 MB</div>
+              </div>
+            </div>
+
+            <!-- Card 3 — forest -->
+            <div class="m-card">
+              <div class="m-bg bg-3">
+                <div class="orb w-44 h-44 -top-4 right-6" style="background:#10b981"></div>
+                <div class="orb w-28 h-28 bottom-20 left-2" style="background:#14b8a6"></div>
+              </div>
+              <div class="absolute inset-0" style="background:linear-gradient(to top,rgba(0,0,0,.82) 0%,transparent 55%)"></div>
+              <div class="absolute bottom-14 left-4 right-14">
+                <div class="text-[11px] mb-0.5" style="color:rgba(255,255,255,.55)">@forest_walk · 1 week ago</div>
+                <div class="text-sm font-semibold text-white leading-tight">DSC_0192.JPG</div>
+                <div class="text-[11px] mt-0.5" style="color:rgba(255,255,255,.4)">Nature · 3.1 MB</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Action buttons -->
+          <div class="absolute right-2.5 bottom-16 flex flex-col gap-3.5 z-10">
+            <button class="act-btn" id="like-btn" aria-label="Like">
+              <div class="ico">♥</div>
+              <span class="text-[10px]" id="like-count" style="color:rgba(255,255,255,.6)">24</span>
+            </button>
+            <button class="act-btn" id="save-btn" aria-label="Save">
+              <div class="ico" id="save-ico">⊡</div>
+              <span class="text-[10px]" style="color:rgba(255,255,255,.6)">save</span>
+            </button>
+            <button class="act-btn" aria-label="More">
+              <div class="ico" style="font-size:14px">···</div>
+              <span class="text-[10px]" style="color:rgba(255,255,255,.6)">more</span>
+            </button>
+          </div>
+
+          <!-- Dot indicators -->
+          <div class="absolute bottom-5 left-0 right-0 flex justify-center gap-1.5 z-10" id="dots">
+            <div class="dot-ind on"></div>
+            <div class="dot-ind"></div>
+            <div class="dot-ind"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Demo description -->
+      <div class="flex-1 space-y-9" data-rv data-rv-i="2">
+        <div>
+          <div class="text-[11px] font-semibold uppercase tracking-widest mb-2" style="color:var(--secondary)">Reels Mode</div>
+          <h3 style="font-family:'Newsreader',serif;font-size:1.75rem;font-weight:600;line-height:1.15">Swipe through your memories</h3>
+          <p class="text-sm leading-relaxed mt-2" style="color:var(--muted)">Full-screen vertical cards. Drag to navigate. Each card is algorithmically ranked — unseen files first, shuffled across sources for variety.</p>
+        </div>
+        <div>
+          <div class="text-[11px] font-semibold uppercase tracking-widest mb-2" style="color:var(--secondary)">Interactions</div>
+          <h3 style="font-family:'Newsreader',serif;font-size:1.75rem;font-weight:600;line-height:1.15">Like, save, hide</h3>
+          <p class="text-sm leading-relaxed mt-2" style="color:var(--muted)">Every tap refines your feed. Saved files accessible from any device on your LAN. All data lives in SQLite on your machine — never anywhere else.</p>
+        </div>
+        <div class="flex flex-wrap gap-2">
+          <span class="px-3 py-1.5 rounded-lg text-xs" style="background:var(--surface);color:var(--muted)">← → drag cards</span>
+          <span class="px-3 py-1.5 rounded-lg text-xs" style="background:var(--surface);color:var(--muted)">♥ tap to like</span>
+          <span class="px-3 py-1.5 rounded-lg text-xs" style="background:var(--surface);color:var(--muted)">⊡ tap to save</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════ FEATURES ════════════════════════════ -->
+  <section id="features" class="relative z-10 px-6 py-24">
+    <div class="max-w-5xl mx-auto">
+      <div class="text-center mb-14" data-rv data-rv-i="0">
+        <div class="text-xs uppercase tracking-widest font-medium mb-3" style="color:var(--secondary)">Built Different</div>
+        <h2 style="font-family:'Newsreader',serif;font-size:clamp(2rem,5vw,3.25rem);font-weight:600;line-height:1.1">What makes it yours</h2>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+
+        <div class="feat-card" data-tilt data-rv data-rv-i="1">
+          <div class="text-2xl mb-5">▶</div>
+          <h3 style="font-family:'Newsreader',serif;font-size:1.25rem;font-weight:600;margin-bottom:.5rem">Reels Mode</h3>
+          <p class="text-sm leading-relaxed" style="color:var(--muted)">Full-screen vertical swipe. Infinite loading with prefetch. Switch to grid for browsing.</p>
+        </div>
+
+        <div class="feat-card" data-tilt data-rv data-rv-i="2">
+          <div class="text-2xl mb-5">◉</div>
+          <h3 style="font-family:'Newsreader',serif;font-size:1.25rem;font-weight:600;margin-bottom:.5rem">Privacy First</h3>
+          <p class="text-sm leading-relaxed" style="color:var(--muted)">Zero cloud sync. Zero telemetry. Zero external calls. Your files never leave your network.</p>
+        </div>
+
+        <div class="feat-card" data-tilt data-rv data-rv-i="3">
+          <div class="text-2xl mb-5">✦</div>
+          <h3 style="font-family:'Newsreader',serif;font-size:1.25rem;font-weight:600;margin-bottom:.5rem">Smart Ranking</h3>
+          <p class="text-sm leading-relaxed" style="color:var(--muted)">Unseen priority, source diversity, interaction bias, entropy. Deterministic yet surprising.</p>
+        </div>
+
+        <div class="feat-card" data-tilt data-rv data-rv-i="4">
+          <div class="text-2xl mb-5">⇄</div>
+          <h3 style="font-family:'Newsreader',serif;font-size:1.25rem;font-weight:600;margin-bottom:.5rem">Multi-Source</h3>
+          <p class="text-sm leading-relaxed" style="color:var(--muted)">Local disk and remote via rclone. Android Termux integration for your phone's library.</p>
+        </div>
+
+        <div class="feat-card md:col-span-2 lg:col-span-2" data-tilt data-rv data-rv-i="5">
+          <div class="text-2xl mb-5">⌘</div>
+          <h3 style="font-family:'Newsreader',serif;font-size:1.25rem;font-weight:600;margin-bottom:.5rem">PWA Ready</h3>
+          <p class="text-sm leading-relaxed mb-5" style="color:var(--muted)">Install on your phone. Access from any device on your home network. JWT sessions, 6-digit PIN auth, multi-user.</p>
+          <div class="flex flex-wrap gap-2">
+            <span class="px-2.5 py-1 rounded-lg text-[11px]" style="background:var(--surface-low);color:var(--muted)">Next.js static export</span>
+            <span class="px-2.5 py-1 rounded-lg text-[11px]" style="background:var(--surface-low);color:var(--muted)">SQLite · Drizzle ORM</span>
+            <span class="px-2.5 py-1 rounded-lg text-[11px]" style="background:var(--surface-low);color:var(--muted)">BullMQ indexing</span>
+            <span class="px-2.5 py-1 rounded-lg text-[11px]" style="background:var(--surface-low);color:var(--muted)">PM2 managed</span>
+            <span class="px-2.5 py-1 rounded-lg text-[11px]" style="background:var(--surface-low);color:var(--muted)">HMAC media tokens</span>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════════════════════════ ARCHITECTURE ═══════════════════════════ -->
+  <section id="architecture" class="relative z-10 px-6 py-24">
+    <div class="max-w-3xl mx-auto">
+      <div class="text-center mb-16" data-rv data-rv-i="0">
+        <div class="text-xs uppercase tracking-widest font-medium mb-3" style="color:var(--secondary)">How It Works</div>
+        <h2 style="font-family:'Newsreader',serif;font-size:clamp(2rem,5vw,3.25rem);font-weight:600;line-height:1.1">
+          Three services,<br>one experience
+        </h2>
+      </div>
+
+      <div class="flex flex-col md:flex-row items-center justify-center gap-0 mb-14" id="arch-diagram">
+
+        <div class="a-node rounded-2xl p-6 text-center w-52 flex-shrink-0" style="background:var(--surface)" data-node="0">
+          <div class="text-3xl mb-3">◈</div>
+          <div class="font-semibold text-sm">Media Server</div>
+          <div class="text-xs mt-0.5" style="color:var(--secondary)">:3002</div>
+          <div class="text-[11px] leading-relaxed mt-3" style="color:var(--muted)">HMAC-gated streaming. Thumbnails. Encrypted cache. Stateless.</div>
+        </div>
+
+        <div class="a-conn flex items-center justify-center md:w-14 h-8 md:h-auto rotate-90 md:rotate-0 flex-shrink-0" data-conn="0">
+          <span class="text-xl font-light" style="color:var(--sec-container)">→</span>
+        </div>
+
+        <div class="a-node rounded-2xl p-6 text-center w-52 flex-shrink-0" style="background:var(--surface)" data-node="1">
+          <div class="text-3xl mb-3">⬡</div>
+          <div class="font-semibold text-sm">Backend API</div>
+          <div class="text-xs mt-0.5" style="color:var(--secondary)">:3001</div>
+          <div class="text-[11px] leading-relaxed mt-3" style="color:var(--muted)">Auth, indexing, feed ranking, SQLite, BullMQ workers.</div>
+        </div>
+
+        <div class="a-conn flex items-center justify-center md:w-14 h-8 md:h-auto rotate-90 md:rotate-0 flex-shrink-0" data-conn="1">
+          <span class="text-xl font-light" style="color:var(--sec-container)">→</span>
+        </div>
+
+        <div class="a-node rounded-2xl p-6 text-center w-52 flex-shrink-0" style="background:var(--surface)" data-node="2">
+          <div class="text-3xl mb-3">◻</div>
+          <div class="font-semibold text-sm">Frontend PWA</div>
+          <div class="text-xs mt-0.5" style="color:var(--secondary)">:3000</div>
+          <div class="text-[11px] leading-relaxed mt-3" style="color:var(--muted)">Next.js static, Zustand, TanStack Query, gesture handling.</div>
+        </div>
+
+      </div>
+
+      <p class="text-center text-sm max-w-sm mx-auto" style="color:var(--muted)" data-rv>
+        All three processes managed by PM2. Runs on a spare laptop, a Raspberry Pi, or your dev machine.
+      </p>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════ FOOTER ══════════════════════════════ -->
+  <footer class="relative z-10 px-6 py-20 text-center border-t" style="border-color:rgba(255,255,255,.05)">
+    <p style="font-family:'Newsreader',serif;font-size:clamp(1.5rem,4vw,2.25rem);font-weight:400;font-style:italic;color:var(--primary);margin-bottom:2.5rem">
+      "Your memories deserve better<br class="hidden sm:block"> than a folder tree."
+    </p>
+    <a href="https://github.com" target="_blank" rel="noopener"
+       class="mag items-center gap-2 px-6 py-3 rounded-full text-sm font-medium border mb-12"
+       style="border-color:rgba(225,227,228,.12);color:var(--primary)">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" class="inline-block mr-1.5" style="vertical-align:-2px"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg>
+      View on GitHub
+    </a>
+    <div class="flex flex-wrap justify-center gap-2 mb-10">
+      <span class="px-2.5 py-1 rounded-full text-xs" style="background:var(--surface);color:var(--muted)">TypeScript</span>
+      <span class="px-2.5 py-1 rounded-full text-xs" style="background:var(--surface);color:var(--muted)">Next.js</span>
+      <span class="px-2.5 py-1 rounded-full text-xs" style="background:var(--surface);color:var(--muted)">Fastify</span>
+      <span class="px-2.5 py-1 rounded-full text-xs" style="background:var(--surface);color:var(--muted)">SQLite</span>
+      <span class="px-2.5 py-1 rounded-full text-xs" style="background:var(--surface);color:var(--muted)">Tailwind</span>
+      <span class="px-2.5 py-1 rounded-full text-xs" style="background:var(--surface);color:var(--muted)">BullMQ</span>
+      <span class="px-2.5 py-1 rounded-full text-xs" style="background:var(--surface);color:var(--muted)">PM2</span>
+      <span class="px-2.5 py-1 rounded-full text-xs" style="background:var(--surface);color:var(--muted)">rclone</span>
+      <span class="px-2.5 py-1 rounded-full text-xs" style="background:var(--surface);color:var(--muted)">Zustand</span>
+      <span class="px-2.5 py-1 rounded-full text-xs" style="background:var(--surface);color:var(--muted)">TanStack Query</span>
+    </div>
+    <p class="text-xs" style="color:rgba(155,163,171,.35)">Local Media Discovery &nbsp;·&nbsp; MIT License &nbsp;·&nbsp; 2025</p>
+  </footer>
+
+  <!-- ══════════════════════════════════════ JS ════════════════════════════════ -->
+  <script type="module">
+    // ── Reduced motion guard ────────────────────────────────────────────────
+    const NO_MOTION = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+
+    // ── Pretext import (reflow-free text layout) ────────────────────────────
+    let ptLoaded = false
+    let prepareWithSegments, walkLineRanges, materializeLineRange
+
+    if (!NO_MOTION) {
+      try {
+        const pt = await import('https://cdn.jsdelivr.net/npm/@chenglou/pretext@latest/+esm')
+        prepareWithSegments  = pt.prepareWithSegments
+        walkLineRanges       = pt.walkLineRanges
+        materializeLineRange = pt.materializeLineRange
+        ptLoaded = !!(prepareWithSegments && walkLineRanges && materializeLineRange)
+      } catch { /* graceful fallback */ }
+    }
+
+    // ── A: Headline canvas — Pretext layout + spring character scatter ───────
+    async function initHeadline() {
+      const canvas = document.getElementById('headline-canvas')
+      if (!canvas) return
+
+      await document.fonts.ready
+
+      const DPR        = window.devicePixelRatio || 1
+      const parentW    = Math.min((canvas.parentElement?.clientWidth ?? 600) - 40, 760)
+      const fontSize   = parentW > 580 ? 78 : parentW > 400 ? 56 : 40
+      const lineH      = Math.round(fontSize * 1.18)
+      const fontStr    = `600 ${fontSize}px Newsreader`
+      const headline   = 'Your photos,\nrediscovered.'
+
+      // ── Layout lines ──────────────────────────────────────────────────────
+      // Use Pretext for line-break calculation (no DOM reflow),
+      // then canvas measureText for per-character x positions.
+      let lineTexts = []
+
+      if (ptLoaded) {
+        try {
+          // Pretext: prepareWithSegments handles pre-wrap newlines
+          const prepared = prepareWithSegments(headline, fontStr, { whiteSpace: 'pre-wrap' })
+          walkLineRanges(prepared, parentW, range => {
+            const line = materializeLineRange(prepared, range)
+            lineTexts.push(line.text)
+          })
+        } catch { lineTexts = [] }
+      }
+      if (!lineTexts.length) lineTexts = headline.split('\n')
+
+      // ── Canvas dimensions ─────────────────────────────────────────────────
+      const totalH = lineTexts.length * lineH + Math.round(lineH * 0.35)
+      canvas.width  = Math.round(parentW * DPR)
+      canvas.height = Math.round(totalH  * DPR)
+      canvas.style.width  = parentW + 'px'
+      canvas.style.height = totalH  + 'px'
+
+      const ctx = canvas.getContext('2d')
+      ctx.scale(DPR, DPR)
+      ctx.font         = fontStr
+      ctx.textBaseline = 'alphabetic'
+      ctx.fillStyle    = '#e1e3e4'
+
+      // ── Build character entities ──────────────────────────────────────────
+      const chars = []
+      lineTexts.forEach((text, li) => {
+        const oy    = (li + 1) * lineH
+        const lineW = ctx.measureText(text).width
+        const ox0   = (parentW - lineW) / 2
+        let cumX    = ox0
+        for (const ch of text) {
+          const cw = ctx.measureText(ch).width
+          if (ch.trim()) {
+            const scatter = 180 + Math.random() * 160
+            const angle   = Math.random() * Math.PI * 2
+            chars.push({
+              ch,
+              ox: cumX, oy,         // origin (Pretext-calculated layout position)
+              x:  cumX + Math.cos(angle) * scatter,
+              y:  oy   + Math.sin(angle) * scatter - 40,
+              vx: 0, vy: 0,
+              entering: true,
+            })
+          }
+          cumX += cw
+        }
+      })
+
+      // ── Reduced motion: static render only ───────────────────────────────
+      if (NO_MOTION) {
+        lineTexts.forEach((text, li) => {
+          const oy    = (li + 1) * lineH
+          const lineW = ctx.measureText(text).width
+          ctx.fillText(text, (parentW - lineW) / 2, oy)
+        })
+        return
+      }
+
+      // ── Mouse state ───────────────────────────────────────────────────────
+      let mx = -9999, my = -9999
+      const hero = document.getElementById('hero')
+      hero.addEventListener('mousemove', e => {
+        const r = canvas.getBoundingClientRect()
+        mx = e.clientX - r.left
+        my = e.clientY - r.top
+      })
+      hero.addEventListener('mouseleave', () => { mx = -9999; my = -9999 })
+
+      // ── RAF loop ──────────────────────────────────────────────────────────
+      const t0       = performance.now()
+      const ENTRY_MS = 950
+
+      ;(function tick() {
+        requestAnimationFrame(tick)
+
+        const elapsed = performance.now() - t0
+        const ep      = Math.min(elapsed / ENTRY_MS, 1)
+        const eased   = 1 - (1 - ep) ** 3   // cubic ease-out
+
+        ctx.clearRect(0, 0, parentW, totalH)
+        ctx.font         = fontStr
+        ctx.textBaseline = 'alphabetic'
+
+        for (const c of chars) {
+          if (c.entering && ep < 1) {
+            // Entry: lerp from scatter toward origin
+            c.x  += (c.ox - c.x)  * 0.10
+            c.y  += (c.oy - c.y)  * 0.10
+          } else {
+            c.entering = false
+            // Cursor repulsion spring
+            const dx   = c.x - mx
+            const dy   = c.y - my
+            const d2   = dx * dx + dy * dy
+            const R    = 95
+            if (d2 < R * R && d2 > 0) {
+              const d  = Math.sqrt(d2)
+              const f  = ((R - d) / R) ** 1.6 * 4.5
+              c.vx    += (dx / d) * f
+              c.vy    += (dy / d) * f
+            }
+            // Spring back to origin
+            c.vx += (c.ox - c.x) * 0.09
+            c.vy += (c.oy - c.y) * 0.09
+            c.vx *= 0.78
+            c.vy *= 0.78
+            c.x  += c.vx
+            c.y  += c.vy
+          }
+
+          ctx.globalAlpha = ep < 1 ? eased : 1
+          ctx.fillStyle   = '#e1e3e4'
+          ctx.fillText(c.ch, c.x, c.y)
+        }
+        ctx.globalAlpha = 1
+      })()
+    }
+
+    // ── B: Cursor spotlight ─────────────────────────────────────────────────
+    function initSpotlight() {
+      if (NO_MOTION) return
+      const canvas = document.getElementById('spotlight-canvas')
+      if (!canvas) return
+      const ctx  = canvas.getContext('2d')
+      let tx = 0, ty = 0, lx = -500, ly = -500
+      let pending = false
+
+      const resize = () => {
+        const d   = window.devicePixelRatio || 1
+        canvas.width  = window.innerWidth  * d
+        canvas.height = window.innerHeight * d
+        ctx.scale(d, d)
+      }
+      resize()
+      window.addEventListener('resize', resize)
+
+      document.addEventListener('mousemove', e => {
+        tx = e.clientX; ty = e.clientY
+        if (!pending) { pending = true; requestAnimationFrame(paint) }
+      })
+
+      function paint() {
+        pending = false
+        lx += (tx - lx) * 0.075
+        ly += (ty - ly) * 0.075
+
+        const W = canvas.width  / (window.devicePixelRatio || 1)
+        const H = canvas.height / (window.devicePixelRatio || 1)
+        ctx.clearRect(0, 0, W, H)
+
+        const g = ctx.createRadialGradient(lx, ly, 0, lx, ly, 520)
+        g.addColorStop(0,   'rgba(67,94,145,0.16)')
+        g.addColorStop(0.4, 'rgba(30,52,97,0.08)')
+        g.addColorStop(1,   'rgba(0,0,0,0)')
+        ctx.fillStyle = g
+        ctx.fillRect(0, 0, W, H)
+
+        if (Math.abs(lx - tx) > 0.4 || Math.abs(ly - ty) > 0.4) {
+          pending = true; requestAnimationFrame(paint)
+        }
+      }
+    }
+
+    // ── C: Parallax floating cards ──────────────────────────────────────────
+    function initParallax() {
+      if (NO_MOTION) return
+      const hero  = document.getElementById('hero')
+      const cards = [...document.querySelectorAll('.f-card[data-depth]')]
+      if (!cards.length) return
+
+      // Store initial rotations
+      const rots = cards.map(c => parseFloat(c.dataset.rx || '0'))
+
+      let rx = 0, ry = 0, lrx = 0, lry = 0, pending = false
+
+      hero.addEventListener('mousemove', e => {
+        const r = hero.getBoundingClientRect()
+        rx = (e.clientX - r.left - r.width  / 2) / r.width
+        ry = (e.clientY - r.top  - r.height / 2) / r.height
+        if (!pending) { pending = true; requestAnimationFrame(move) }
+      })
+      hero.addEventListener('mouseleave', () => { rx = 0; ry = 0 })
+
+      function move() {
+        pending = false
+        lrx += (rx - lrx) * 0.055
+        lry += (ry - lry) * 0.055
+
+        cards.forEach((c, i) => {
+          const d  = parseFloat(c.dataset.depth) * 600
+          const tx = lrx * d
+          const ty = lry * d
+          c.style.transform = `translate(${tx.toFixed(2)}px,${ty.toFixed(2)}px) rotate(${rots[i]}deg)`
+        })
+
+        if (Math.abs(lrx - rx) > 0.0008 || Math.abs(lry - ry) > 0.0008) {
+          pending = true; requestAnimationFrame(move)
+        }
+      }
+    }
+
+    // ── D: Magnetic buttons ─────────────────────────────────────────────────
+    function initMagnetic() {
+      if (NO_MOTION) return
+      const btns = [...document.querySelectorAll('.mag')]
+      const state = btns.map(el => ({ el, tx: 0, ty: 0, lx: 0, ly: 0, pending: false }))
+
+      document.addEventListener('mousemove', e => {
+        state.forEach(s => {
+          const r  = s.el.getBoundingClientRect()
+          const cx = r.left + r.width  / 2
+          const cy = r.top  + r.height / 2
+          const dx = e.clientX - cx
+          const dy = e.clientY - cy
+          const d  = Math.sqrt(dx * dx + dy * dy)
+          const T  = 115
+          s.tx = d < T ? dx * (1 - d / T) * 0.32 : 0
+          s.ty = d < T ? dy * (1 - d / T) * 0.32 : 0
+          if (!s.pending) {
+            s.pending = true
+            requestAnimationFrame(() => {
+              s.pending = false
+              s.lx += (s.tx - s.lx) * 0.13
+              s.ly += (s.ty - s.ly) * 0.13
+              s.el.style.transform = `translate(${s.lx.toFixed(2)}px,${s.ly.toFixed(2)}px)`
+            })
+          }
+        })
+      })
+    }
+
+    // ── E: 3D tilt feature cards ────────────────────────────────────────────
+    function initTilt() {
+      if (NO_MOTION) return
+      document.querySelectorAll('[data-tilt]').forEach(card => {
+        card.addEventListener('mouseenter', () => { card.style.willChange = 'transform' })
+        card.addEventListener('mousemove', e => {
+          const r  = card.getBoundingClientRect()
+          const rx = ((e.clientY - r.top)  / r.height - 0.5) * -14
+          const ry = ((e.clientX - r.left) / r.width  - 0.5) *  14
+          card.style.transform  = `perspective(900px) rotateX(${rx}deg) rotateY(${ry}deg) scale(1.025)`
+          card.style.transition = 'transform .08s ease'
+        })
+        card.addEventListener('mouseleave', () => {
+          card.style.willChange = ''
+          card.style.transform  = ''
+          card.style.transition = 'transform .5s cubic-bezier(.25,.46,.45,.94)'
+        })
+      })
+    }
+
+    // ── F: Scroll reveal ────────────────────────────────────────────────────
+    function initScrollReveal() {
+      document.querySelectorAll('[data-rv]').forEach(el => {
+        const i = parseInt(el.dataset.rvI || '0')
+        el.style.transitionDelay = `${i * 75}ms`
+      })
+      const obs = new IntersectionObserver(entries => {
+        entries.forEach(e => { if (e.isIntersecting) e.target.classList.add('on') })
+      }, { threshold: 0.1 })
+      document.querySelectorAll('[data-rv]').forEach(el => obs.observe(el))
+    }
+
+    // ── G: Architecture sequential animation ───────────────────────────────
+    function initArch() {
+      const diagram = document.getElementById('arch-diagram')
+      if (!diagram) return
+      const nodes = diagram.querySelectorAll('[data-node]')
+      const conns = diagram.querySelectorAll('[data-conn]')
+
+      const obs = new IntersectionObserver(entries => {
+        if (!entries[0].isIntersecting) return
+        obs.disconnect()
+        let d = 80
+        ;[...nodes].forEach((node, i) => {
+          setTimeout(() => node.classList.add('on'), d); d += 190
+          if (conns[i]) { setTimeout(() => conns[i].classList.add('on'), d); d += 130 }
+        })
+      }, { threshold: 0.35 })
+      obs.observe(diagram)
+    }
+
+    // ── H: Demo reel (swipeable phone cards) ───────────────────────────────
+    function initDemoReel() {
+      const track  = document.getElementById('card-track')
+      const screen = document.getElementById('phone-screen')
+      const dots   = document.getElementById('dots')
+      if (!track || !screen || !dots) return
+
+      let cur = 0
+      const TOTAL = 3
+
+      function goTo(idx) {
+        cur = Math.max(0, Math.min(TOTAL - 1, idx))
+        track.style.transform = `translateX(-${(cur / TOTAL) * 100}%)`
+        dots.querySelectorAll('.dot-ind').forEach((d, i) => {
+          d.classList.toggle('on', i === cur)
+        })
+      }
+
+      // Drag / swipe
+      let startX = 0, startY = 0, dragging = false, moved = 0, isHorizDrag = false
+
+      screen.addEventListener('pointerdown', e => {
+        startX = e.clientX; startY = e.clientY
+        dragging = true; moved = 0; isHorizDrag = false
+        track.style.transition = 'none'
+        screen.setPointerCapture(e.pointerId)
+      })
+      screen.addEventListener('pointermove', e => {
+        if (!dragging) return
+        const dx = e.clientX - startX
+        const dy = e.clientY - startY
+        if (!isHorizDrag && Math.abs(dx) < 6 && Math.abs(dy) < 6) return
+        isHorizDrag = Math.abs(dx) >= Math.abs(dy)
+        if (!isHorizDrag) return
+        moved = dx
+        const base = -(cur / TOTAL) * 100
+        // Rubber-band at edges
+        let offset = moved
+        if ((cur === 0 && moved > 0) || (cur === TOTAL - 1 && moved < 0))
+          offset = moved * 0.22
+        track.style.transform = `translateX(calc(${base}% + ${offset}px))`
+      })
+      const endDrag = () => {
+        if (!dragging) return
+        dragging = false; isHorizDrag = false
+        track.style.transition = ''
+        if (moved < -42) goTo(cur + 1)
+        else if (moved > 42) goTo(cur - 1)
+        else goTo(cur)
+      }
+      screen.addEventListener('pointerup',     endDrag)
+      screen.addEventListener('pointercancel', endDrag)
+
+      // Like
+      const likeBtn   = document.getElementById('like-btn')
+      const likeCount = document.getElementById('like-count')
+      let liked = false
+      likeBtn?.addEventListener('click', () => {
+        liked = !liked
+        likeBtn.classList.toggle('liked', liked)
+        likeCount.textContent = liked ? '25' : '24'
+        const ico = likeBtn.querySelector('.ico')
+        ico.style.transform = 'scale(1.35)'
+        setTimeout(() => { ico.style.transform = '' }, 180)
+      })
+
+      // Save
+      const saveBtn = document.getElementById('save-btn')
+      const saveIco = document.getElementById('save-ico')
+      let saved = false
+      saveBtn?.addEventListener('click', () => {
+        saved = !saved
+        saveBtn.classList.toggle('saved', saved)
+        saveIco.textContent = saved ? '⊠' : '⊡'
+        saveIco.style.transform = 'scale(1.35)'
+        setTimeout(() => { saveIco.style.transform = '' }, 180)
+      })
+
+      goTo(0)
+    }
+
+    // ── Bootstrap ──────────────────────────────────────────────────────────
+    await initHeadline()
+    initSpotlight()
+    initParallax()
+    initMagnetic()
+    initTilt()
+    initScrollReveal()
+    initArch()
+    initDemoReel()
+  </script>
+</body>
+</html>
