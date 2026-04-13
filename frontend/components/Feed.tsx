@@ -26,7 +26,13 @@ export type FeedMode = 'reels' | 'feed';
 
 interface FeedProps {
   initialMode?: FeedMode;
-  onViewSource?: (sourceId: string, displayName: string, avatarSeed: string) => void;
+  onViewSource?: (
+    sourceId: string,
+    displayName: string,
+    avatarSeed: string,
+    parentFolderPath?: string,
+    parentFolderName?: string
+  ) => void;
   onModeChange?: (mode: FeedMode) => void;
 }
 

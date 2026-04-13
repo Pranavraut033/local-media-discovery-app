@@ -21,11 +21,13 @@ interface SourceViewProps {
   sourceId: string;
   displayName: string;
   avatarSeed: string;
+  parentFolderPath?: string;
+  parentFolderName?: string;
   onBack: () => void;
 }
 
-export function SourceView({ sourceId, displayName, avatarSeed, onBack }: SourceViewProps) {
-  const { data, isLoading, error } = useSourceMedia(sourceId, 100);
+export function SourceView({ sourceId, displayName, avatarSeed, parentFolderPath, parentFolderName, onBack }: SourceViewProps) {
+  const { data, isLoading, error } = useSourceMedia(sourceId, 100, parentFolderPath);
 
   const avatarColor = getAvatarColor(avatarSeed);
 
@@ -50,6 +52,9 @@ export function SourceView({ sourceId, displayName, avatarSeed, onBack }: Source
           <h1 className="text-2xl font-bold text-gray-900 dark:text-white">
             {displayName}
           </h1>
+          {parentFolderName && (
+            <span className="text-sm text-gray-500 dark:text-gray-400">/ {parentFolderName}</span>
+          )}
         </div>
 
         {/* Loading State */}
@@ -112,6 +117,9 @@ export function SourceView({ sourceId, displayName, avatarSeed, onBack }: Source
         <h1 className="text-2xl font-bold text-gray-900 dark:text-white">
           {displayName}
         </h1>
+        {parentFolderName && (
+          <span className="text-sm text-gray-500 dark:text-gray-400">/ {parentFolderName}</span>
+        )}
         <span className="text-sm text-gray-500 dark:text-gray-400">
           ({mediaItems.length} {mediaItems.length === 1 ? 'item' : 'items'})
         </span>
@@ -125,7 +133,7 @@ export function SourceView({ sourceId, displayName, avatarSeed, onBack }: Source
               No media found
             </h2>
             <p className="text-gray-600 dark:text-gray-400">
-              This source doesn't have any media yet
+              {parentFolderName ? `No media found in ${parentFolderName}` : "This source doesn't have any media yet"}
             </p>
           </div>
         </div>

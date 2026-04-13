@@ -38,6 +38,7 @@ interface FeedQuery {
   sourceId?: string;
   feedSeed?: string;
   sourceType?: string;
+  parentFolderPath?: string;
 }
 
 interface InteractionBody {
@@ -52,6 +53,7 @@ interface MediaFileQuery {
 interface MediaRow {
   id: string;
   path: string;
+  relativePathFromRoot: string;
   type: string;
   sourceId: string;
   liked: number;
@@ -59,6 +61,7 @@ interface MediaRow {
   depth: number;
   viewCount: number;
   lastViewed: number | null;
+  storageMode?: string;
 }
 
 const latestPathsCte = `
@@ -91,13 +94,77 @@ const depthSql = `
   END
 `;
 
+function normalizeRelativePath(relativePath: string): string {
+  return relativePath.replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+$/, '');
+}
+
+function deriveRootChildFolder(relativePath: string): string {
+  const normalized = normalizeRelativePath(relativePath);
+  if (!normalized) return 'root';
+
+  const segments = normalized.split('/').filter(Boolean);
+  return segments.length <= 1 ? 'root' : segments[0];
+}
+
+function deriveImmediateParentFolder(relativePath: string): string | undefined {
+  const normalized = normalizeRelativePath(relativePath);
+  if (!normalized) return undefined;
+
+  const segments = normalized.split('/').filter(Boolean);
+  if (segments.length <= 1) return undefined;
+
+  return segments[segments.length - 2];
+}
+
+function deriveParentFolderPath(relativePath: string): string | undefined {
+  const normalized = normalizeRelativePath(relativePath);
+  if (!normalized) return undefined;
+
+  const segments = normalized.split('/').filter(Boolean);
+  if (segments.length <= 1) return undefined;
+
+  return segments.slice(0, -1).join('/');
+}
+
 function buildMediaResponse(row: MediaRow) {
+  const isRclone = row.storageMode === 'rclone';
+
+  // For rclone items strip the opaque source-prefix segment (rclone_remote_fingerprint)
+  // so display labels reflect real remote folder names instead of internal identifiers.
+  // Keep the full relativePathFromRoot for parentFolderPath so backend folder-navigation
+  // queries continue to match.
+  const effectiveRelPath = isRclone
+    ? row.relativePathFromRoot.replace(/^[^/]+\/?/, '')
+    : row.relativePathFromRoot;
+
+  const derivedRoot = deriveRootChildFolder(effectiveRelPath);
+  let rootChildFolder: string;
+  if (isRclone && (!derivedRoot || derivedRoot === 'root')) {
+    // File sits at the root of the rclone source – humanize the remote name from the
+    // sourceId prefix: rclone_remoteName_8hexFingerprint → remoteName
+    const remoteMatch = row.sourceId.match(/^rclone_(.+)_[0-9a-f]{8}$/);
+    rootChildFolder = remoteMatch ? remoteMatch[1].replace(/_/g, ' ') : row.sourceId;
+  } else {
+    rootChildFolder = derivedRoot && derivedRoot !== 'root'
+      ? derivedRoot
+      : (row.sourceId !== 'root' ? row.sourceId : '');
+  }
+
+  const parentFolderName = isRclone
+    ? deriveImmediateParentFolder(effectiveRelPath)
+    : deriveImmediateParentFolder(row.relativePathFromRoot);
+  const parentFolderPath = deriveParentFolderPath(row.relativePathFromRoot);
+
   return {
     id: row.id,
     path: row.path,
     type: row.type,
     sourceId: row.sourceId,
-    displayName: row.sourceId === 'root' ? 'Root' : row.sourceId,
+    storageMode: row.storageMode,
+    rootChildFolder,
+    parentFolderName,
+    parentFolderPath,
+    displayName: rootChildFolder || (row.sourceId === 'root' ? 'Root' : row.sourceId),
     avatarSeed: row.sourceId,
     liked: row.liked === 1,
     saved: row.saved === 1,
@@ -176,29 +243,34 @@ export default async function feedRoutes(fastify: FastifyInstance): Promise<void
     }
   );
 
-  fastify.get<{ Params: { sourceId: string }; Querystring: { limit?: string } }>(
+  fastify.get<{ Params: { sourceId: string }; Querystring: { limit?: string; parentFolderPath?: string } }>(
     '/api/source/:sourceId/media',
     {
       onRequest: [fastify.authenticate],
     },
     async (
-      request: FastifyRequest<{ Params: { sourceId: string }; Querystring: { limit?: string } }>,
+      request: FastifyRequest<{ Params: { sourceId: string }; Querystring: { limit?: string; parentFolderPath?: string } }>,
       reply: FastifyReply
     ) => {
       const { sourceId } = request.params;
       const limit = Math.min(parseInt(request.query.limit || '50', 10), 200);
+      const requestedParentFolderPath = request.query.parentFolderPath
+        ? normalizeRelativePath(request.query.parentFolderPath)
+        : undefined;
       const userId = request.user!.userId;
 
       try {
-        const mediaItems = db
+        const sourceMediaItems = db
           .prepare(
             `
             ${latestPathsCte}
             SELECT
               f.id,
               lp.absolute_path AS path,
+              lp.relative_path_from_root AS relativePathFromRoot,
               f.media_kind AS type,
               ${sourceIdSql} AS sourceId,
+              lp.storage_mode AS storageMode,
               CASE WHEN ulf.file_id IS NULL THEN 0 ELSE 1 END AS liked,
               CASE WHEN usf.file_id IS NULL THEN 0 ELSE 1 END AS saved,
               ${depthSql} AS depth,
@@ -212,10 +284,15 @@ export default async function feedRoutes(fastify: FastifyInstance): Promise<void
             WHERE uhf.file_id IS NULL
               AND ${sourceIdSql} = ?
             ORDER BY RANDOM()
-            LIMIT ?
           `
           )
-          .all(userId, userId, userId, userId, userId, sourceId, limit) as MediaRow[];
+          .all(userId, userId, userId, userId, userId, sourceId) as MediaRow[];
+
+        const mediaItems = requestedParentFolderPath
+          ? sourceMediaItems
+            .filter((item) => deriveParentFolderPath(item.relativePathFromRoot) === requestedParentFolderPath)
+            .slice(0, limit)
+          : sourceMediaItems.slice(0, limit);
 
         return {
           success: true,
@@ -352,8 +429,10 @@ export default async function feedRoutes(fastify: FastifyInstance): Promise<void
             SELECT
               f.id,
               lp.absolute_path AS path,
+              lp.relative_path_from_root AS relativePathFromRoot,
               f.media_kind AS type,
               ${sourceIdSql} AS sourceId,
+              lp.storage_mode AS storageMode,
               CASE WHEN ulf.file_id IS NULL THEN 0 ELSE 1 END AS liked,
               CASE WHEN usf.file_id IS NULL THEN 0 ELSE 1 END AS saved,
               ${depthSql} AS depth,
@@ -405,8 +484,10 @@ export default async function feedRoutes(fastify: FastifyInstance): Promise<void
             SELECT
               f.id,
               lp.absolute_path AS path,
+              lp.relative_path_from_root AS relativePathFromRoot,
               f.media_kind AS type,
               ${sourceIdSql} AS sourceId,
+              lp.storage_mode AS storageMode,
               CASE WHEN ulf.file_id IS NULL THEN 0 ELSE 1 END AS liked,
               1 AS saved,
               ${depthSql} AS depth,
@@ -453,8 +534,10 @@ export default async function feedRoutes(fastify: FastifyInstance): Promise<void
             SELECT
               f.id,
               lp.absolute_path AS path,
+              lp.relative_path_from_root AS relativePathFromRoot,
               f.media_kind AS type,
               ${sourceIdSql} AS sourceId,
+              lp.storage_mode AS storageMode,
               1 AS liked,
               CASE WHEN usf.file_id IS NULL THEN 0 ELSE 1 END AS saved,
               ${depthSql} AS depth,
@@ -675,8 +758,10 @@ export default async function feedRoutes(fastify: FastifyInstance): Promise<void
             SELECT
               f.id,
               lp.absolute_path AS path,
+              lp.relative_path_from_root AS relativePathFromRoot,
               f.media_kind AS type,
               ${sourceIdSql} AS sourceId,
+              lp.storage_mode AS storageMode,
               CASE WHEN ulf.file_id IS NULL THEN 0 ELSE 1 END AS liked,
               CASE WHEN usf.file_id IS NULL THEN 0 ELSE 1 END AS saved,
               ${depthSql} AS depth,

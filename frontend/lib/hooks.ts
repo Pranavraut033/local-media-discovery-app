@@ -19,6 +19,9 @@ export interface FeedItem {
   activePath: string;
   type: string;
   sourceId: string;
+  rootChildFolder?: string;
+  parentFolderName?: string;
+  parentFolderPath?: string;
   displayName: string;
   avatarSeed: string;
   liked: boolean;
@@ -27,6 +30,8 @@ export interface FeedItem {
   depth: number;
   /** Short-lived HMAC-signed token issued by the backend. Present for local-mount files. */
   streamToken?: string;
+  /** Storage backend for this item – present when returned by saved/liked/hidden/media endpoints. */
+  storageMode?: 'local' | 'rclone';
   source?: {
     id: string;
     displayName: string;
@@ -160,6 +165,13 @@ const normalizeFeedItem = (rawInput: unknown, options?: { hidden?: boolean }): F
     (typeof raw.avatarSeed === 'string' ? raw.avatarSeed : undefined) ||
     (typeof source.avatarSeed === 'string' ? source.avatarSeed : undefined) ||
     sourceId;
+  const rootChildFolder =
+    (typeof raw.rootChildFolder === 'string' ? raw.rootChildFolder : undefined) ||
+    sourceId;
+  const parentFolderName =
+    typeof raw.parentFolderName === 'string' ? raw.parentFolderName : undefined;
+  const parentFolderPath =
+    typeof raw.parentFolderPath === 'string' ? raw.parentFolderPath : undefined;
   const activePath =
     (typeof raw.activePath === 'string' ? raw.activePath : undefined) ||
     (typeof raw.path === 'string' ? raw.path : undefined) ||
@@ -180,6 +192,9 @@ const normalizeFeedItem = (rawInput: unknown, options?: { hidden?: boolean }): F
       (typeof raw.mediaKind === 'string' ? raw.mediaKind : undefined) ||
       'unknown',
     sourceId,
+    rootChildFolder,
+    parentFolderName,
+    parentFolderPath,
     displayName,
     avatarSeed,
     liked: toBoolean(raw.liked),
@@ -187,6 +202,7 @@ const normalizeFeedItem = (rawInput: unknown, options?: { hidden?: boolean }): F
     hidden: toBoolean(raw.hidden, options?.hidden ?? false),
     depth: toNumber(raw.depth, 0),
     streamToken: typeof raw.streamToken === 'string' ? raw.streamToken : undefined,
+    storageMode: raw.storageMode === 'local' || raw.storageMode === 'rclone' ? raw.storageMode as 'local' | 'rclone' : undefined,
     source: {
       id: sourceId,
       displayName,
@@ -482,13 +498,17 @@ export const useLikedItems = () => {
 /**
  * Fetch media from a specific source
  */
-export const useSourceMedia = (sourceId: string, limit: number = 50) => {
+export const useSourceMedia = (sourceId: string, limit: number = 50, parentFolderPath?: string) => {
   return useQuery({
-    queryKey: ['sourceMedia', sourceId, limit],
+    queryKey: ['sourceMedia', sourceId, limit, parentFolderPath ?? 'all-folders'],
     queryFn: async (): Promise<SourceMediaResponse> => {
       const params = new URLSearchParams({
         limit: limit.toString(),
       });
+
+      if (parentFolderPath) {
+        params.set('parentFolderPath', parentFolderPath);
+      }
 
       const response = await authenticatedFetch(`${API_BASE}/api/source/${sourceId}/media?${params}`);
       if (!response.ok) {

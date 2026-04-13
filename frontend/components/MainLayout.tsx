@@ -23,6 +23,8 @@ interface SourceViewState {
   sourceId: string;
   displayName: string;
   avatarSeed: string;
+  parentFolderPath?: string;
+  parentFolderName?: string;
 }
 
 export default function MainLayout() {
@@ -64,8 +66,14 @@ export default function MainLayout() {
     setSourceViewState(null);
   };
 
-  const handleViewSource = (sourceId: string, displayName: string, avatarSeed: string) => {
-    setSourceViewState({ sourceId, displayName, avatarSeed });
+  const handleViewSource = (
+    sourceId: string,
+    displayName: string,
+    avatarSeed: string,
+    parentFolderPath?: string,
+    parentFolderName?: string
+  ) => {
+    setSourceViewState({ sourceId, displayName, avatarSeed, parentFolderPath, parentFolderName });
     setCurrentView('source');
   };
 
@@ -125,6 +133,8 @@ export default function MainLayout() {
           sourceId={sourceViewState.sourceId}
           displayName={sourceViewState.displayName}
           avatarSeed={sourceViewState.avatarSeed}
+          parentFolderPath={sourceViewState.parentFolderPath}
+          parentFolderName={sourceViewState.parentFolderName}
           onBack={handleBackFromSource}
         />
       )}

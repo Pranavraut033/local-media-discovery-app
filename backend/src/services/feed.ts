@@ -65,6 +65,9 @@ interface FeedItem {
   path: string;
   type: string;
   sourceId: string;
+  rootChildFolder: string;
+  parentFolderName?: string;
+  parentFolderPath?: string;
   displayName: string;
   avatarSeed: string;
   liked: boolean;
@@ -102,6 +105,26 @@ function deriveDepth(relativePath: string): number {
   if (!normalized) return 0;
   const parts = normalized.split('/').filter(Boolean);
   return Math.max(0, parts.length - 1);
+}
+
+function deriveImmediateParentFolder(relativePath: string): string | undefined {
+  const normalized = normalizeRelativePath(relativePath);
+  if (!normalized) return undefined;
+
+  const parts = normalized.split('/').filter(Boolean);
+  if (parts.length <= 1) return undefined;
+
+  return parts[parts.length - 2];
+}
+
+function deriveParentFolderPath(relativePath: string): string | undefined {
+  const normalized = normalizeRelativePath(relativePath);
+  if (!normalized) return undefined;
+
+  const parts = normalized.split('/').filter(Boolean);
+  if (parts.length <= 1) return undefined;
+
+  return parts.slice(0, -1).join('/');
 }
 
 function deriveDisplayName(sourceId: string): string {
@@ -298,10 +321,15 @@ export function generateFeed(db: Database.Database, options: FeedOptions = {}): 
       score += timeBoost;
 
       const computedSourceId = deriveSourceId(m.relativePath);
+      const parentFolderName = deriveImmediateParentFolder(m.relativePath);
+      const parentFolderPath = deriveParentFolderPath(m.relativePath);
 
       return {
         ...m,
         sourceId: computedSourceId,
+        rootChildFolder: computedSourceId,
+        parentFolderName,
+        parentFolderPath,
         displayName: deriveDisplayName(computedSourceId),
         avatarSeed: computedSourceId,
         depth,
@@ -355,6 +383,9 @@ export function generateFeed(db: Database.Database, options: FeedOptions = {}): 
       path: media.path,
       type: media.mediaKind,
       sourceId: media.sourceId,
+      rootChildFolder: media.rootChildFolder,
+      ...(media.parentFolderName ? { parentFolderName: media.parentFolderName } : {}),
+      ...(media.parentFolderPath ? { parentFolderPath: media.parentFolderPath } : {}),
       displayName: media.displayName,
       avatarSeed: media.avatarSeed,
       liked: media.liked === 1,

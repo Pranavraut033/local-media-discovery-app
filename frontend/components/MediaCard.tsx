@@ -6,7 +6,6 @@
 
 import { ImageViewer } from './ImageViewer';
 import { VideoPlayer } from './VideoPlayer';
-import { SourceBadge } from './SourceBadge';
 import { LikeButton, SaveButton, HideButton } from './InteractionButtons';
 import { useEffect, useRef, useState } from 'react';
 import { useLikeMutation, useSaveMutation, useViewMutation, useHideMutation, FeedItem } from '@/lib/hooks';
@@ -17,7 +16,13 @@ import { Maximize2 } from 'lucide-react';
 interface MediaCardProps {
   media: FeedItem;
   onVisible?: () => void;
-  onViewSource?: (sourceId: string, displayName: string, avatarSeed: string) => void;
+  onViewSource?: (
+    sourceId: string,
+    displayName: string,
+    avatarSeed: string,
+    parentFolderPath?: string,
+    parentFolderName?: string
+  ) => void;
   onVideoExpand?: (src: string, title?: string) => void;
   mode?: 'feed' | 'reels';
   className?: string;
@@ -42,6 +47,19 @@ export function MediaCard({ media, onVisible, onViewSource, onVideoExpand, mode 
   const normalizedType = media?.type?.toLowerCase() || '';
   const isImage = normalizedType === 'image' || normalizedType.startsWith('image/');
   const isVideo = normalizedType === 'video' || normalizedType.startsWith('video/');
+  const rootChildFolder =
+    media.rootChildFolder && media.rootChildFolder !== 'root'
+      ? media.rootChildFolder
+      : media.sourceId !== 'root'
+        ? media.sourceId
+        : '';
+  const parentFolderName =
+    media.parentFolderName && media.parentFolderName !== rootChildFolder
+      ? media.parentFolderName
+      : '';
+  const sourceLabel = rootChildFolder || media.displayName;
+  const canOpenSource = Boolean(onViewSource);
+  const canOpenFolder = Boolean(onViewSource && parentFolderName && media.parentFolderPath);
 
   const isReelsMode = mode === 'reels';
 
@@ -161,11 +179,32 @@ export function MediaCard({ media, onVisible, onViewSource, onVideoExpand, mode 
       {/* Feed Mode Footer (kept outside media frame to avoid content obstruction) */}
       {!isReelsMode && (
         <div className="bg-neutral-950/95 border-t border-white/10 p-3 space-y-3">
-          <SourceBadge
-            displayName={media.displayName}
-            avatarSeed={media.avatarSeed}
-            onClick={onViewSource ? () => onViewSource(media.sourceId, media.displayName, media.avatarSeed) : undefined}
-          />
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={canOpenSource ? () => onViewSource?.(media.sourceId, sourceLabel, media.avatarSeed) : undefined}
+              className={`text-sm font-medium text-gray-900 dark:text-gray-100 ${canOpenSource ? 'cursor-pointer hover:opacity-80 transition-opacity' : 'cursor-default'}`}
+            >
+              {sourceLabel}
+            </button>
+            {media.storageMode === 'rclone' && (
+              <span className="text-xs px-1.5 py-0.5 rounded bg-indigo-500/20 text-indigo-300 font-medium leading-none shrink-0">
+                rclone
+              </span>
+            )}
+            {parentFolderName && (
+              <>
+                <span className="text-xs text-neutral-500">/</span>
+                <button
+                  type="button"
+                  onClick={canOpenFolder ? () => onViewSource?.(media.sourceId, sourceLabel, media.avatarSeed, media.parentFolderPath, parentFolderName) : undefined}
+                  className={`text-sm font-medium text-gray-900 dark:text-gray-100 ${canOpenFolder ? 'cursor-pointer hover:opacity-80 transition-opacity' : 'cursor-default'}`}
+                >
+                  {parentFolderName}
+                </button>
+              </>
+            )}
+          </div>
 
           <div className="flex gap-2">
             <LikeButton
@@ -195,11 +234,32 @@ export function MediaCard({ media, onVisible, onViewSource, onVideoExpand, mode 
         <div className="absolute bottom-0 inset-x-0 bg-linear-to-t from-black/90 via-black/40 to-transparent pt-12 px-4 pb-6 z-20">
           {/* Source Badge */}
           <div className="mb-4">
-            <SourceBadge
-              displayName={media.displayName}
-              avatarSeed={media.avatarSeed}
-              onClick={onViewSource ? () => onViewSource(media.sourceId, media.displayName, media.avatarSeed) : undefined}
-            />
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={canOpenSource ? () => onViewSource?.(media.sourceId, sourceLabel, media.avatarSeed) : undefined}
+                className={`text-sm font-medium text-neutral-100 ${canOpenSource ? 'cursor-pointer hover:text-white transition-colors' : 'cursor-default'}`}
+              >
+                {sourceLabel}
+              </button>
+              {media.storageMode === 'rclone' && (
+                <span className="text-xs px-1.5 py-0.5 rounded bg-indigo-500/20 text-indigo-300 font-medium leading-none shrink-0">
+                  rclone
+                </span>
+              )}
+              {parentFolderName && (
+                <>
+                  <span className="text-xs text-neutral-400">/</span>
+                  <button
+                    type="button"
+                    onClick={canOpenFolder ? () => onViewSource?.(media.sourceId, sourceLabel, media.avatarSeed, media.parentFolderPath, parentFolderName) : undefined}
+                    className={`text-sm font-medium text-neutral-100 ${canOpenFolder ? 'cursor-pointer hover:text-white transition-colors' : 'cursor-default'}`}
+                  >
+                    {parentFolderName}
+                  </button>
+                </>
+              )}
+            </div>
           </div>
 
           {/* File Info - Minimal */}
