@@ -9,6 +9,7 @@ import { getThumbnailService } from '../services/thumbnails.js';
 import { clearAllIndexedDataV2, getV2MediaStats } from '../services/v2-data-maintenance.js';
 import { getAllSourcesV2 } from '../services/v2-sources.js';
 import fs from 'fs/promises';
+import { exec } from 'child_process';
 
 export default async function maintenanceRoutes(fastify: FastifyInstance): Promise<void> {
   const db = getDatabase();
@@ -250,6 +251,22 @@ export default async function maintenanceRoutes(fastify: FastifyInstance): Promi
         message: error instanceof Error ? error.message : 'Unknown error',
       });
     }
+  });
+
+  /**
+   * Stop all PM2-managed services
+   */
+  fastify.post('/api/admin/shutdown', async (request: FastifyRequest, reply: FastifyReply) => {
+    reply.send({ success: true, message: 'Stopping all services...' });
+
+    // Defer so the response is flushed before the process is stopped
+    setTimeout(() => {
+      exec('pm2 stop ecosystem.config.cjs', { cwd: process.cwd().replace(/\/backend$/, '') }, (error) => {
+        if (error) {
+          console.error('pm2 stop all failed:', error.message);
+        }
+      });
+    }, 200);
   });
 
   /**

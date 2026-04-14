@@ -5,7 +5,7 @@
 'use client';
 
 import { useState, useEffect, useMemo } from 'react';
-import { Settings as SettingsIcon, ArrowLeft, RotateCw, Eye, LogOut, FolderTree, Maximize, Minimize } from 'lucide-react';
+import { Settings as SettingsIcon, ArrowLeft, RotateCw, Eye, LogOut, FolderTree, Maximize, Minimize, Power } from 'lucide-react';
 import { getPreferences, setPreferences, ViewMode, clearRecentFolders, clearRootFolder } from '@/lib/storage';
 import { getApiBase, authenticatedFetch } from '@/lib/api';
 import { useSources, useFolderTree, useHideFolderMutation } from '@/lib/hooks';
@@ -39,6 +39,7 @@ export function Settings({ onBack, onViewHidden }: SettingsProps) {
   const [error, setError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [isResetting, setIsResetting] = useState(false);
+  const [isShuttingDown, setIsShuttingDown] = useState(false);
   // Fetch user sources
   const { data: sources } = useSources();
 
@@ -166,6 +167,19 @@ export function Settings({ onBack, onViewHidden }: SettingsProps) {
       setError('Failed to reset root folder');
     } finally {
       setIsResetting(false);
+    }
+  };
+
+  const handleShutdown = async () => {
+    if (!confirm('Stop all services (backend, frontend, media-server)? The app will become unavailable until you restart PM2.')) {
+      return;
+    }
+
+    try {
+      setIsShuttingDown(true);
+      await authenticatedFetch(`${API_URL}/api/admin/shutdown`, { method: 'POST' });
+    } catch {
+      // Expected — the server stops mid-response
     }
   };
 
@@ -510,6 +524,38 @@ export function Settings({ onBack, onViewHidden }: SettingsProps) {
             <p className="text-xs text-gray-500 dark:text-gray-500">
               All data is stored locally on your device. No external network connectivity required.
             </p>
+          </div>
+        </div>
+
+        {/* System Control */}
+        <div className="mb-8">
+          <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">System Control</h2>
+          <div className="p-4 bg-gray-50 dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700">
+            <div className="flex items-center justify-between mb-3">
+              <div>
+                <p className="font-medium text-gray-900 dark:text-white">Stop All Services</p>
+                <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
+                  Runs <code className="font-mono text-xs bg-gray-200 dark:bg-gray-700 px-1 rounded">pm2 stop all</code> — stops backend, frontend, and media-server
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={handleShutdown}
+              disabled={isShuttingDown}
+              className="w-full bg-red-600 hover:bg-red-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg transition-colors font-medium flex items-center justify-center gap-2"
+            >
+              {isShuttingDown ? (
+                <>
+                  <RotateCw size={16} className="animate-spin" />
+                  Stopping services...
+                </>
+              ) : (
+                <>
+                  <Power size={16} />
+                  Stop All Services
+                </>
+              )}
+            </button>
           </div>
         </div>
 
