@@ -22,8 +22,10 @@ import thumbnailRoutes from './routes/thumbnails.js';
 import maintenanceRoutes from './routes/maintenance.js';
 import folderRoutes from './routes/folders.js';
 import eventsRoutes from './routes/events.js';
+import discoverRoutes from './routes/discover.js';
 import { initThumbnailService } from './services/thumbnails.js';
 import { startIndexingWorker } from './workers/indexer.worker.js';
+import { rcloneMountService } from './services/rclone-mount.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -105,9 +107,13 @@ await fastify.register(folderRoutes, { prefix: '/api/folders' });
 await fastify.register(rcloneRoutes);
 await fastify.register(remoteRcloneConfigRoutes);
 await fastify.register(eventsRoutes);
+await fastify.register(discoverRoutes);
 
 // Start BullMQ indexing worker (in-process)
 startIndexingWorker();
+
+// Auto-start rclone mount (non-fatal if rclone not configured)
+rcloneMountService.startOnInit();
 
 // Health check
 fastify.get('/api/health', async () => {
@@ -118,6 +124,18 @@ fastify.get('/api/health', async () => {
 process.on('SIGINT', async () => {
   console.log('Shutting down gracefully...');
   await stopWatcher();
+  await rcloneMountService.shutdown();
+  closeDatabase();
+  fastify.close(() => {
+    console.log('Server closed');
+    process.exit(0);
+  });
+});
+
+process.on('SIGTERM', async () => {
+  console.log('Shutting down gracefully (SIGTERM)...');
+  await stopWatcher();
+  await rcloneMountService.shutdown();
   closeDatabase();
   fastify.close(() => {
     console.log('Server closed');

@@ -18,6 +18,7 @@ import {
   scanRemoteForMedia,
 } from '../services/rclone.js';
 import { enqueueIndexingJob } from '../queue/index.js';
+import { rcloneMountService } from '../services/rclone-mount.js';
 
 interface AddRcloneSourceBody {
   remote_name: string;
@@ -60,8 +61,7 @@ interface FolderRecord {
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const projectRoot = path.resolve(__dirname, '../../..');
-const mountDir = process.env.RCLONE_MOUNT_DIR || path.join(process.env.HOME || '', 'hetzner_mount');
+const mountDir = path.join(process.env.HOME || '', 'hetzner_mount');
 
 function runCommand(command: string, args: string[], cwd?: string): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
@@ -75,77 +75,12 @@ function runCommand(command: string, args: string[], cwd?: string): Promise<{ st
   });
 }
 
+// Kept for use in non-mount route helpers below
 async function isMountActive(): Promise<boolean> {
-  // Primary check: mount table
-  try {
-    const { stdout } = await runCommand('mount', []);
-    if (stdout.includes(` on ${mountDir} (`)) return true;
-  } catch {
-    // ignore
-  }
-  // Fallback: rclone process running and directory is a non-empty/accessible mountpoint
-  try {
-    await runCommand('pgrep', ['-f', 'rclone mount hetzner-crypt']);
-    // pgrep exits 0 only when a match is found
-    const { stdout } = await runCommand('ls', [mountDir]);
-    // If ls returns at least something the vfs is responsive
-    return stdout.trim().length > 0;
-  } catch {
-    return false;
-  }
+  return rcloneMountService.isMounted();
 }
 
-async function getPm2RcloneStatus(): Promise<string | null> {
-  try {
-    const { stdout } = await runCommand('pm2', ['jlist'], projectRoot);
-    const processList = JSON.parse(stdout) as Array<{ name?: string; pm2_env?: { status?: string } }>;
-    const process = processList.find((item) => item.name === 'rclone-mount');
-    return process?.pm2_env?.status || null;
-  } catch {
-    return null;
-  }
-}
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
-
-async function ensureMountRunning(): Promise<{ mounted: boolean; status: 'mounted' | 'mounting' | 'error'; message: string }> {
-  const mounted = await isMountActive();
-  if (mounted) {
-    return { mounted: true, status: 'mounted', message: 'rclone mount is ready' };
-  }
-
-  const pm2Status = await getPm2RcloneStatus();
-
-  if (pm2Status === null) {
-    // Process not yet registered in PM2 — load from ecosystem config
-    try {
-      await runCommand('pm2', ['start', 'ecosystem.config.cjs', '--only', 'rclone-mount'], projectRoot);
-    } catch {
-      return { mounted: false, status: 'error', message: 'Failed to register rclone-mount in PM2' };
-    }
-  } else if (pm2Status === 'stopped' || pm2Status === 'errored') {
-    // Already registered but not running — restart it
-    try {
-      await runCommand('pm2', ['restart', 'rclone-mount'], projectRoot);
-    } catch {
-      return { mounted: false, status: 'error', message: 'Failed to restart rclone-mount via PM2' };
-    }
-  }
-  // pm2Status === 'online' or 'launching': process is already starting, just wait
-
-  for (let i = 0; i < 20; i += 1) {
-    await delay(1000);
-    if (await isMountActive()) {
-      return { mounted: true, status: 'mounted', message: 'rclone mount is ready' };
-    }
-  }
-
-  return { mounted: false, status: 'mounting', message: 'rclone is starting; mount is not ready yet' };
-}
 
 function normalizeSegment(input: string): string {
   return input.trim().replace(/^\/+|\/+$/g, '');
@@ -311,34 +246,25 @@ export default async function rcloneRoutes(fastify: FastifyInstance): Promise<vo
   }
 
   fastify.get('/api/rclone/mount/status', async (_request: FastifyRequest, reply: FastifyReply) => {
-    const mounted = await isMountActive();
-    const pm2Status = await getPm2RcloneStatus();
+    const mounted = await rcloneMountService.isMounted();
+    rcloneMountService.recordActivity();
 
     return reply.send({
       mounted,
       mountDir,
-      pm2Status,
       status: mounted ? 'mounted' : 'unmounted',
     });
   });
 
   fastify.post('/api/rclone/mount/ensure', async (_request: FastifyRequest, reply: FastifyReply) => {
-    const ensured = await ensureMountRunning();
-    const pm2Status = await getPm2RcloneStatus();
+    rcloneMountService.recordActivity();
+    const result = await rcloneMountService.ensureRunning();
 
-    if (ensured.status === 'error') {
-      return reply.code(500).send({
-        ...ensured,
-        mountDir,
-        pm2Status,
-      });
+    if (result.status === 'error') {
+      return reply.code(500).send(result);
     }
 
-    return reply.send({
-      ...ensured,
-      mountDir,
-      pm2Status,
-    });
+    return reply.send(result);
   });
 
   fastify.get(

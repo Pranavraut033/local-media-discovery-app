@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
-# rclone-watchdog.sh — Auto-stop rclone mount after 10 min of inactivity.
-# Managed by PM2 as the "rclone-watchdog" process (autorestart: true).
-# Inactivity = no open file handles inside the mount AND no backend activity signal.
+# rclone-watchdog.sh — DEPRECATED
+# The inactivity watchdog is now built into the backend process
+# via backend/src/services/rclone-mount.ts (RcloneMountService).
+# This script is no longer used by PM2 or any other process.
+echo "[rclone-watchdog.sh] This script is deprecated. The backend manages inactivity tracking directly."
+exit 0
+
 
 set -uo pipefail
 
-MOUNT_DIR="${RCLONE_MOUNT_DIR:-$HOME/hetzner_mount}"
+MOUNT_DIR="${RCLONE_MOUNT_DIR:-$HOME/hetzner_mount3}"
 INACTIVITY_SECONDS=600   # 10 minutes
 CHECK_INTERVAL=60        # poll every 60 seconds
 ACTIVITY_FILE="/tmp/rclone-last-activity"
@@ -19,7 +23,8 @@ mount_is_active() {
 }
 
 open_handles() {
-  lsof 2>/dev/null | grep -c "${MOUNT_DIR}" || echo 0
+  # grep -c returns exit code 1 when there are zero matches; keep numeric output stable.
+  lsof 2>/dev/null | grep -c "${MOUNT_DIR}" || true
 }
 
 stop_mount() {
