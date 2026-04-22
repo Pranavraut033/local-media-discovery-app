@@ -217,5 +217,13 @@ export const userPreferences = sqliteTable(
   ]
 );
 
+export const userDiscoverSession = sqliteTable('user_discover_session', {
+  userId: text('user_id')
+    .primaryKey()
+    .references(() => users.id, { onDelete: 'cascade' }),
+  seenFileIds: text('seen_file_ids').notNull().default('[]'),
+  updatedAt: integer('updated_at').notNull().default(nowEpoch),
+});
+
 export type StorageMode = 'local' | 'rclone';
 export type MediaKind = 'image' | 'video' | 'other';
