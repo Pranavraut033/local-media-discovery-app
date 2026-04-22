@@ -15,8 +15,12 @@ import { signStreamToken } from '../tokens.js';
 const MEDIA_SERVER_SECRET =
   process.env.MEDIA_SERVER_SECRET || 'media-server-default-secret-change-me';
 
-/** Derive extension and type then attach a stream token to any object with a path + type. */
-function withStreamToken<T extends { id: string; path: string; type: string }>(item: T): T & { streamToken?: string } {
+/** Derive extension and type then attach a stream token to any object with a path + type.
+ * Rclone items are skipped — the media-server can only serve local filesystem paths;
+ * rclone files are handled by the backend's own /api/media/file/:id rclone handler.
+ */
+function withStreamToken<T extends { id: string; path: string; type: string; storageMode?: string }>(item: T): T & { streamToken?: string } {
+  if (item.storageMode === 'rclone') return item;
   const ext = path.extname(item.path).toLowerCase();
   if (!ext) return item;
   const kind = item.type === 'video' || item.type.startsWith('video/') ? 'video' as const : 'image' as const;
