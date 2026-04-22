@@ -10,7 +10,7 @@ import { Folder, ChevronRight, Home, HardDrive, Play } from 'lucide-react';
 import { getApiBase, authenticatedFetch } from '@/lib/api';
 import { RecentFolders } from './RecentFolders';
 import { setRootFolder } from '@/lib/storage';
-import { RemoteSourcesSection } from './RemoteSourcesSection';
+// import { RemoteSourcesSection } from './RemoteSourcesSection'; // rclone disabled
 import { useIndexingStore } from '@/lib/stores/indexing.store';
 
 interface FolderSelectionProps {
@@ -177,6 +177,7 @@ export default function FolderSelection({ onFolderSelected }: FolderSelectionPro
           Browse Host Folders
         </button>
 
+        {/* Remote (rclone) sources — temporarily disabled
         <RemoteSourcesSection
           className="w-full"
           titleClassName="text-lg font-semibold text-(--surface-ink) mb-3 flex items-center gap-2"
@@ -185,6 +186,7 @@ export default function FolderSelection({ onFolderSelected }: FolderSelectionPro
             onFolderSelected?.();
           }}
         />
+        */}
 
         {error && (
           <div className="w-full p-4 bg-(--error)/10 rounded-2xl">

@@ -88,7 +88,7 @@ export const useUIStore = create<UIState>()(
     }),
     {
       name: 'app-ui-store',
-      version: 2,
+      version: 3,
       migrate: (persistedState: unknown, version: number) => {
         const state = persistedState as Partial<UIState>;
         if (version < 2) {
@@ -98,9 +98,23 @@ export const useUIStore = create<UIState>()(
               ...DEFAULT_PREFERENCES,
               ...(state.preferences ?? {}),
               recentRcloneConfigs: [],
+              feedSourceType: 'local',
             },
           };
         }
+
+        if (version < 3) {
+          return {
+            ...state,
+            preferences: {
+              ...DEFAULT_PREFERENCES,
+              ...(state.preferences ?? {}),
+              // Remote source picker is disabled; keep feed scoped to local items.
+              feedSourceType: 'local',
+            },
+          };
+        }
+
         return state;
       },
     }

@@ -10,7 +10,7 @@ import { getPreferences, setPreferences, ViewMode, clearRecentFolders, clearRoot
 import { getApiBase, authenticatedFetch } from '@/lib/api';
 import { useSources, useFolderTree, useHideFolderMutation } from '@/lib/hooks';
 import { FolderTreeView } from './FolderTreeView';
-import { RemoteSourcesSection } from './RemoteSourcesSection';
+// import { RemoteSourcesSection } from './RemoteSourcesSection'; // rclone disabled
 import { useFullscreen } from '@/lib/useFullscreen';
 import { useUIStore } from '@/lib/stores/ui.store';
 import type { FeedSourceType } from '@/lib/stores/ui.store';
@@ -33,7 +33,7 @@ export function Settings({ onBack, onViewHidden }: SettingsProps) {
   const API_URL = getApiBase();
   const [preferences, setLocalPreferences] = useState<ReturnType<typeof getPreferences> | null>(null);
   const { isFullscreen, toggleFullscreen } = useFullscreen();
-  const feedSourceType = useUIStore((s) => s.preferences.feedSourceType ?? 'local');
+  // const feedSourceType = useUIStore((s) => s.preferences.feedSourceType ?? 'local'); // rclone disabled
   const [stats, setStats] = useState<AppStats | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -130,10 +130,11 @@ export function Settings({ onBack, onViewHidden }: SettingsProps) {
     setTimeout(() => setIsSaving(false), 300);
   };
 
-  const handleFeedSourceTypeChange = (type: FeedSourceType) => {
-    useUIStore.getState().setPreferences({ feedSourceType: type });
-    window.location.reload();
-  };
+  // handleFeedSourceTypeChange removed — rclone/remote sources disabled
+  // const handleFeedSourceTypeChange = (type: FeedSourceType) => {
+  //   useUIStore.getState().setPreferences({ feedSourceType: type });
+  //   window.location.reload();
+  // };
 
   const handleResetRootFolder = async () => {
     if (!confirm('Are you sure you want to reset the root folder? This will clear all indexed media and you will need to select a folder again.')) {
@@ -486,7 +487,7 @@ export function Settings({ onBack, onViewHidden }: SettingsProps) {
             </button>
           </div>
 
-          {/* Feed Source Type */}
+          {/* Feed Source Type — remote sources disabled; selector hidden
           <div className="mb-6 p-4 bg-gray-50 dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700">
             <p className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Feed Source</p>
             <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">Choose which media sources appear in your feed. Changing this will reload the page.</p>
@@ -509,6 +510,7 @@ export function Settings({ onBack, onViewHidden }: SettingsProps) {
               })}
             </div>
           </div>
+          */}
         </div>
 
         {/* About */}
@@ -559,12 +561,14 @@ export function Settings({ onBack, onViewHidden }: SettingsProps) {
           </div>
         </div>
 
+        {/* Remote (rclone) sources — temporarily disabled
         <RemoteSourcesSection
           className="mb-8"
           onSourcesUpdated={() => {
             window.location.reload();
           }}
         />
+        */}
       </div>
 
       {/* Save indicator */}

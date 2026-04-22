@@ -56,7 +56,7 @@ export function Feed({ initialMode, onViewSource, onModeChange }: FeedProps) {
     isFetchingNextPage,
     hasNextPage,
     fetchNextPage,
-  } = useInfiniteFeed(30, undefined, feedSeed, feedSourceType);
+  } = useInfiniteFeed(50, undefined, feedSeed, feedSourceType);
   const likeMutation = useLikeMutation();
   const saveMutation = useSaveMutation();
 
