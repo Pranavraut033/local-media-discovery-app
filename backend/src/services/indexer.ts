@@ -474,7 +474,6 @@ export async function discoverAndCreatePendingLocal(
     INSERT INTO file_paths (id, file_id, user_id, folder_id, storage_mode, file_name, absolute_path, relative_path_from_root, path_hash, first_seen_at, last_seen_at, is_present, status, temp_file_id, created_at, updated_at)
     VALUES (?, ?, ?, ?, 'local', ?, ?, ?, ?, ?, ?, 1, 'pending', ?, ?, ?)
     ON CONFLICT(user_id, absolute_path) DO UPDATE SET
-      file_id = excluded.file_id,
       folder_id = excluded.folder_id,
       file_name = excluded.file_name,
       relative_path_from_root = excluded.relative_path_from_root,
