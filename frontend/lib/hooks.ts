@@ -1051,3 +1051,96 @@ export const useHiddenFolders = (sourceId: string | null) => {
     staleTime: 1000 * 60 * 5, // 5 minutes
   });
 };
+
+// ============================================================================
+// Discover Hooks
+// ============================================================================
+
+interface DiscoverFeedResponse {
+  success: boolean;
+  feed: FeedItem[];
+  count: number;
+}
+
+interface DiscoverSessionResponse {
+  success: boolean;
+  seenCount: number;
+}
+
+/**
+ * Fetch a batch of random unseen (not liked, not saved) media for the Discover page.
+ */
+export const useDiscoverFeed = (limit: 50 | 100 = 50) => {
+  return useQuery({
+    queryKey: ['discover', limit],
+    queryFn: async (): Promise<DiscoverFeedResponse> => {
+      const response = await authenticatedFetch(
+        `${API_BASE}/api/discover?limit=${limit}`
+      );
+      if (!response.ok) throw new Error('Failed to fetch discover feed');
+      const data = await response.json();
+      return {
+        ...data,
+        feed: (data.feed ?? []).map((item: unknown) => normalizeFeedItem(item)),
+      };
+    },
+    staleTime: 0,
+    gcTime: 5 * 60 * 1000,
+  });
+};
+
+/**
+ * Get discover session metadata (count of seen IDs).
+ */
+export const useDiscoverSession = () => {
+  return useQuery({
+    queryKey: ['discover-session'],
+    queryFn: async (): Promise<DiscoverSessionResponse> => {
+      const response = await authenticatedFetch(`${API_BASE}/api/discover/session`);
+      if (!response.ok) throw new Error('Failed to fetch discover session');
+      return response.json();
+    },
+    staleTime: 30 * 1000,
+    gcTime: 5 * 60 * 1000,
+  });
+};
+
+/**
+ * Append seen IDs to the discover session (call before reshuffling).
+ */
+export const useAppendDiscoverSession = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (seenIds: string[]): Promise<DiscoverSessionResponse> => {
+      const response = await authenticatedFetch(`${API_BASE}/api/discover/session`, {
+        method: 'POST',
+        body: JSON.stringify({ seenIds }),
+      });
+      if (!response.ok) throw new Error('Failed to append discover session');
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['discover-session'] });
+    },
+  });
+};
+
+/**
+ * Reset the discover session (clear seen IDs). Liked/saved remain excluded.
+ */
+export const useResetDiscoverSession = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (): Promise<DiscoverSessionResponse> => {
+      const response = await authenticatedFetch(`${API_BASE}/api/discover/session`, {
+        method: 'DELETE',
+      });
+      if (!response.ok) throw new Error('Failed to reset discover session');
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['discover-session'] });
+      queryClient.invalidateQueries({ queryKey: ['discover'] });
+    },
+  });
+};

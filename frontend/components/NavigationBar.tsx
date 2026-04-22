@@ -5,9 +5,9 @@
  */
 'use client';
 
-import { Home, Bookmark, Heart, Settings } from 'lucide-react';
+import { Home, Bookmark, Heart, Settings, Compass } from 'lucide-react';
 
-export type NavTab = 'feed' | 'saved' | 'liked' | 'settings';
+export type NavTab = 'feed' | 'discover' | 'saved' | 'liked' | 'settings';
 
 interface NavigationBarProps {
   activeTab: NavTab;
@@ -17,6 +17,7 @@ interface NavigationBarProps {
 export function NavigationBar({ activeTab, onTabChange }: NavigationBarProps) {
   const tabs = [
     { id: 'feed' as NavTab, label: 'Feed', icon: Home },
+    { id: 'discover' as NavTab, label: 'Discover', icon: Compass },
     { id: 'saved' as NavTab, label: 'Saved', icon: Bookmark },
     { id: 'liked' as NavTab, label: 'Liked', icon: Heart },
     { id: 'settings' as NavTab, label: 'Settings', icon: Settings },
@@ -33,20 +34,17 @@ export function NavigationBar({ activeTab, onTabChange }: NavigationBarProps) {
             <button
               key={tab.id}
               onClick={() => onTabChange(tab.id)}
-              className={`flex flex-col items-center justify-center transition-all duration-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300 rounded-lg px-2 py-1 ${
-                isActive
+              className={`flex flex-col items-center justify-center transition-all duration-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300 rounded-lg px-2 py-1 ${isActive
                   ? 'text-white'
                   : 'text-neutral-400 hover:text-neutral-100'
-              }`}
+                }`}
               aria-label={tab.label}
               aria-current={isActive ? 'page' : undefined}
             >
-              <Icon size={22} className={`${
-                isActive ? 'stroke-2' : 'stroke-1.5'
-              }`} />
-              <span className={`text-xs mt-0.5 ${
-                isActive ? 'font-semibold' : 'font-medium'
-              }`}>
+              <Icon size={22} className={`${isActive ? 'stroke-2' : 'stroke-1.5'
+                }`} />
+              <span className={`text-xs mt-0.5 ${isActive ? 'font-semibold' : 'font-medium'
+                }`}>
                 {tab.label}
               </span>
             </button>

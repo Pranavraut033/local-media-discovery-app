@@ -12,12 +12,13 @@ import { LikedView } from '@/components/LikedView';
 import { HiddenView } from '@/components/HiddenView';
 import { Settings } from '@/components/Settings';
 import { SourceView } from '@/components/SourceView';
+import { DiscoverView } from '@/components/DiscoverView';
 import { NavigationBar, type NavTab } from '@/components/NavigationBar';
 import { getRootFolder } from '@/lib/storage';
 import type { FeedMode } from '@/components/Feed';
 import { useUIStore } from '@/lib/stores/ui.store';
 
-type AppView = 'feed' | 'saved' | 'liked' | 'hidden' | 'source' | 'settings';
+type AppView = 'feed' | 'discover' | 'saved' | 'liked' | 'hidden' | 'source' | 'settings';
 
 interface SourceViewState {
   sourceId: string;
@@ -125,6 +126,7 @@ export default function MainLayout() {
   return (
     <>
       {currentView === 'feed' && <Feed onViewSource={handleViewSource} onModeChange={setFeedMode} />}
+      {currentView === 'discover' && <DiscoverView onViewSource={handleViewSource} />}
       {currentView === 'saved' && <SavedView onBack={handleBackFromSaved} />}
       {currentView === 'liked' && <LikedView onBack={handleBackFromLiked} />}
       {currentView === 'hidden' && <HiddenView onBack={handleBackFromHidden} />}
@@ -143,7 +145,7 @@ export default function MainLayout() {
       {/* Navigation Bar (only show when not viewing a source) */}
       {currentView !== 'source' && !(currentView === 'feed' && feedMode === 'reels') && (
         <NavigationBar
-          activeTab={currentView === 'settings' ? 'settings' : currentView === 'saved' ? 'saved' : currentView === 'liked' ? 'liked' : 'feed'}
+          activeTab={currentView === 'settings' ? 'settings' : currentView === 'saved' ? 'saved' : currentView === 'liked' ? 'liked' : currentView === 'discover' ? 'discover' : 'feed'}
           onTabChange={handleTabChange}
         />
       )}
