@@ -1,15 +1,18 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import MainLayout from '@/components/MainLayout';
 import LoginScreen from '@/components/LoginScreen';
 import { useAuth } from '@/lib/auth';
-import { ensureRcloneMount } from '@/lib/api';
+import { authenticatedFetch, ensureRcloneMount, getApiBase } from '@/lib/api';
+import { getRootFolder, setRootFolder } from '@/lib/storage';
 
 export default function Home() {
   const { isAuthenticated, isLoading } = useAuth();
   const [isPreparingMount, setIsPreparingMount] = useState(true);
   const [mountError, setMountError] = useState<string | null>(null);
+  const [mountedDir, setMountedDir] = useState<string | null>(null);
+  const autoIndexBootstrapDoneRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -24,6 +27,9 @@ export default function Home() {
         }
 
         if (result.mounted || result.status === 'mounted') {
+          if (result.mountDir) {
+            setMountedDir(result.mountDir);
+          }
           setIsPreparingMount(false);
           return;
         }
@@ -51,6 +57,49 @@ export default function Home() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (!isAuthenticated || !mountedDir || autoIndexBootstrapDoneRef.current) {
+      return;
+    }
+
+    autoIndexBootstrapDoneRef.current = true;
+    let cancelled = false;
+
+    const bootstrapIndexingIfEmpty = async () => {
+      try {
+        const apiBase = getApiBase();
+        const statusResponse = await authenticatedFetch(`${apiBase}/api/index/status`);
+        if (!statusResponse.ok || cancelled) {
+          return;
+        }
+
+        const statusData = await statusResponse.json().catch(() => null) as { status?: { mediaCount?: number } } | null;
+        const mediaCount = statusData?.status?.mediaCount ?? 0;
+        if (mediaCount > 0) {
+          return;
+        }
+
+        const currentRoot = getRootFolder();
+        if (currentRoot !== mountedDir) {
+          setRootFolder(mountedDir);
+        }
+
+        await authenticatedFetch(`${apiBase}/api/config/root-folder`, {
+          method: 'POST',
+          body: JSON.stringify({ path: mountedDir, autoIndex: true }),
+        });
+      } catch (error) {
+        console.error('Auto-index bootstrap failed:', error);
+      }
+    };
+
+    bootstrapIndexingIfEmpty();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isAuthenticated, mountedDir]);
 
   if (isPreparingMount) {
     return (
