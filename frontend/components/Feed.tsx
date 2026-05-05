@@ -62,10 +62,11 @@ export function Feed({ initialMode, onViewSource, onModeChange }: FeedProps) {
 
   const activeJob = Object.values(jobs).find((j) => j.status === 'queued' || j.status === 'processing');
 
-  // When an indexing job completes and the feed is still empty, refetch automatically
+  // When an indexing job completes, refetch the feed to pick up any newly indexed or
+  // removed files (not limited to empty-feed case, since a reindex may change the set).
   useEffect(() => {
     const completedJob = Object.values(jobs).find((j) => j.status === 'completed');
-    if (completedJob && allItems.length === 0) {
+    if (completedJob) {
       queryClient.invalidateQueries({ queryKey: ['feed'] });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps

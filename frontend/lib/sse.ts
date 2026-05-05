@@ -11,9 +11,16 @@ let eventSource: EventSource | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let shouldReconnect = true;
 
+/** Called when any job reaches 'completed'. Used by ScanningProgressDialog to invalidate feed. */
+let _onJobComplete: (() => void) | null = null;
+export function setJobCompleteCallback(cb: () => void): void {
+  _onJobComplete = cb;
+}
+
 const SSE_EVENTS = [
   'job_queued',
   'job_started',
+  'scan_progress',
   'job_progress',
   'file_pending',
   'file_hashed',
@@ -22,7 +29,7 @@ const SSE_EVENTS = [
 ] as const;
 
 function handleEvent(type: string, data: Record<string, unknown>): void {
-  const { upsertJob, addReconciliation } = useIndexingStore.getState();
+  const { upsertJob, addReconciliation, updateScanProgress, completeScan } = useIndexingStore.getState();
   const jobId = data.jobId as string | undefined;
   if (!jobId) return;
 
@@ -33,9 +40,17 @@ function handleEvent(type: string, data: Record<string, unknown>): void {
     case 'job_started':
       upsertJob({ jobId, status: 'processing' });
       break;
+    case 'scan_progress': {
+      const foldersScanned = data.foldersScanned as number ?? 0;
+      const filesFound = data.filesFound as number ?? 0;
+      updateScanProgress(jobId, foldersScanned, filesFound);
+      break;
+    }
     case 'job_progress': {
       const stage = data.stage as 'discovery' | 'hashing' | undefined;
       if (stage === 'discovery') {
+        // Scan phase is done — transition scan dialog to hashing mode
+        completeScan(jobId);
         upsertJob({ jobId, stage: 'discovery', filesFound: data.filesFound as number | undefined });
       } else {
         upsertJob({
@@ -64,6 +79,7 @@ function handleEvent(type: string, data: Record<string, unknown>): void {
     }
     case 'job_completed':
       upsertJob({ jobId, status: 'completed' });
+      _onJobComplete?.();
       break;
     case 'job_failed':
       upsertJob({ jobId, status: 'failed', error: data.error as string | undefined });

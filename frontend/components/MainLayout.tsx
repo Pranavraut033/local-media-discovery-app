@@ -17,6 +17,7 @@ import { NavigationBar, type NavTab } from '@/components/NavigationBar';
 import { getRootFolder } from '@/lib/storage';
 import type { FeedMode } from '@/components/Feed';
 import { useUIStore } from '@/lib/stores/ui.store';
+import ScanningProgressDialog from '@/components/ScanningProgressDialog';
 
 type AppView = 'feed' | 'discover' | 'saved' | 'liked' | 'hidden' | 'source' | 'settings';
 
@@ -99,6 +100,11 @@ export default function MainLayout() {
     setCurrentView('feed');
   };
 
+  const handleRootFolderReset = () => {
+    setRootFolderSet(false);
+    setCurrentView('feed');
+  };
+
   if (isChecking) {
     return (
       <div className="flex min-h-screen items-center justify-center px-4 py-10 bg-background">
@@ -140,7 +146,7 @@ export default function MainLayout() {
           onBack={handleBackFromSource}
         />
       )}
-      {currentView === 'settings' && <Settings onBack={handleBackFromSettings} onViewHidden={() => setCurrentView('hidden')} />}
+      {currentView === 'settings' && <Settings onBack={handleBackFromSettings} onViewHidden={() => setCurrentView('hidden')} onRootFolderReset={handleRootFolderReset} />}
 
       {/* Navigation Bar (only show when not viewing a source) */}
       {currentView !== 'source' && !(currentView === 'feed' && feedMode === 'reels') && (
@@ -149,6 +155,8 @@ export default function MainLayout() {
           onTabChange={handleTabChange}
         />
       )}
+
+      <ScanningProgressDialog />
     </>
   );
 }

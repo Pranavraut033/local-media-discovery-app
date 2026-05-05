@@ -14,6 +14,7 @@ import { FolderTreeView } from './FolderTreeView';
 import { useFullscreen } from '@/lib/useFullscreen';
 import { useUIStore } from '@/lib/stores/ui.store';
 import type { FeedSourceType } from '@/lib/stores/ui.store';
+import { useFoldersStore } from '@/lib/stores/folders.store';
 
 interface AppStats {
   totalMedia: number;
@@ -27,12 +28,14 @@ interface AppStats {
 interface SettingsProps {
   onBack?: () => void;
   onViewHidden?: () => void;
+  onRootFolderReset?: () => void;
 }
 
-export function Settings({ onBack, onViewHidden }: SettingsProps) {
+export function Settings({ onBack, onViewHidden, onRootFolderReset }: SettingsProps) {
   const API_URL = getApiBase();
   const [preferences, setLocalPreferences] = useState<ReturnType<typeof getPreferences> | null>(null);
   const { isFullscreen, toggleFullscreen } = useFullscreen();
+  const localRootFolder = useFoldersStore((s) => s.rootFolder);
   // const feedSourceType = useUIStore((s) => s.preferences.feedSourceType ?? 'local'); // rclone disabled
   const [stats, setStats] = useState<AppStats | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -157,8 +160,12 @@ export function Settings({ onBack, onViewHidden }: SettingsProps) {
         // Clear recent folders from local storage
         clearRecentFolders();
 
-        // Reload the page to return to folder selection
-        window.location.reload();
+        // Navigate back to folder selection without a full page reload
+        if (onRootFolderReset) {
+          onRootFolderReset();
+        } else {
+          window.location.reload();
+        }
       } else {
         const errorData = await response.json();
         setError(errorData.error || 'Failed to reset root folder');
@@ -336,7 +343,7 @@ export function Settings({ onBack, onViewHidden }: SettingsProps) {
 
             <button
               onClick={handleResetRootFolder}
-              disabled={isResetting || !stats?.rootFolder || stats.rootFolder === 'Not set'}
+              disabled={isResetting || (!localRootFolder && (!stats?.rootFolder || stats.rootFolder === 'Not set'))}
               className="w-full bg-red-600 hover:bg-red-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg transition-colors font-medium flex items-center justify-center gap-2 mb-4"
             >
               {isResetting ? (
