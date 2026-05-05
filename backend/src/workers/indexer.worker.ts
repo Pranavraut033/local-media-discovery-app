@@ -35,19 +35,24 @@ async function processJob(job: { data: IndexingJobData }): Promise<void> {
       const { rootFolder } = job.data;
       if (!rootFolder) throw new Error('rootFolder required for local job');
 
-      // Phase 1: fast discovery – creates pending records immediately
-      const pending = await discoverAndCreatePendingLocal(db, rootFolder, userId, jobId, (count) => {
+      // Phase 1: fast discovery – creates pending records per directory as they are scanned
+      const pending = await discoverAndCreatePendingLocal(db, rootFolder, userId, jobId, (foldersScanned, filesFound) => {
         sseEventBus.emit(userId, {
-          type: 'job_progress',
+          type: 'scan_progress',
           jobId,
-          payload: { stage: 'discovery', filesFound: count },
+          payload: { foldersScanned, filesFound },
         });
       });
 
-      // Update total count
+      // Scan complete — update total count and signal UI to transition to hashing stage
       db.prepare(
         `UPDATE indexing_jobs SET total_files = ?, updated_at = ? WHERE id = ?`
       ).run(pending.length, now, jobId);
+      sseEventBus.emit(userId, {
+        type: 'job_progress',
+        jobId,
+        payload: { stage: 'discovery', filesFound: pending.length },
+      });
 
       // Phase 2: hash each pending file and finalize
       await finalizeLocalPendingFiles(db, pending, userId, jobId, (done, total, fileId, finalId) => {

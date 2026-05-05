@@ -5,10 +5,11 @@
 import fs from 'fs/promises';
 import fssync from 'fs';
 import path from 'path';
-import { createHash, randomUUID } from 'crypto';
+import { createHash } from 'crypto';
 import mime from 'mime-types';
 import type Database from 'better-sqlite3';
 import { config } from '../config.js';
+import { invalidateFeedCache } from './feed.js';
 
 interface ScannedFile {
   absolutePath: string;
@@ -409,50 +410,101 @@ export interface PendingLocalFile {
   folderRelativePath: string;
 }
 
+type ScannedDirFile = Omit<PendingLocalFile, 'tempFileId' | 'pathId'>;
+
 function makeTempFileId(absolutePath: string): string {
   return 'p' + createHash('sha256').update(absolutePath).digest('hex').slice(0, 31);
 }
 
 /**
- * Fast directory scan that creates pending file_paths immediately (no hashing).
- * Returns the list of pending file descriptors for subsequent finalization.
+ * Incremental directory scan: emits each directory's files via callback as soon as
+ * it is traversed (pre-order). Folder count grows as subdirectories are discovered.
+ * No hashing — metadata only.
+ */
+async function scanDirectoryMetaIncremental(
+  rootFolder: string,
+  dirPath: string,
+  onDirScanned: (dirRelPath: string, dirAbsPath: string, files: ScannedDirFile[]) => void,
+  state: { foldersFound: number }
+): Promise<void> {
+  const filesInDir: ScannedDirFile[] = [];
+  const subdirs: string[] = [];
+
+  let entries: fssync.Dirent<string>[];
+  try {
+    entries = await fs.readdir(dirPath, { withFileTypes: true, encoding: 'utf8' });
+  } catch {
+    return;
+  }
+
+  for (const entry of entries) {
+    if (entry.name.startsWith('.')) continue;
+    const fullPath = path.join(dirPath, entry.name);
+
+    if (entry.isDirectory()) {
+      state.foldersFound++;
+      subdirs.push(fullPath);
+      continue;
+    }
+
+    if (!entry.isFile()) continue;
+
+    const mediaKind = getMediaKind(fullPath);
+    if (!mediaKind) continue;
+
+    try {
+      const stats = await fs.stat(fullPath);
+      const relativePathFromRoot = normalizeRelativePath(path.relative(rootFolder, fullPath));
+      filesInDir.push({
+        absolutePath: fullPath,
+        relativePathFromRoot,
+        fileName: path.basename(fullPath),
+        sizeBytes: stats.size,
+        mimeType: (mime.lookup(fullPath) || null) as string | null,
+        extension: path.extname(fullPath).toLowerCase() || null,
+        mediaKind,
+        folderRelativePath: normalizeRelativePath(path.dirname(relativePathFromRoot)),
+      });
+    } catch {
+      // Skip unreadable files
+    }
+  }
+
+  // Pre-order: emit this directory before recursing into subdirs
+  const dirRelPath = normalizeRelativePath(path.relative(rootFolder, dirPath));
+  onDirScanned(dirRelPath, dirPath, filesInDir);
+
+  for (const subdir of subdirs) {
+    await scanDirectoryMetaIncremental(rootFolder, subdir, onDirScanned, state);
+  }
+}
+
+/**
+ * Fast directory scan that creates pending file_paths incrementally (no hashing).
+ * Writes each directory's records to DB as it is discovered and calls onScanProgress
+ * after each directory, so media appears in the feed before the full scan completes.
  */
 export async function discoverAndCreatePendingLocal(
   db: Database.Database,
   rootFolder: string,
   userId: string,
   _jobId: string,
-  onProgress: (count: number) => void
+  onScanProgress: (foldersScanned: number, filesFound: number) => void
 ): Promise<PendingLocalFile[]> {
   const now = Math.floor(Date.now() / 1000);
-  const scannedFiles: Array<{
-    absolutePath: string;
-    relativePathFromRoot: string;
-    fileName: string;
-    sizeBytes: number;
-    mimeType: string | null;
-    extension: string | null;
-    mediaKind: 'image' | 'video';
-    folderRelativePath: string;
-  }> = [];
-  const scannedFolders = new Set<string>();
+  const storageConfigId = createHash('sha256').update(`storage:${userId}`).digest('hex').slice(0, 32);
 
-  // Re-use internal scan (without hashing)
-  await scanDirectoryMeta(rootFolder, rootFolder, scannedFiles, scannedFolders);
-  const folderRecords = buildFolderRecords(userId, rootFolder, scannedFolders);
-
-  const upsertStorageConfig = db.prepare(`
-    INSERT INTO user_storage_configs (id, user_id, local_root_path, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?)
-    ON CONFLICT(user_id) DO UPDATE SET
-      local_root_path = excluded.local_root_path,
-      updated_at = excluded.updated_at
-  `);
-
-  const markAllMissing = db.prepare(`
-    UPDATE file_paths SET is_present = 0, last_seen_at = ?, updated_at = ?
-    WHERE user_id = ? AND storage_mode = 'local'
-  `);
+  // Record the root folder config. We no longer mark all paths as missing upfront because
+  // that causes the feed to drop to 0 for the entire duration of the scan (which can be
+  // seconds to minutes for large libraries). Instead, we mark only the paths that were
+  // NOT re-discovered as missing in a single step AFTER the scan completes.
+  db.transaction(() => {
+    db.prepare(`
+      INSERT INTO user_storage_configs (id, user_id, local_root_path, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(user_id) DO UPDATE SET local_root_path = excluded.local_root_path, updated_at = excluded.updated_at
+    `).run(storageConfigId, userId, rootFolder, now, now);
+  })();
 
   const upsertFolder = db.prepare(`
     INSERT INTO folders (id, user_id, parent_folder_id, storage_mode, absolute_path, relative_path_from_root, name, created_at, updated_at)
@@ -485,34 +537,62 @@ export async function discoverAndCreatePendingLocal(
       updated_at = excluded.updated_at
   `);
 
-  const pendingFiles: PendingLocalFile[] = [];
+  const allPending: PendingLocalFile[] = [];
+  let totalFilesFound = 0;
+  let firstBatchDone = false;
+  const scanState = { foldersFound: 0 };
 
-  const tx = db.transaction(() => {
-    const storageConfigId = createHash('sha256').update(`storage:${userId}`).digest('hex').slice(0, 32);
-    upsertStorageConfig.run(storageConfigId, userId, rootFolder, now, now);
-    markAllMissing.run(now, now, userId);
+  await scanDirectoryMetaIncremental(
+    rootFolder,
+    rootFolder,
+    (dirRelPath, dirAbsPath, filesInDir) => {
+      const parentRelPath = dirRelPath === '' ? null : normalizeRelativePath(path.dirname(dirRelPath));
+      const parentFolderId = parentRelPath === null ? null : deriveFolderId(userId, parentRelPath);
+      const folderId = deriveFolderId(userId, dirRelPath);
+      const folderName = dirRelPath === '' ? (path.basename(rootFolder) || 'root') : path.basename(dirRelPath);
 
-    for (const folder of folderRecords) {
-      upsertFolder.run(folder.id, folder.userId, folder.parentFolderId, folder.storageMode, folder.absolutePath, folder.relativePathFromRoot, folder.name, now, now);
-    }
+      // Write this directory's folder record and all its pending file records atomically.
+      db.transaction(() => {
+        upsertFolder.run(folderId, userId, parentFolderId, 'local', dirAbsPath, dirRelPath, folderName, now, now);
 
-    for (const file of scannedFiles) {
-      const tempId = makeTempFileId(file.absolutePath);
-      const tempHash = tempId; // content_hash mirrors id for temp records
-      const folderId = deriveFolderId(userId, file.folderRelativePath);
-      const pathId = derivePathId(userId, file.absolutePath);
-      const pathHash = createHash('sha256').update(file.absolutePath).digest('hex');
+        for (const file of filesInDir) {
+          const tempId = makeTempFileId(file.absolutePath);
+          const pathId = derivePathId(userId, file.absolutePath);
+          const pathHash = createHash('sha256').update(file.absolutePath).digest('hex');
 
-      upsertTempFile.run(tempId, `t${tempId.slice(1, 15)}`, tempHash, file.sizeBytes, file.mimeType, file.extension, file.mediaKind, now, now);
-      upsertPendingPath.run(pathId, tempId, userId, folderId, file.fileName, file.absolutePath, file.relativePathFromRoot, pathHash, now, now, tempId, now, now);
+          upsertTempFile.run(tempId, `t${tempId.slice(1, 15)}`, tempId, file.sizeBytes, file.mimeType, file.extension, file.mediaKind, now, now);
+          upsertPendingPath.run(pathId, tempId, userId, folderId, file.fileName, file.absolutePath, file.relativePathFromRoot, pathHash, now, now, tempId, now, now);
 
-      pendingFiles.push({ tempFileId: tempId, pathId, ...file });
-    }
-  });
+          allPending.push({ tempFileId: tempId, pathId, ...file });
+        }
+      })();
 
-  tx();
-  onProgress(pendingFiles.length);
-  return pendingFiles;
+      totalFilesFound += filesInDir.length;
+
+      // Invalidate feed cache as soon as the first files are written so they appear immediately.
+      if (!firstBatchDone && totalFilesFound > 0) {
+        invalidateFeedCache(userId);
+        firstBatchDone = true;
+      }
+
+      onScanProgress(scanState.foldersFound, totalFilesFound);
+    },
+    scanState
+  );
+
+  // Mark any path that was NOT touched by this scan as absent. All paths re-discovered
+  // above were upserted with updated_at = now, so any row with updated_at < now was not
+  // found on disk and should be hidden from the feed.
+  db.prepare(`
+    UPDATE file_paths
+    SET is_present = 0, updated_at = ?
+    WHERE user_id = ? AND storage_mode = 'local' AND is_present = 1 AND updated_at < ?
+  `).run(now + 1, userId, now);
+
+  // Invalidate feed cache so removed files disappear immediately.
+  invalidateFeedCache(userId);
+
+  return allPending;
 }
 
 /**

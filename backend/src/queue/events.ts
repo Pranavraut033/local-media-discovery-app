@@ -7,6 +7,7 @@ import { EventEmitter } from 'events';
 export type SSEEventType =
   | 'job_queued'
   | 'job_started'
+  | 'scan_progress'
   | 'job_progress'
   | 'file_pending'
   | 'file_hashed'
