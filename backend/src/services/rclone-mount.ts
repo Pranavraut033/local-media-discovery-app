@@ -16,12 +16,9 @@
  */
 
 import { execFile } from 'child_process';
-import { promisify } from 'util';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-
-const execFileAsync = promisify(execFile);
 
 const REMOTE = 'hetzner-crypt:/';
 const MOUNT_BASE = path.join(os.homedir(), '.rclone-mounts', 'hetzner');
@@ -33,6 +30,9 @@ const INACTIVITY_MS = 10 * 60 * 1000; // 10 minutes
 const CHECK_INTERVAL_MS = 60 * 1000; // check every 60 s
 const MOUNT_CHECK_TIMEOUT_MS = 2000; // max time to wait for `mount` command
 const MOUNT_CACHE_TTL_MS = 5000; // cache positive/negative result for 5 s
+const COMMAND_TIMEOUT_MS = 8000; // timeout for unmount/kill commands
+const MOUNT_START_TIMEOUT_MS = 15000; // timeout for `rclone mount --daemon` launch
+const START_GUARD_TIMEOUT_MS = 120000; // break stale "starting" state after 2 minutes
 
 export type MountStatus = 'mounted' | 'mounting' | 'error' | 'stopped';
 
@@ -47,12 +47,26 @@ class RcloneMountService {
   private lastActivityAt = 0;
   private watcherTimer: ReturnType<typeof setInterval> | null = null;
   private starting = false;
+  private startingSince: number | null = null;
   /** The directory that is currently (or was last) mounted. Starts as the preferred base. */
   private activeMountDir = MOUNT_BASE;
   /** Cache: { result, expiresAt } — avoids running `mount` on every API call. */
   private mountCache: { result: boolean; expiresAt: number } | null = null;
   /** In-flight `mount` call — all concurrent callers share the same subprocess. */
   private mountInFlight: Promise<string> | null = null;
+
+  /** Execute a subprocess with a hard timeout so calls cannot block forever. */
+  private execWithTimeout(command: string, args: string[], timeoutMs: number): Promise<string> {
+    return new Promise((resolve, reject) => {
+      execFile(command, args, { timeout: timeoutMs, maxBuffer: 1024 * 1024 }, (err, stdout) => {
+        if (err) {
+          reject(err);
+          return;
+        }
+        resolve(stdout);
+      });
+    });
+  }
 
   /** Signal that a mount-dependent API call just happened. Resets the inactivity timer. */
   recordActivity(): void {
@@ -77,14 +91,7 @@ class RcloneMountService {
   /** Run `mount` with a hard timeout. Concurrent callers share one subprocess (singleton in-flight). */
   private runMount(): Promise<string> {
     if (this.mountInFlight) return this.mountInFlight;
-    this.mountInFlight = new Promise<string>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('mount command timed out')), MOUNT_CHECK_TIMEOUT_MS);
-      execFile('mount', [], (err, stdout) => {
-        clearTimeout(timer);
-        if (err) reject(err);
-        else resolve(stdout);
-      });
-    }).finally(() => {
+    this.mountInFlight = this.execWithTimeout('mount', [], MOUNT_CHECK_TIMEOUT_MS).finally(() => {
       this.mountInFlight = null;
     });
     return this.mountInFlight;
@@ -143,13 +150,13 @@ class RcloneMountService {
 
   private async unmountDir(dir: string): Promise<void> {
     try {
-      await execFileAsync('diskutil', ['unmount', 'force', dir]);
+      await this.execWithTimeout('diskutil', ['unmount', 'force', dir], COMMAND_TIMEOUT_MS);
     } catch {
       try {
-        await execFileAsync('umount', ['-f', dir]);
+        await this.execWithTimeout('umount', ['-f', dir], COMMAND_TIMEOUT_MS);
       } catch {
         try {
-          await execFileAsync('fusermount', ['-u', '-z', dir]);
+          await this.execWithTimeout('fusermount', ['-u', '-z', dir], COMMAND_TIMEOUT_MS);
         } catch {
           // ignore — dir may not be mounted at all
         }
@@ -162,7 +169,7 @@ class RcloneMountService {
     this.invalidateCache();
     // Kill any lingering rclone mount daemon
     try {
-      await execFileAsync('pkill', ['-f', `rclone mount ${REMOTE}`]);
+      await this.execWithTimeout('pkill', ['-f', `rclone mount ${REMOTE}`], COMMAND_TIMEOUT_MS);
     } catch {
       // no process — fine
     }
@@ -208,15 +215,29 @@ class RcloneMountService {
       const stat = fs.lstatSync(SYMLINK_PATH);
       if (stat.isSymbolicLink()) {
         fs.unlinkSync(SYMLINK_PATH);
+      } else if (stat.isDirectory()) {
+        const entries = fs.readdirSync(SYMLINK_PATH);
+        if (entries.length === 0) {
+          fs.rmdirSync(SYMLINK_PATH);
+        } else {
+          const backupPath = `${SYMLINK_PATH}.backup-${Date.now()}`;
+          fs.renameSync(SYMLINK_PATH, backupPath);
+          console.warn(`[rclone-mount] Existing directory at ${SYMLINK_PATH} was moved to ${backupPath} so symlink can be created.`);
+        }
+      } else {
+        const backupPath = `${SYMLINK_PATH}.backup-${Date.now()}`;
+        fs.renameSync(SYMLINK_PATH, backupPath);
+        console.warn(`[rclone-mount] Existing file at ${SYMLINK_PATH} was moved to ${backupPath} so symlink can be created.`);
       }
-      // If it's a real directory we leave it alone to avoid data loss.
     } catch {
       // doesn't exist yet — no action needed
     }
+
     try {
       fs.symlinkSync(target, SYMLINK_PATH);
-    } catch {
-      // already a valid symlink pointing somewhere — ignore
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(`[rclone-mount] Failed to create symlink ${SYMLINK_PATH} -> ${target}: ${msg}`);
     }
   }
 
@@ -274,20 +295,30 @@ class RcloneMountService {
     }
 
     if (this.starting) {
-      // Even while starting, the daemon may have already come up (e.g. it was running before
-      // the backend restarted). Do a fast stat check before returning "mounting".
-      if (this.isMountpointActive(this.activeMountDir)) {
+      if (this.startingSince && (Date.now() - this.startingSince) > START_GUARD_TIMEOUT_MS) {
+        console.warn('[rclone-mount] Previous startup attempt appears stuck; resetting start guard and retrying.');
         this.starting = false;
-        this.invalidateCache();
-        this.updateSymlink(this.activeMountDir);
-        this.recordActivity();
-        this.startInactivityWatcher();
-        return { mounted: true, status: 'mounted', message: 'rclone mount is ready', mountDir: SYMLINK_PATH };
+        this.startingSince = null;
       }
-      return { mounted: false, status: 'mounting', message: 'rclone mount is already starting', mountDir: SYMLINK_PATH };
+
+      if (this.starting) {
+        // Even while starting, the daemon may have already come up (e.g. it was running before
+        // the backend restarted). Do a fast stat check before returning "mounting".
+        if (this.isMountpointActive(this.activeMountDir)) {
+          this.starting = false;
+          this.startingSince = null;
+          this.invalidateCache();
+          this.updateSymlink(this.activeMountDir);
+          this.recordActivity();
+          this.startInactivityWatcher();
+          return { mounted: true, status: 'mounted', message: 'rclone mount is ready', mountDir: SYMLINK_PATH };
+        }
+        return { mounted: false, status: 'mounting', message: 'rclone mount is already starting', mountDir: SYMLINK_PATH };
+      }
     }
 
     this.starting = true;
+    this.startingSince = Date.now();
     try {
       // Attempt to clean up any stale / busy mountpoint first
       await this.unmountAndKill();
@@ -300,7 +331,7 @@ class RcloneMountService {
 
       console.log(`[rclone-mount] Launching rclone daemon: ${REMOTE} → ${mountDir}`);
 
-      await execFileAsync('rclone', [
+      await this.execWithTimeout('rclone', [
         'mount', REMOTE, mountDir,
         '--daemon',
         '--allow-other',
@@ -323,7 +354,7 @@ class RcloneMountService {
         '--multi-thread-cutoff', '16M',
         '--no-modtime',
         '--log-level', 'INFO',
-      ]);
+      ], MOUNT_START_TIMEOUT_MS);
 
       // Poll until the FUSE mount appears (rclone daemon may take a few seconds)
       for (let i = 0; i < 20; i++) {
@@ -350,6 +381,7 @@ class RcloneMountService {
       return { mounted: false, status: 'error', message: msg, mountDir: SYMLINK_PATH };
     } finally {
       this.starting = false;
+      this.startingSince = null;
     }
   }
 

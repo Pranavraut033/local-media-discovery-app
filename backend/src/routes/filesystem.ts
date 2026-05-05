@@ -105,29 +105,38 @@ export default async function filesystemRoutes(fastify: FastifyInstance): Promis
         // Read directory contents
         const entries = await fs.readdir(normalizedPath, { withFileTypes: true });
 
-        // Filter to only directories and format response
-        const directories = await Promise.all(
-          entries
-            .filter((entry) => entry.isDirectory())
-            .map(async (entry) => {
-              const fullPath = path.join(normalizedPath, entry.name);
-              try {
-                // Try to access to check permissions
-                await fs.access(fullPath, fs.constants.R_OK);
-                return {
-                  name: entry.name,
-                  path: fullPath,
-                  accessible: true,
-                };
-              } catch {
-                return {
-                  name: entry.name,
-                  path: fullPath,
-                  accessible: false,
-                };
-              }
-            })
-        );
+        // Filter to only directories (including symlinks that point to directories) and format response
+        const directories = (
+          await Promise.all(
+            entries
+              .filter((entry) => entry.isDirectory() || entry.isSymbolicLink())
+              .map(async (entry) => {
+                const fullPath = path.join(normalizedPath, entry.name);
+                try {
+                  // stat follows symlinks — confirms the target is a directory
+                  const targetStats = await fs.stat(fullPath);
+                  if (!targetStats.isDirectory()) return null;
+                  // Try to access to check permissions
+                  await fs.access(fullPath, fs.constants.R_OK);
+                  return {
+                    name: entry.name,
+                    path: fullPath,
+                    accessible: true,
+                  };
+                } catch {
+                  // Inaccessible or broken symlink — still show as inaccessible dir
+                  if (entry.isDirectory()) {
+                    return {
+                      name: entry.name,
+                      path: fullPath,
+                      accessible: false,
+                    };
+                  }
+                  return null;
+                }
+              })
+          )
+        ).filter((d): d is { name: string; path: string; accessible: boolean } => d !== null);
 
         // Sort directories alphabetically
         directories.sort((a, b) => a.name.localeCompare(b.name));
