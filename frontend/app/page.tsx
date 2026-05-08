@@ -6,13 +6,32 @@ import LoginScreen from '@/components/LoginScreen';
 import { useAuth } from '@/lib/auth';
 import { authenticatedFetch, ensureRcloneMount, getApiBase } from '@/lib/api';
 import { getRootFolder, setRootFolder } from '@/lib/storage';
+import { getDesktopLaunchConfig } from '@/lib/desktop';
 
 export default function Home() {
   const { isAuthenticated, isLoading } = useAuth();
   const [isPreparingMount, setIsPreparingMount] = useState(true);
   const [mountError, setMountError] = useState<string | null>(null);
   const [mountedDir, setMountedDir] = useState<string | null>(null);
+  const [desktopDefaultRootFolder, setDesktopDefaultRootFolder] = useState<string | null>(null);
   const autoIndexBootstrapDoneRef = useRef(false);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadDesktopConfig = async () => {
+      const desktopConfig = await getDesktopLaunchConfig();
+      if (!cancelled) {
+        setDesktopDefaultRootFolder(desktopConfig?.defaultRootFolder || null);
+      }
+    };
+
+    loadDesktopConfig();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -80,14 +99,19 @@ export default function Home() {
           return;
         }
 
+        const targetRootFolder = getRootFolder() || desktopDefaultRootFolder || mountedDir;
+        if (!targetRootFolder) {
+          return;
+        }
+
         const currentRoot = getRootFolder();
-        if (currentRoot !== mountedDir) {
-          setRootFolder(mountedDir);
+        if (currentRoot !== targetRootFolder) {
+          setRootFolder(targetRootFolder);
         }
 
         await authenticatedFetch(`${apiBase}/api/config/root-folder`, {
           method: 'POST',
-          body: JSON.stringify({ path: mountedDir, autoIndex: true }),
+          body: JSON.stringify({ path: targetRootFolder, autoIndex: true }),
         });
       } catch (error) {
         console.error('Auto-index bootstrap failed:', error);
@@ -99,7 +123,7 @@ export default function Home() {
     return () => {
       cancelled = true;
     };
-  }, [isAuthenticated, mountedDir]);
+  }, [isAuthenticated, mountedDir, desktopDefaultRootFolder]);
 
   if (isPreparingMount) {
     return (

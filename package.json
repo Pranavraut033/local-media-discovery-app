@@ -2,6 +2,7 @@
   "name": "local-media-discovery-app",
   "version": "0.1.0",
   "description": "Local-first media discovery application",
+  "main": "desktop/main.cjs",
   "private": true,
   "scripts": {
     "install:all": "cd backend && npm install && cd ../media-server && npm install && cd ../frontend && npm install",
@@ -18,7 +19,11 @@
     "delete": "pm2 stop ecosystem.config.cjs && pm2 delete ecosystem.config.cjs",
     "logs": "pm2 logs",
     "status": "pm2 status",
-    "reset": "npm run delete && npm run start"
+    "reset": "npm run delete && npm run start",
+    "desktop:dev": "npm run install:all && npm run build && electron desktop/main.cjs",
+    "desktop:pack:mac": "npx rimraf desktop/dist || (sleep 2 && npx rimraf desktop/dist) && npm run install:all && npm run build && cd backend && npm prune --production && cd .. && electron-builder --mac dmg zip && cd backend && npm install",
+    "desktop:pack:dir": "npx rimraf desktop/dist || (sleep 2 && npx rimraf desktop/dist) && npm run install:all && npm run build && cd backend && npm prune --production && cd .. && electron-builder --dir && cd backend && npm install",
+    "desktop:pack:win": "npx rimraf desktop/dist || (sleep 2 && npx rimraf desktop/dist) && npm run install:all && npm run build && cd backend && npm prune --production && cd .. && electron-builder --win nsis && cd backend && npm install"
   },
   "keywords": [
     "media",
@@ -27,5 +32,61 @@
     "privacy"
   ],
   "author": "",
-  "license": "ISC"
+  "license": "ISC",
+  "devDependencies": {
+    "electron": "^37.0.0",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "com.localmedia.discovery",
+    "productName": "Local Media Discovery",
+    "extraMetadata": {
+      "main": "desktop/main.cjs"
+    },
+    "directories": {
+      "buildResources": "desktop/resources",
+      "output": "desktop/dist"
+    },
+    "files": [
+      "desktop/**/*",
+      "backend/dist/**/*",
+      "backend/media-discovery.db",
+      "backend/node_modules/**/*",
+      "media-server/dist/**/*",
+      "media-server/node_modules/**/*",
+      "frontend/out/**/*",
+      "!backend/node_modules/typescript/**/*",
+      "!backend/node_modules/drizzle-kit/**/*",
+      "!backend/node_modules/@esbuild/**/*",
+      "!backend/node_modules/@esbuild-kit/**/*",
+      "!backend/node_modules/ffprobe-static/**/*",
+      "!backend/node_modules/ffmpeg-static/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "desktop/resources/defaults",
+        "to": "defaults"
+      }
+    ],
+    "asarUnpack": [
+      "backend/dist/**/*",
+      "backend/media-discovery.db",
+      "backend/node_modules/**/*",
+      "media-server/dist/**/*",
+      "media-server/node_modules/**/*",
+      "frontend/out/**/*"
+    ],
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "category": "public.app-category.video"
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    }
+  }
 }

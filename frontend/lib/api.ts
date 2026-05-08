@@ -1,11 +1,20 @@
 import { getRootFolder, getStoredToken } from './storage';
 
+function getRuntimePort(paramName: string, fallbackPort: string): string {
+  if (typeof window === 'undefined') {
+    return fallbackPort;
+  }
+
+  const runtimePort = new URLSearchParams(window.location.search).get(paramName);
+  return runtimePort || fallbackPort;
+}
+
 export function getApiBase(): string {
   if (process.env.NEXT_PUBLIC_API_URL) {
     return process.env.NEXT_PUBLIC_API_URL;
   }
 
-  const port = process.env.API_PORT || '3001';
+  const port = getRuntimePort('apiPort', process.env.API_PORT || '3001');
 
   if (typeof window !== 'undefined' && window.location?.hostname) {
     return `http://${window.location.hostname}:${port}`;
@@ -82,7 +91,7 @@ export function getMediaServerBase(): string {
   if (process.env.NEXT_PUBLIC_MEDIA_SERVER_URL) {
     return process.env.NEXT_PUBLIC_MEDIA_SERVER_URL;
   }
-  const port = process.env.MEDIA_SERVER_PORT || '3002';
+  const port = getRuntimePort('mediaServerPort', process.env.MEDIA_SERVER_PORT || '3002');
   if (typeof window !== 'undefined' && window.location?.hostname) {
     return `http://${window.location.hostname}:${port}`;
   }

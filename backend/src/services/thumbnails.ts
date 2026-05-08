@@ -4,9 +4,8 @@
  */
 import sharp from 'sharp';
 import ffmpeg from 'fluent-ffmpeg';
-import ffmpegStatic from 'ffmpeg-static';
-// @ts-ignore — ffprobe-static has no bundled types
-import ffprobeStatic from 'ffprobe-static';
+import ffmpegStatic from '@ffmpeg-installer/ffmpeg';
+import ffprobeStatic from '@ffprobe-installer/ffprobe';
 import { config } from '../config.js';
 import fs from 'fs/promises';
 import path from 'path';
@@ -17,10 +16,10 @@ import { readRemoteFile } from './rclone.js';
 // Set ffmpeg/ffprobe paths so fluent-ffmpeg uses the bundled binaries
 // rather than requiring system-level installations.
 if (ffmpegStatic) {
-  ffmpeg.setFfmpegPath(ffmpegStatic);
+  ffmpeg.setFfmpegPath((ffmpegStatic as any).path || ffmpegStatic);
 }
-if (ffprobeStatic?.path) {
-  ffmpeg.setFfprobePath(ffprobeStatic.path);
+if (ffprobeStatic) {
+  ffmpeg.setFfprobePath((ffprobeStatic as any).path || ffprobeStatic);
 }
 
 interface ThumbnailCache {

@@ -15,12 +15,96 @@
  *  - stop() uses `umount -f` (macOS) / `fusermount -u` (Linux) which causes the daemon to exit.
  */
 
-import { execFile } from 'child_process';
+import { execFile, execFileSync, execSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const REMOTE = 'hetzner-crypt:/';
+
+function getBundledRclonePath(): string | null {
+  const resourcesPath = (process as any).resourcesPath || '';
+  const bundledPaths = [
+    path.join(resourcesPath, 'rclone'),
+    path.join(resourcesPath, 'bin', 'rclone'),
+    path.join(__dirname, '..', '..', '..', 'resources', 'bin', 'rclone'),
+    path.join(__dirname, '..', '..', '..', '..', 'Resources', 'bin', 'rclone'),
+    path.join(__dirname, '..', '..', '..', '..', 'rclone'),
+    path.join(__dirname, '..', '..', '..', '..', 'bin', 'rclone'),
+  ];
+
+  for (const p of bundledPaths) {
+    try {
+      if (fs.existsSync(p) && fs.statSync(p).isFile()) {
+        return p;
+      }
+    } catch {
+      continue;
+    }
+  }
+
+  return null;
+}
+
+function getSystemRclonePath(): string | null {
+  const candidates: string[] = [];
+
+  if (process.env.PATH) {
+    for (const dir of process.env.PATH.split(path.delimiter)) {
+      if (!dir) continue;
+      candidates.push(path.join(dir, 'rclone'));
+    }
+  }
+
+  candidates.push(
+    '/usr/local/bin/rclone',
+    '/opt/homebrew/bin/rclone',
+    '/usr/bin/rclone',
+    '/bin/rclone'
+  );
+
+  for (const candidate of candidates) {
+    try {
+      const stat = fs.statSync(candidate);
+      if (stat.isFile()) {
+        return candidate;
+      }
+    } catch {
+      // ignore missing files
+    }
+  }
+
+  try {
+    const resolved = execSync('command -v rclone', {
+      stdio: ['ignore', 'pipe', 'ignore'],
+      shell: '/bin/sh',
+    });
+    const pathString = resolved.toString().trim();
+    return pathString || null;
+  } catch {
+    return null;
+  }
+}
+
+function getRclonePath(): string | null {
+  return getBundledRclonePath() ?? getSystemRclonePath();
+}
+
+function isRcloneAvailable(): boolean {
+  const binary = getRclonePath();
+  if (!binary) return false;
+
+  try {
+    execFileSync(binary, ['version'], { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+}
 const MOUNT_BASE = path.join(os.homedir(), '.rclone-mounts', 'hetzner');
 const MOUNTS_DIR = path.join(os.homedir(), '.rclone-mounts');
 const SYMLINK_PATH = path.join(os.homedir(), 'hetzner_mount');
@@ -329,9 +413,19 @@ class RcloneMountService {
       this.activeMountDir = mountDir;
       fs.mkdirSync(mountDir, { recursive: true });
 
-      console.log(`[rclone-mount] Launching rclone daemon: ${REMOTE} → ${mountDir}`);
+      const rcloneBinary = getRclonePath();
+      if (!rcloneBinary) {
+        return {
+          mounted: false,
+          status: 'error',
+          message: 'rclone binary not found. Install rclone or add it to PATH.',
+          mountDir: SYMLINK_PATH,
+        };
+      }
 
-      await this.execWithTimeout('rclone', [
+      console.log(`[rclone-mount] Launching rclone daemon: ${rcloneBinary} ${REMOTE} → ${mountDir}`);
+
+      await this.execWithTimeout(rcloneBinary, [
         'mount', REMOTE, mountDir,
         '--daemon',
         '--allow-other',

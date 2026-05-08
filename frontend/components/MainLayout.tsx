@@ -14,10 +14,11 @@ import { Settings } from '@/components/Settings';
 import { SourceView } from '@/components/SourceView';
 import { DiscoverView } from '@/components/DiscoverView';
 import { NavigationBar, type NavTab } from '@/components/NavigationBar';
-import { getRootFolder } from '@/lib/storage';
+import { getRootFolder, setRootFolder } from '@/lib/storage';
 import type { FeedMode } from '@/components/Feed';
 import { useUIStore } from '@/lib/stores/ui.store';
 import ScanningProgressDialog from '@/components/ScanningProgressDialog';
+import { getDesktopLaunchConfig } from '@/lib/desktop';
 
 type AppView = 'feed' | 'discover' | 'saved' | 'liked' | 'hidden' | 'source' | 'settings';
 
@@ -40,10 +41,22 @@ export default function MainLayout() {
 
   // Check if root folder is already set (in localStorage for privacy)
   useEffect(() => {
-    const checkRootFolder = () => {
+    const checkRootFolder = async () => {
       try {
         const rootFolder = getRootFolder();
-        setRootFolderSet(!!rootFolder);
+        if (rootFolder) {
+          setRootFolderSet(true);
+          return;
+        }
+
+        const desktopConfig = await getDesktopLaunchConfig();
+        if (desktopConfig?.defaultRootFolder) {
+          setRootFolder(desktopConfig.defaultRootFolder);
+          setRootFolderSet(true);
+          return;
+        }
+
+        setRootFolderSet(false);
       } catch (error) {
         console.error('Failed to check root folder:', error);
         setRootFolderSet(false);

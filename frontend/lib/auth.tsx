@@ -4,6 +4,7 @@ import React, { createContext, useContext, useState, useEffect, useCallback } fr
 import { useAuthStore } from '@/lib/storage';
 import { getApiBase } from '@/lib/api';
 import { connectSSE, disconnectSSE } from '@/lib/sse';
+import { getDesktopLaunchConfig } from '@/lib/desktop';
 
 interface AuthContextType {
   isAuthenticated: boolean;
@@ -26,8 +27,33 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const verifyToken = async () => {
       const storedToken = useAuthStore.getState().token;
-      
+
       if (!storedToken) {
+        const desktopConfig = await getDesktopLaunchConfig();
+        if (desktopConfig?.autoLoginPin) {
+          try {
+            const apiBase = getApiBase();
+            const response = await fetch(`${apiBase}/api/auth/login`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ pin: desktopConfig.autoLoginPin }),
+            });
+
+            if (response.ok) {
+              const data = await response.json();
+              useAuthStore.getState().storeToken(data.token, data.userId);
+              setToken(data.token);
+              setUserId(data.userId);
+              setIsAuthenticated(true);
+              connectSSE();
+              setIsLoading(false);
+              return;
+            }
+          } catch (error) {
+            console.error('Desktop auto-login failed:', error);
+          }
+        }
+
         setIsLoading(false);
         return;
       }

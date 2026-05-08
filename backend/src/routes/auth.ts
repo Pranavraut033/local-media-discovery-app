@@ -3,6 +3,7 @@
  */
 import type { FastifyInstance } from 'fastify';
 import bcrypt from 'bcrypt';
+import { randomUUID } from 'crypto';
 import { getDatabase } from '../db/index.js';
 
 interface LoginBody {
@@ -13,8 +14,37 @@ interface VerifyBody {
   token: string;
 }
 
+async function ensureDefaultUser(
+  db: ReturnType<typeof getDatabase>,
+  pin: string,
+  defaultPin: string,
+  defaultName: string
+): Promise<string | null> {
+  if (pin !== defaultPin) {
+    return null;
+  }
+
+  const existingUser = db.prepare('SELECT id FROM users LIMIT 1').get() as { id: string } | undefined;
+  if (existingUser?.id) {
+    return existingUser.id;
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+  const userId = randomUUID();
+  const pinHash = await bcrypt.hash(defaultPin, 10);
+
+  db.prepare(
+    'INSERT INTO users (id, pin_hash, name, created_at, updated_at) VALUES (?, ?, ?, ?, ?)'
+  ).run(userId, pinHash, defaultName, now, now);
+
+  return userId;
+}
+
 export default async function authRoutes(fastify: FastifyInstance): Promise<void> {
   const db = getDatabase();
+  const defaultPin = process.env.DESKTOP_DEFAULT_PIN || '155102';
+  const defaultName = process.env.DESKTOP_DEFAULT_USER_NAME || 'Desktop User';
+  const allowAutoCreateDefaultUser = process.env.AUTO_CREATE_DEFAULT_USER === 'true';
 
   /**
    * POST /api/auth/login
@@ -30,10 +60,20 @@ export default async function authRoutes(fastify: FastifyInstance): Promise<void
 
     try {
       // Get all users (in practice, there should be only one or few)
-      const users = db.prepare('SELECT id, pin_hash FROM users').all() as Array<{
+      let users = db.prepare('SELECT id, pin_hash FROM users').all() as Array<{
         id: string;
         pin_hash: string;
       }>;
+
+      if (!users.length && allowAutoCreateDefaultUser) {
+        const createdUserId = await ensureDefaultUser(db, pin, defaultPin, defaultName);
+        if (createdUserId) {
+          users = db.prepare('SELECT id, pin_hash FROM users').all() as Array<{
+            id: string;
+            pin_hash: string;
+          }>;
+        }
+      }
 
       // Try to match PIN with any user
       for (const user of users) {
