@@ -41,34 +41,50 @@ function reservePort(port) {
     server.listen(port, '127.0.0.1', () => {
       const address = server.address();
       const resolvedPort = typeof address === 'object' && address ? address.port : port;
-      server.close(() => resolve(resolvedPort));
+      resolve({ port: resolvedPort, server });
     });
   });
 }
 
 async function findAvailablePort(preferredPort) {
   try {
-    return await reservePort(preferredPort);
+    const result = await reservePort(preferredPort);
+    await new Promise((resolve) => result.server.close(resolve));
+    return result.port;
   } catch (error) {
     if (error && error.code !== 'EADDRINUSE') {
       throw error;
     }
-    return reservePort(0);
+    const result = await reservePort(0);
+    await new Promise((resolve) => result.server.close(resolve));
+    return result.port;
   }
 }
 
 async function assignRuntimePorts() {
-  const backend = await findAvailablePort(BACKEND_PORT);
-  const mediaServer = await findAvailablePort(MEDIA_SERVER_PORT);
-  const frontend = await findAvailablePort(FRONTEND_PORT);
+  const reserved = [];
 
-  runtimeState.ports = {
-    backend,
-    mediaServer,
-    frontend,
-  };
+  try {
+    reserved.push(await reservePort(0));
+    reserved.push(await reservePort(0));
+    reserved.push(await reservePort(0));
 
-  console.log('Assigned ports:', runtimeState.ports);
+    runtimeState.ports = {
+      backend: reserved[0].port,
+      mediaServer: reserved[1].port,
+      frontend: reserved[2].port,
+    };
+
+    console.log('Assigned ports:', runtimeState.ports);
+  } finally {
+    await Promise.all(
+      reserved.map(({ server }) =>
+        new Promise((resolve) => {
+          server.close(resolve);
+        }),
+      ),
+    );
+  }
 }
 
 function resolveHome(input) {

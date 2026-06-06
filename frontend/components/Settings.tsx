@@ -12,8 +12,6 @@ import { useSources, useFolderTree, useHideFolderMutation } from '@/lib/hooks';
 import { FolderTreeView } from './FolderTreeView';
 // import { RemoteSourcesSection } from './RemoteSourcesSection'; // rclone disabled
 import { useFullscreen } from '@/lib/useFullscreen';
-import { useUIStore } from '@/lib/stores/ui.store';
-import type { FeedSourceType } from '@/lib/stores/ui.store';
 import { useFoldersStore } from '@/lib/stores/folders.store';
 
 interface AppStats {
@@ -79,22 +77,25 @@ export function Settings({ onBack, onViewHidden, onRootFolderReset }: SettingsPr
 
         // Load stats from API
         const statsResponse = await authenticatedFetch(`${API_URL}/api/admin/stats`);
-        if (statsResponse.ok) {
-          const statsData = await statsResponse.json();
-
-          // Get hidden count
-          const hiddenResponse = await authenticatedFetch(`${API_URL}/api/hidden`);
-          const hiddenData = hiddenResponse.ok ? await hiddenResponse.json() : { count: 0 };
-
-          setStats({
-            totalMedia: statsData.media_count || 0,
-            totalSources: statsData.sources_count || 0,
-            likedCount: statsData.liked_count || 0,
-            savedCount: statsData.saved_count || 0,
-            hiddenCount: hiddenData.count || 0,
-            rootFolder: statsData.root_folder || 'Not set',
-          });
+        if (!statsResponse.ok) {
+          const errorData = await statsResponse.json().catch(() => ({}));
+          throw new Error((errorData as { error?: string }).error || 'Failed to load system statistics');
         }
+
+        const statsData = await statsResponse.json();
+
+        // Get hidden count
+        const hiddenResponse = await authenticatedFetch(`${API_URL}/api/hidden`);
+        const hiddenData = hiddenResponse.ok ? await hiddenResponse.json() : { count: 0 };
+
+        setStats({
+          totalMedia: statsData.media_count || 0,
+          totalSources: statsData.sources_count || 0,
+          likedCount: statsData.liked_count || 0,
+          savedCount: statsData.saved_count || 0,
+          hiddenCount: hiddenData.count || 0,
+          rootFolder: statsData.root_folder || 'Not set',
+        });
       } catch (err) {
         console.error('Failed to load settings:', err);
         setError('Failed to load settings');
