@@ -60,6 +60,25 @@ function parseRange(
   return { start, end };
 }
 
+function readStreamOrFail(
+  fastify: FastifyInstance,
+  mountPath: string,
+  options?: { start: number; end: number }
+): fs.ReadStream {
+  const stream = options ? fs.createReadStream(mountPath, options) : fs.createReadStream(mountPath);
+
+  // rclone's VFS can report a file via stat() but fail to actually open it
+  // (stale/incomplete directory listing). Without this handler, the
+  // ReadStream's 'error' event is unhandled and crashes the whole process,
+  // taking down every other in-flight stream.
+  stream.on('error', (err) => {
+    fastify.log.error({ err, mountPath }, 'Failed to read file from mount');
+    stream.destroy();
+  });
+
+  return stream;
+}
+
 export default async function streamRoute(fastify: FastifyInstance): Promise<void> {
   fastify.get<{ Querystring: StreamQuery }>(
     '/stream',
@@ -154,7 +173,7 @@ export default async function streamRoute(fastify: FastifyInstance): Promise<voi
 
         const { start, end } = range;
         const chunkSize = end - start + 1;
-        const stream = fs.createReadStream(mountPath, { start, end });
+        const stream = readStreamOrFail(fastify, mountPath, { start, end });
 
         return reply
           .code(206)
@@ -166,7 +185,7 @@ export default async function streamRoute(fastify: FastifyInstance): Promise<voi
           .send(stream);
       }
 
-      const stream = fs.createReadStream(mountPath);
+      const stream = readStreamOrFail(fastify, mountPath);
       return reply
         .code(200)
         .header('Content-Length', String(fileSize))

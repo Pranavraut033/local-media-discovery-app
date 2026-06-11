@@ -17,6 +17,7 @@
 
 import { execFile, execFileSync, execSync } from 'child_process';
 import fs from 'fs';
+import fsp from 'fs/promises';
 import path from 'path';
 import os from 'os';
 import { fileURLToPath } from 'url';
@@ -114,9 +115,51 @@ const INACTIVITY_MS = 10 * 60 * 1000; // 10 minutes
 const CHECK_INTERVAL_MS = 60 * 1000; // check every 60 s
 const MOUNT_CHECK_TIMEOUT_MS = 2000; // max time to wait for `mount` command
 const MOUNT_CACHE_TTL_MS = 5000; // cache positive/negative result for 5 s
-const COMMAND_TIMEOUT_MS = 8000; // timeout for unmount/kill commands
+const COMMAND_TIMEOUT_MS = 3000; // timeout for unmount/kill commands
+const STAT_TIMEOUT_MS = 1500; // max time to wait for a (possibly stale-FUSE) stat() call
 const MOUNT_START_TIMEOUT_MS = 15000; // timeout for `rclone mount --daemon` launch
 const START_GUARD_TIMEOUT_MS = 120000; // break stale "starting" state after 2 minutes
+
+/** Sentinel returned by statWithTimeout() when a stat() call doesn't return in time. */
+const STAT_TIMEOUT = Symbol('stat-timeout');
+
+/**
+ * stat() a path off the main thread with a hard wall-clock timeout.
+ * A stale FUSE mountpoint can make stat() block in D-state indefinitely (libuv threadpool
+ * thread, never returns) — without this timeout, callers would hang forever waiting on it.
+ * Returns the Stats, `null` if the path doesn't exist (or any other error), or STAT_TIMEOUT
+ * if the call didn't settle in time.
+ */
+function statWithTimeout(targetPath: string, timeoutMs = STAT_TIMEOUT_MS): Promise<fs.Stats | null | typeof STAT_TIMEOUT> {
+  return new Promise((resolve) => {
+    let settled = false;
+
+    const timer = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        resolve(STAT_TIMEOUT);
+      }
+    }, timeoutMs);
+    timer.unref?.();
+
+    fsp.stat(targetPath).then(
+      (stat) => {
+        if (!settled) {
+          settled = true;
+          clearTimeout(timer);
+          resolve(stat);
+        }
+      },
+      () => {
+        if (!settled) {
+          settled = true;
+          clearTimeout(timer);
+          resolve(null);
+        }
+      }
+    );
+  });
+}
 
 export type MountStatus = 'mounted' | 'mounting' | 'error' | 'stopped';
 
@@ -158,18 +201,21 @@ class RcloneMountService {
   }
 
   /**
-   * Fast synchronous mountpoint check via device-ID comparison.
+   * Mountpoint check via device-ID comparison, run off the main thread with a hard timeout.
    * If the directory's device ID differs from its parent's, something is mounted on it.
-   * Never hangs — no subprocess needed.
+   * If a stat() call doesn't return within STAT_TIMEOUT_MS, the mountpoint is treated as
+   * "stale" — a dead FUSE daemon left the mount registered but unresponsive (D-state stat).
    */
-  private isMountpointActive(dir: string): boolean {
-    try {
-      const dirStat = fs.statSync(dir);
-      const parentStat = fs.statSync(path.dirname(dir));
-      return dirStat.dev !== parentStat.dev;
-    } catch {
-      return false;
-    }
+  private async isMountpointActive(dir: string): Promise<'active' | 'inactive' | 'stale'> {
+    const dirStat = await statWithTimeout(dir);
+    if (dirStat === STAT_TIMEOUT) return 'stale';
+    if (dirStat === null) return 'inactive';
+
+    const parentStat = await statWithTimeout(path.dirname(dir));
+    if (parentStat === STAT_TIMEOUT) return 'stale';
+    if (parentStat === null) return 'inactive';
+
+    return dirStat.dev !== parentStat.dev ? 'active' : 'inactive';
   }
 
   /** Run `mount` with a hard timeout. Concurrent callers share one subprocess (singleton in-flight). */
@@ -189,18 +235,24 @@ class RcloneMountService {
 
   /**
    * Check whether the FUSE mount is live.
-   * Primary: instant device-ID stat check (never hangs).
-   * Falls back to cached `mount` command only when stat check is inconclusive (dir missing).
+   * Primary: device-ID stat check (timeout-protected, never blocks the event loop).
+   * If the mountpoint is stale (dead daemon, unresponsive stat), self-heal by force-unmounting.
+   * Falls back to cached `mount` command only when the stat check is inconclusive (dir missing).
    */
   async isMounted(): Promise<boolean> {
-    // Fast path: device-ID check on the active dir
-    if (fs.existsSync(this.activeMountDir)) {
-      const fast = this.isMountpointActive(this.activeMountDir);
-      if (fast) {
-        // Update cache so the slow path isn't needed
-        this.mountCache = { result: true, expiresAt: Date.now() + MOUNT_CACHE_TTL_MS };
-        return true;
-      }
+    const status = await this.isMountpointActive(this.activeMountDir);
+
+    if (status === 'active') {
+      // Update cache so the slow path isn't needed
+      this.mountCache = { result: true, expiresAt: Date.now() + MOUNT_CACHE_TTL_MS };
+      return true;
+    }
+
+    if (status === 'stale') {
+      console.warn(`[rclone-mount] Detected stale mountpoint at ${this.activeMountDir} — force-unmounting to self-heal.`);
+      await this.unmountAndKill();
+      this.mountCache = { result: false, expiresAt: Date.now() + MOUNT_CACHE_TTL_MS };
+      return false;
     }
 
     // Slow path: fall back to cached `mount` command output
@@ -219,10 +271,16 @@ class RcloneMountService {
     return result;
   }
 
-  /** Returns true if `dir` is still registered as a mountpoint (stale/stuck). */
+  /** Returns true if `dir` is still registered as a mountpoint (stale/stuck). Stale dirs are force-unmounted. */
   private async isDirStillMounted(dir: string): Promise<boolean> {
-    // Fast stat check first
-    if (fs.existsSync(dir) && this.isMountpointActive(dir)) return true;
+    const status = await this.isMountpointActive(dir);
+    if (status === 'active') return true;
+    if (status === 'stale') {
+      console.warn(`[rclone-mount] Detected stale mountpoint at ${dir} — force-unmounting to self-heal.`);
+      await this.unmountDir(dir);
+      this.invalidateCache();
+      return false;
+    }
     // Fallback to mount command
     try {
       const stdout = await this.runMount();
@@ -388,7 +446,7 @@ class RcloneMountService {
       if (this.starting) {
         // Even while starting, the daemon may have already come up (e.g. it was running before
         // the backend restarted). Do a fast stat check before returning "mounting".
-        if (this.isMountpointActive(this.activeMountDir)) {
+        if ((await this.isMountpointActive(this.activeMountDir)) === 'active') {
           this.starting = false;
           this.startingSince = null;
           this.invalidateCache();
