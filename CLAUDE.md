@@ -88,7 +88,9 @@ Images: `.jpg`, `.jpeg`, `.png`, `.webp`, `.gif` | Videos: `.mp4`, `.webm`, `.mo
 
 ## Conventions
 
+- **DRY and library-first**: prefer existing dependencies over bespoke implementations
 - **Privacy-first**: no telemetry, cloud sync, or external network calls ever
+- **Root folder path**: treat as client-side only; never persist server-side
 - **State**: use Zustand stores from `frontend/lib/stores/`; never introduce new raw `localStorage` patterns
 - **API calls**: always use helpers in `frontend/lib/api.ts` (they handle auth + host detection for LAN access)
 - **PIN auth**: exactly 6 numeric digits — do not change this constraint
