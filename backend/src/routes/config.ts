@@ -74,6 +74,30 @@ export default async function configRoutes(fastify: FastifyInstance): Promise<vo
     }
   );
 
+  // Check whether a previously-selected root folder still exists on disk.
+  // Used by the frontend to detect folders that were moved/deleted outside the app
+  // so it can fall back to folder selection instead of showing an empty feed.
+  fastify.get<{ Querystring: { path?: string } }>(
+    '/api/config/root-folder/status',
+    {
+      onRequest: [fastify.authenticate],
+    },
+    async (request, reply) => {
+      const { path: folderPath } = request.query;
+
+      if (!folderPath || typeof folderPath !== 'string') {
+        return reply.code(400).send({ error: 'Invalid folder path' });
+      }
+
+      try {
+        const stats = await fs.stat(folderPath);
+        return reply.send({ exists: stats.isDirectory() });
+      } catch {
+        return reply.send({ exists: false });
+      }
+    }
+  );
+
   // Get recently indexed local root folders for the authenticated user.
   // These come from DB (folders table) and are scoped per-user.
   fastify.get(

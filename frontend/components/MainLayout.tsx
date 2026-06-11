@@ -14,11 +14,11 @@ import { Settings } from '@/components/Settings';
 import { SourceView } from '@/components/SourceView';
 import { DiscoverView } from '@/components/DiscoverView';
 import { NavigationBar, type NavTab } from '@/components/NavigationBar';
-import { getRootFolder, setRootFolder } from '@/lib/storage';
+import { getRootFolder, clearRootFolder } from '@/lib/storage';
 import type { FeedMode } from '@/components/Feed';
 import { useUIStore } from '@/lib/stores/ui.store';
 import ScanningProgressDialog from '@/components/ScanningProgressDialog';
-import { getDesktopLaunchConfig } from '@/lib/desktop';
+import { getApiBase, authenticatedFetch } from '@/lib/api';
 
 type AppView = 'feed' | 'discover' | 'saved' | 'liked' | 'hidden' | 'source' | 'settings';
 
@@ -39,27 +39,35 @@ export default function MainLayout() {
 
   const feedSourceType = useUIStore((s) => s.preferences.feedSourceType);
 
-  // Check if root folder is already set (in localStorage for privacy)
+  // Check if root folder is already set (in localStorage for privacy) and
+  // still exists on disk — if it was moved/deleted, fall back to folder selection.
   useEffect(() => {
     const checkRootFolder = async () => {
       try {
         const rootFolder = getRootFolder();
-        if (rootFolder) {
-          setRootFolderSet(true);
+        if (!rootFolder) {
+          setRootFolderSet(false);
           return;
         }
 
-        const desktopConfig = await getDesktopLaunchConfig();
-        if (desktopConfig?.defaultRootFolder) {
-          setRootFolder(desktopConfig.defaultRootFolder);
-          setRootFolderSet(true);
-          return;
+        const apiBase = getApiBase();
+        const response = await authenticatedFetch(
+          `${apiBase}/api/config/root-folder/status?${new URLSearchParams({ path: rootFolder })}`
+        );
+
+        if (response.ok) {
+          const data = await response.json();
+          if (!data.exists) {
+            clearRootFolder();
+            setRootFolderSet(false);
+            return;
+          }
         }
 
-        setRootFolderSet(false);
+        setRootFolderSet(true);
       } catch (error) {
         console.error('Failed to check root folder:', error);
-        setRootFolderSet(false);
+        setRootFolderSet(true);
       } finally {
         setIsChecking(false);
       }
