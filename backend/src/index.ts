@@ -120,6 +120,18 @@ fastify.get('/api/health', async () => {
   return { status: 'ok', timestamp: Date.now() };
 });
 
+// fluent-ffmpeg's capability probe (and thumbnail extraction) spawns ffmpeg/ffprobe
+// from a setImmediate callback, outside any try/catch we control. In some sandboxed
+// Electron/macOS environments child_process.spawn throws EBADF synchronously there,
+// which would otherwise crash the entire backend on the first video thumbnail request.
+process.on('uncaughtException', (error: NodeJS.ErrnoException) => {
+  if (error.syscall === 'spawn' && (error.code === 'EBADF' || error.code === 'ENOENT')) {
+    fastify.log.error({ err: error }, 'Ignoring fatal spawn error from ffmpeg/ffprobe');
+    return;
+  }
+  throw error;
+});
+
 // Graceful shutdown
 process.on('SIGINT', async () => {
   console.log('Shutting down gracefully...');
