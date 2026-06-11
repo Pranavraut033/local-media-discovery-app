@@ -13,6 +13,7 @@ import { FolderTreeView } from './FolderTreeView';
 // import { RemoteSourcesSection } from './RemoteSourcesSection'; // rclone disabled
 import { useFullscreen } from '@/lib/useFullscreen';
 import { useFoldersStore } from '@/lib/stores/folders.store';
+import { isDesktopRuntime, quitDesktopApp } from '@/lib/desktop';
 
 interface AppStats {
   totalMedia: number;
@@ -179,14 +180,24 @@ export function Settings({ onBack, onViewHidden, onRootFolderReset }: SettingsPr
     }
   };
 
+  const isDesktop = isDesktopRuntime();
+
   const handleShutdown = async () => {
-    if (!confirm('Stop all services (backend, frontend, media-server)? The app will become unavailable until you restart PM2.')) {
+    const confirmMessage = isDesktop
+      ? 'Quit Local Media Discovery? All background services will be stopped.'
+      : 'Stop all services (backend, frontend, media-server)? The app will become unavailable until you restart PM2.';
+
+    if (!confirm(confirmMessage)) {
       return;
     }
 
     try {
       setIsShuttingDown(true);
-      await authenticatedFetch(`${API_URL}/api/admin/shutdown`, { method: 'POST' });
+      if (isDesktop) {
+        await quitDesktopApp();
+      } else {
+        await authenticatedFetch(`${API_URL}/api/admin/shutdown`, { method: 'POST' });
+      }
     } catch {
       // Expected — the server stops mid-response
     }
@@ -543,9 +554,15 @@ export function Settings({ onBack, onViewHidden, onRootFolderReset }: SettingsPr
           <div className="p-4 bg-gray-50 dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700">
             <div className="flex items-center justify-between mb-3">
               <div>
-                <p className="font-medium text-gray-900 dark:text-white">Stop All Services</p>
+                <p className="font-medium text-gray-900 dark:text-white">{isDesktop ? 'Quit App' : 'Stop All Services'}</p>
                 <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-                  Runs <code className="font-mono text-xs bg-gray-200 dark:bg-gray-700 px-1 rounded">pm2 stop all</code> — stops backend, frontend, and media-server
+                  {isDesktop ? (
+                    'Closes the app and stops the backend and media server'
+                  ) : (
+                    <>
+                      Runs <code className="font-mono text-xs bg-gray-200 dark:bg-gray-700 px-1 rounded">pm2 stop all</code> — stops backend, frontend, and media-server
+                    </>
+                  )}
                 </p>
               </div>
             </div>
@@ -557,12 +574,12 @@ export function Settings({ onBack, onViewHidden, onRootFolderReset }: SettingsPr
               {isShuttingDown ? (
                 <>
                   <RotateCw size={16} className="animate-spin" />
-                  Stopping services...
+                  {isDesktop ? 'Quitting...' : 'Stopping services...'}
                 </>
               ) : (
                 <>
                   <Power size={16} />
-                  Stop All Services
+                  {isDesktop ? 'Quit App' : 'Stop All Services'}
                 </>
               )}
             </button>

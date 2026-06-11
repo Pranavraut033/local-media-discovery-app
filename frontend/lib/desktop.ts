@@ -1,7 +1,5 @@
 export interface DesktopLaunchConfig {
   isDesktop: boolean;
-  autoLoginPin: string | null;
-  defaultRootFolder: string | null;
 }
 
 let launchConfigPromise: Promise<DesktopLaunchConfig | null> | null = null;
@@ -23,4 +21,38 @@ export async function getDesktopLaunchConfig(): Promise<DesktopLaunchConfig | nu
   }
 
   return launchConfigPromise;
+}
+
+export async function getAutoPin(): Promise<string | null> {
+  if (typeof window === 'undefined' || !window.desktopBridge?.getAutoPin) {
+    return null;
+  }
+
+  try {
+    const result = await window.desktopBridge.getAutoPin();
+    return result?.pin ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export async function quitDesktopApp(): Promise<void> {
+  if (typeof window === 'undefined' || !window.desktopBridge?.quitApp) {
+    return;
+  }
+
+  await window.desktopBridge.quitApp();
+}
+
+export async function createAutoPin(): Promise<string | null> {
+  if (typeof window === 'undefined' || !window.desktopBridge?.createAutoPin) {
+    return null;
+  }
+
+  try {
+    const result = await window.desktopBridge.createAutoPin();
+    return result?.pin ?? null;
+  } catch {
+    return null;
+  }
 }

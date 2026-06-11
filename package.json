@@ -5,8 +5,10 @@
   "main": "desktop/main.cjs",
   "private": true,
   "scripts": {
-    "install:all": "cd backend && npm install && cd ../media-server && npm install && cd ../frontend && npm install",
+    "install:all": "npm install && cd backend && npm install && cd ../media-server && npm install && cd ../frontend && npm install",
     "dev:backend": "cd backend && npm run dev",
+    "dev:reset": "cd backend && npm run reset-dev && cd .. && npm run clean:dev",
+    "clean:dev": "node scripts/clean-dev.cjs",
     "dev:media-server": "cd media-server && npm run dev",
     "dev:frontend": "cd frontend && npm run dev",
     "build": "npm run build:backend && npm run build:media-server && npm run build:frontend",
@@ -50,7 +52,6 @@
     "files": [
       "desktop/**/*",
       "backend/dist/**/*",
-      "backend/media-discovery.db",
       "backend/node_modules/**/*",
       "media-server/dist/**/*",
       "media-server/node_modules/**/*",
@@ -70,7 +71,6 @@
     ],
     "asarUnpack": [
       "backend/dist/**/*",
-      "backend/media-discovery.db",
       "backend/node_modules/**/*",
       "media-server/dist/**/*",
       "media-server/node_modules/**/*",

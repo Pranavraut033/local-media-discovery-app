@@ -1,35 +1,16 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import MainLayout from '@/components/MainLayout';
 import LoginScreen from '@/components/LoginScreen';
+import SetupScreen from '@/components/SetupScreen';
 import { useAuth } from '@/lib/auth';
 import { authenticatedFetch, ensureRcloneMount, getApiBase } from '@/lib/api';
-import { getRootFolder, setRootFolder } from '@/lib/storage';
-import { getDesktopLaunchConfig } from '@/lib/desktop';
+import { getRootFolder } from '@/lib/storage';
 
 export default function Home() {
-  const { isAuthenticated, isLoading } = useAuth();
-  const [mountedDir, setMountedDir] = useState<string | null>(null);
-  const [desktopDefaultRootFolder, setDesktopDefaultRootFolder] = useState<string | null>(null);
+  const { isAuthenticated, isLoading, requiresSetup } = useAuth();
   const autoIndexBootstrapDoneRef = useRef(false);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    const loadDesktopConfig = async () => {
-      const desktopConfig = await getDesktopLaunchConfig();
-      if (!cancelled) {
-        setDesktopDefaultRootFolder(desktopConfig?.defaultRootFolder || null);
-      }
-    };
-
-    loadDesktopConfig();
-
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -43,9 +24,6 @@ export default function Home() {
           }
 
           if (result.mounted || result.status === 'mounted') {
-            if (result.mountDir) {
-              setMountedDir(result.mountDir);
-            }
             return;
           }
 
@@ -96,14 +74,10 @@ export default function Home() {
           return;
         }
 
-        const targetRootFolder = getRootFolder() || desktopDefaultRootFolder || mountedDir;
+        // Only re-trigger indexing for a folder the user has explicitly selected.
+        const targetRootFolder = getRootFolder();
         if (!targetRootFolder) {
           return;
-        }
-
-        const currentRoot = getRootFolder();
-        if (currentRoot !== targetRootFolder) {
-          setRootFolder(targetRootFolder);
         }
 
         await authenticatedFetch(`${apiBase}/api/config/root-folder`, {
@@ -120,7 +94,7 @@ export default function Home() {
     return () => {
       cancelled = true;
     };
-  }, [isAuthenticated, mountedDir, desktopDefaultRootFolder]);
+  }, [isAuthenticated]);
 
   if (isLoading) {
     return (
@@ -135,6 +109,10 @@ export default function Home() {
         </div>
       </div>
     );
+  }
+
+  if (requiresSetup) {
+    return <SetupScreen />;
   }
 
   if (!isAuthenticated) {

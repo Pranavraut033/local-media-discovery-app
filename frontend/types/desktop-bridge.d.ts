@@ -6,10 +6,10 @@ declare global {
       isDesktop?: boolean;
       getLaunchConfig?: () => Promise<{
         isDesktop: boolean;
-        autoLoginPin: string | null;
-        defaultRootFolder: string | null;
       }>;
-      submitUnlockPin?: (pin: string) => Promise<{ success: boolean; message?: string }>;
+      getAutoPin?: () => Promise<{ pin: string | null }>;
+      createAutoPin?: () => Promise<{ pin: string }>;
+      quitApp?: () => Promise<void>;
     };
   }
 }

@@ -16,7 +16,7 @@ let drizzleDb: ReturnType<typeof drizzle<typeof schema>> | null = null;
 
 export function getDatabase(): Database.Database {
   if (!db) {
-    const dbPath = path.join(__dirname, '../../media-discovery.db');
+    const dbPath = process.env.DB_PATH || path.join(__dirname, '../../media-discovery.db');
     db = new Database(dbPath);
 
     // Enable WAL mode for better concurrency

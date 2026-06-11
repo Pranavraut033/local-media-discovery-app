@@ -2,6 +2,8 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('desktopBridge', {
   isDesktop: true,
-  submitUnlockPin: async (pin) => ipcRenderer.invoke('desktop:submit-unlock-pin', pin),
   getLaunchConfig: async () => ipcRenderer.invoke('desktop:get-launch-config'),
+  getAutoPin: async () => ipcRenderer.invoke('desktop:get-auto-pin'),
+  createAutoPin: async () => ipcRenderer.invoke('desktop:create-auto-pin'),
+  quitApp: async () => ipcRenderer.invoke('desktop:quit-app'),
 });

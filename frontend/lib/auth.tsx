@@ -4,12 +4,13 @@ import React, { createContext, useContext, useState, useEffect, useCallback } fr
 import { useAuthStore } from '@/lib/storage';
 import { getApiBase } from '@/lib/api';
 import { connectSSE, disconnectSSE } from '@/lib/sse';
-import { getDesktopLaunchConfig } from '@/lib/desktop';
+import { isDesktopRuntime, getAutoPin } from '@/lib/desktop';
 
 interface AuthContextType {
   isAuthenticated: boolean;
   userId: string | null;
   token: string | null;
+  requiresSetup: boolean;
   login: (token: string, userId: string) => void;
   logout: () => void;
   isLoading: boolean;
@@ -21,36 +22,53 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
   const [token, setToken] = useState<string | null>(null);
+  const [requiresSetup, setRequiresSetup] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
 
   // Verify token on mount
   useEffect(() => {
     const verifyToken = async () => {
+      const apiBase = getApiBase();
       const storedToken = useAuthStore.getState().token;
 
       if (!storedToken) {
-        const desktopConfig = await getDesktopLaunchConfig();
-        if (desktopConfig?.autoLoginPin) {
-          try {
-            const apiBase = getApiBase();
-            const response = await fetch(`${apiBase}/api/auth/login`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ pin: desktopConfig.autoLoginPin }),
-            });
-
-            if (response.ok) {
-              const data = await response.json();
-              useAuthStore.getState().storeToken(data.token, data.userId);
-              setToken(data.token);
-              setUserId(data.userId);
-              setIsAuthenticated(true);
-              connectSSE();
+        try {
+          const setupResponse = await fetch(`${apiBase}/api/auth/check-setup`);
+          if (setupResponse.ok) {
+            const setupData = await setupResponse.json();
+            if (setupData.requiresSetup) {
+              setRequiresSetup(true);
               setIsLoading(false);
               return;
             }
-          } catch (error) {
-            console.error('Desktop auto-login failed:', error);
+          }
+        } catch (error) {
+          console.error('Check-setup failed:', error);
+        }
+
+        if (isDesktopRuntime()) {
+          const autoPin = await getAutoPin();
+          if (autoPin) {
+            try {
+              const response = await fetch(`${apiBase}/api/auth/login`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ pin: autoPin }),
+              });
+
+              if (response.ok) {
+                const data = await response.json();
+                useAuthStore.getState().storeToken(data.token, data.userId);
+                setToken(data.token);
+                setUserId(data.userId);
+                setIsAuthenticated(true);
+                connectSSE();
+                setIsLoading(false);
+                return;
+              }
+            } catch (error) {
+              console.error('Desktop auto-login failed:', error);
+            }
           }
         }
 
@@ -59,7 +77,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
 
       try {
-        const apiBase = getApiBase();
         const response = await fetch(`${apiBase}/api/auth/verify`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -104,7 +121,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   return (
-    <AuthContext.Provider value={{ isAuthenticated, userId, token, login, logout, isLoading }}>
+    <AuthContext.Provider value={{ isAuthenticated, userId, token, requiresSetup, login, logout, isLoading }}>
       {children}
     </AuthContext.Provider>
   );

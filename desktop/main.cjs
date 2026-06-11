@@ -1,17 +1,16 @@
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, safeStorage } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const fsp = require('fs/promises');
 const http = require('http');
 const net = require('net');
+const crypto = require('crypto');
 const { spawn } = require('child_process');
 
 const BACKEND_PORT = 3001;
 const MEDIA_SERVER_PORT = 3002;
 const FRONTEND_PORT = 3000;
 
-/** @type {BrowserWindow | null} */
-let unlockWindow = null;
 /** @type {BrowserWindow | null} */
 let mainWindow = null;
 /** @type {import('child_process').ChildProcess | null} */
@@ -21,7 +20,6 @@ let mediaServerProcess = null;
 /** @type {http.Server | null} */
 let frontendServer = null;
 let isQuitting = false;
-let isUnlocked = false;
 
 const runtimeState = {
   startupConfig: null,
@@ -85,15 +83,6 @@ async function assignRuntimePorts() {
       ),
     );
   }
-}
-
-function resolveHome(input) {
-  if (!input) return input;
-  if (input === '~') return app.getPath('home');
-  if (input.startsWith('~/')) {
-    return path.join(app.getPath('home'), input.slice(2));
-  }
-  return input;
 }
 
 function getResourcePath(...segments) {
@@ -204,23 +193,70 @@ async function prepareRuntimeDefaults() {
   await fsp.mkdir(logsDir, { recursive: true });
 
   const rcloneConfigPath = path.join(rcloneDir, 'rclone.conf');
-  await fsp.copyFile(rcloneDefaultsFile, rcloneConfigPath);
+  // Only seed from the bundled defaults on first run — copying unconditionally on every
+  // launch would wipe out any remotes the user added afterwards via the in-app config UI.
+  if (!fs.existsSync(rcloneConfigPath)) {
+    await fsp.copyFile(rcloneDefaultsFile, rcloneConfigPath);
+  }
 
-  const configuredDefaultRoot = resolveHome(defaults.defaultRootFolder || '~/Pictures');
-  const defaultRootFolder = configuredDefaultRoot || path.join(app.getPath('home'), 'Pictures');
-  await fsp.mkdir(defaultRootFolder, { recursive: true });
+  const secrets = await loadOrCreateSecrets(runtimeDir);
+  const dbPath = path.join(runtimeDir, 'media-discovery.db');
+  await migrateLegacyDatabase(dbPath);
 
   runtimeState.startupConfig = {
-    launchPin: defaults.launchPin || '155102',
-    autoLoginPin: defaults.autoLoginPin || '155102',
-    defaultRootFolder,
-    mediaServerSecret: defaults.mediaServerSecret || 'desktop-local-media-secret-155102',
-    jwtSecret: defaults.jwtSecret || 'desktop-local-jwt-secret-155102',
+    mediaServerSecret: secrets.mediaServerSecret,
+    jwtSecret: secrets.jwtSecret,
     desktopDefaultUserName: defaults.desktopDefaultUserName || 'Desktop User',
+    dbPath,
     rcloneConfigPath,
     runtimeDir,
     logsDir,
   };
+}
+
+// Older builds bundled the SQLite DB inside the app package itself
+// (backend/media-discovery.db), so each update silently replaced it with the
+// developer's bundled copy. Carry that data over once into the persistent
+// userData location so upgrading users don't lose their library/likes/saves.
+async function migrateLegacyDatabase(dbPath) {
+  if (fs.existsSync(dbPath)) {
+    return;
+  }
+
+  const legacyDbPath = getAppCodePath('backend', 'media-discovery.db');
+  if (!fs.existsSync(legacyDbPath)) {
+    return;
+  }
+
+  for (const suffix of ['', '-wal', '-shm']) {
+    const source = `${legacyDbPath}${suffix}`;
+    const destination = `${dbPath}${suffix}`;
+    if (fs.existsSync(source)) {
+      await fsp.copyFile(source, destination);
+    }
+  }
+}
+
+async function loadOrCreateSecrets(runtimeDir) {
+  const secretsFile = path.join(runtimeDir, 'secrets.json');
+
+  try {
+    const raw = await fsp.readFile(secretsFile, 'utf-8');
+    const parsed = JSON.parse(raw);
+    if (parsed.jwtSecret && parsed.mediaServerSecret) {
+      return parsed;
+    }
+  } catch {
+    // No secrets file yet, generate one below.
+  }
+
+  const secrets = {
+    jwtSecret: crypto.randomBytes(32).toString('hex'),
+    mediaServerSecret: crypto.randomBytes(32).toString('hex'),
+  };
+
+  await fsp.writeFile(secretsFile, JSON.stringify(secrets), { mode: 0o600 });
+  return secrets;
 }
 
 async function startBackend() {
@@ -241,9 +277,7 @@ async function startBackend() {
         PORT: String(backendPort),
         JWT_SECRET: cfg.jwtSecret,
         MEDIA_SERVER_SECRET: cfg.mediaServerSecret,
-        AUTO_CREATE_DEFAULT_USER: 'true',
-        DESKTOP_DEFAULT_PIN: cfg.autoLoginPin,
-        DESKTOP_DEFAULT_USER_NAME: cfg.desktopDefaultUserName,
+        DB_PATH: cfg.dbPath,
         RCLONE_CONFIG: cfg.rcloneConfigPath,
       },
       cwd: path.dirname(backendScript),
@@ -400,32 +434,6 @@ async function startFrontendServer() {
   });
 }
 
-function createUnlockWindow() {
-  unlockWindow = new BrowserWindow({
-    width: 420,
-    height: 320,
-    resizable: false,
-    maximizable: false,
-    minimizable: true,
-    fullscreenable: false,
-    title: 'Unlock Local Media Discovery',
-    webPreferences: {
-      preload: path.join(__dirname, 'preload.cjs'),
-      contextIsolation: true,
-      nodeIntegration: false,
-    },
-  });
-
-  unlockWindow.loadFile(path.join(__dirname, 'unlock.html'));
-
-  unlockWindow.on('closed', () => {
-    unlockWindow = null;
-    if (!isUnlocked) {
-      app.quit();
-    }
-  });
-}
-
 function createMainWindow() {
   if (mainWindow) {
     return;
@@ -467,7 +475,10 @@ async function shutdownChildren() {
     child.kill('SIGTERM');
   }
 
-  await new Promise((resolve) => setTimeout(resolve, 3000));
+  // Give the backend time to unmount rclone cleanly (diskutil/umount/fusermount + pkill,
+  // each with their own short timeouts) before SIGKILL. The mount service self-heals stale
+  // mounts on next startup regardless, but a clean unmount avoids leaving one behind at all.
+  await new Promise((resolve) => setTimeout(resolve, 6000));
 
   for (const child of stopList) {
     if (!child.killed) {
@@ -484,31 +495,43 @@ async function shutdownChildren() {
   }
 }
 
-ipcMain.handle('desktop:submit-unlock-pin', async (_event, pin) => {
-  const launchPin = runtimeState.startupConfig?.launchPin || '155102';
-  if (pin !== launchPin) {
-    return { success: false, message: 'Incorrect unlock PIN' };
-  }
-
-  isUnlocked = true;
-  if (unlockWindow) {
-    unlockWindow.close();
-    unlockWindow = null;
-  }
-
-  createMainWindow();
-  return { success: true };
-});
-
 ipcMain.handle('desktop:get-launch-config', async () => {
-  const cfg = runtimeState.startupConfig;
   return {
     isDesktop: true,
-    autoLoginPin: cfg?.autoLoginPin || null,
-    defaultRootFolder: cfg?.defaultRootFolder || null,
     apiPort: runtimeState.ports.backend,
     mediaServerPort: runtimeState.ports.mediaServer,
   };
+});
+
+ipcMain.handle('desktop:get-auto-pin', async () => {
+  const filePath = path.join(runtimeState.startupConfig.runtimeDir, 'auto-pin.enc');
+
+  try {
+    const encrypted = await fsp.readFile(filePath);
+    if (!safeStorage.isEncryptionAvailable()) {
+      return { pin: null };
+    }
+    return { pin: safeStorage.decryptString(encrypted) };
+  } catch {
+    return { pin: null };
+  }
+});
+
+ipcMain.handle('desktop:quit-app', async () => {
+  app.quit();
+});
+
+ipcMain.handle('desktop:create-auto-pin', async () => {
+  const filePath = path.join(runtimeState.startupConfig.runtimeDir, 'auto-pin.enc');
+  const pin = String(crypto.randomInt(0, 1000000)).padStart(6, '0');
+
+  if (!safeStorage.isEncryptionAvailable()) {
+    throw new Error('Secure storage is not available on this system.');
+  }
+
+  const encrypted = safeStorage.encryptString(pin);
+  await fsp.writeFile(filePath, encrypted, { mode: 0o600 });
+  return { pin };
 });
 
 app.on('before-quit', async (event) => {
@@ -535,7 +558,7 @@ app.whenReady().then(async () => {
     await startBackend();
     await startMediaServer();
     await startFrontendServer();
-    createUnlockWindow();
+    createMainWindow();
   } catch (error) {
     dialog.showErrorBox('Startup failed', error instanceof Error ? error.message : String(error));
     app.quit();
