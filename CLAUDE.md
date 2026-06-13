@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Code Navigation
+
+CodeGraph is set up for this project (MCP server in `.mcp.json`, index in `.codegraph/`). Prefer its tools (`codegraph_search`, `codegraph_explore`, callers/callees/impact queries) over grep/Read for finding symbols, call graphs, and dependency relationships — it's faster and uses fewer tool calls. Run `codegraph sync` after large changes to keep the index current.
+
 ## Commands
 
 ```bash
