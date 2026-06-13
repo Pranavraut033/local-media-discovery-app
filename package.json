@@ -23,9 +23,11 @@
     "status": "pm2 status",
     "reset": "npm run delete && npm run start",
     "desktop:dev": "npm run install:all && npm run build && electron desktop/main.cjs",
-    "desktop:pack:mac": "npx rimraf desktop/dist || (sleep 2 && npx rimraf desktop/dist) && npm run install:all && npm run build && cd backend && npm prune --production && cd .. && electron-builder --mac dmg zip && cd backend && npm install",
-    "desktop:pack:dir": "npx rimraf desktop/dist || (sleep 2 && npx rimraf desktop/dist) && npm run install:all && npm run build && cd backend && npm prune --production && cd .. && electron-builder --dir && cd backend && npm install",
-    "desktop:pack:win": "npx rimraf desktop/dist || (sleep 2 && npx rimraf desktop/dist) && npm run install:all && npm run build && cd backend && npm prune --production && cd .. && electron-builder --win nsis && cd backend && npm install"
+    "desktop:rebuild-native": "electron-rebuild --version=$(node -p \"require('./node_modules/electron/package.json').version\") --module-dir=backend --only=better-sqlite3,bcrypt --force",
+    "desktop:restore-native": "cd backend && npm rebuild better-sqlite3 bcrypt && cd ..",
+    "desktop:pack:mac": "npx rimraf desktop/dist || (sleep 2 && npx rimraf desktop/dist) && npm run install:all && npm run build && cd backend && npm prune --production && cd .. && npm run desktop:rebuild-native && electron-builder --mac dmg zip ; cd backend && npm install && cd .. && npm run desktop:restore-native",
+    "desktop:pack:dir": "npx rimraf desktop/dist || (sleep 2 && npx rimraf desktop/dist) && npm run install:all && npm run build && cd backend && npm prune --production && cd .. && npm run desktop:rebuild-native && electron-builder --dir ; cd backend && npm install && cd .. && npm run desktop:restore-native",
+    "desktop:pack:win": "npx rimraf desktop/dist || (sleep 2 && npx rimraf desktop/dist) && npm run install:all && npm run build && cd backend && npm prune --production && cd .. && npm run desktop:rebuild-native && electron-builder --win nsis ; cd backend && npm install && cd .. && npm run desktop:restore-native"
   },
   "keywords": [
     "media",
@@ -52,6 +54,7 @@
     "files": [
       "desktop/**/*",
       "backend/dist/**/*",
+      "backend/migrations/**/*",
       "backend/node_modules/**/*",
       "media-server/dist/**/*",
       "media-server/node_modules/**/*",
@@ -71,6 +74,7 @@
     ],
     "asarUnpack": [
       "backend/dist/**/*",
+      "backend/migrations/**/*",
       "backend/node_modules/**/*",
       "media-server/dist/**/*",
       "media-server/node_modules/**/*",
