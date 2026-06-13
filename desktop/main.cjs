@@ -551,6 +551,20 @@ app.on('window-all-closed', () => {
   }
 });
 
+app.on('activate', () => {
+  // macOS: clicking the dock icon (or re-launching while running) should
+  // re-open the window. Recreate it if it was closed, otherwise focus it.
+  if (mainWindow) {
+    if (mainWindow.isMinimized()) {
+      mainWindow.restore();
+    }
+    mainWindow.show();
+    mainWindow.focus();
+  } else if (!isQuitting) {
+    createMainWindow();
+  }
+});
+
 app.whenReady().then(async () => {
   try {
     await prepareRuntimeDefaults();
