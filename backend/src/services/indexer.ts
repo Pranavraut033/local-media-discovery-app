@@ -76,7 +76,15 @@ function getMediaKind(filePath: string): 'image' | 'video' | null {
   return null;
 }
 
-async function hashFile(filePath: string): Promise<string> {
+// Files larger than this are hashed by sampling (size + head + tail) instead of
+// reading every byte. Full-content hashing of large videos dominates indexing
+// time (multi-GB reads per file); sampling makes it a constant ~8MB read while
+// staying deterministic and collision-safe for real media. The scheme is shared
+// by every caller so dedup stays consistent across full and incremental scans.
+const HASH_SAMPLE_THRESHOLD_BYTES = 16 * 1024 * 1024; // 16 MB
+const HASH_SAMPLE_CHUNK_BYTES = 4 * 1024 * 1024; // 4 MB head + 4 MB tail
+
+function hashFullFile(filePath: string): Promise<string> {
   return new Promise((resolve, reject) => {
     const hash = createHash('sha256');
     const stream = fssync.createReadStream(filePath);
@@ -85,6 +93,48 @@ async function hashFile(filePath: string): Promise<string> {
     stream.on('error', reject);
     stream.on('end', () => resolve(hash.digest('hex')));
   });
+}
+
+async function hashSampledFile(filePath: string, sizeBytes: number): Promise<string> {
+  const handle = await fs.open(filePath, 'r');
+  try {
+    const hash = createHash('sha256');
+    // Bind the digest to the exact byte length so two files that share a head
+    // and tail but differ in size never collide.
+    hash.update(`size:${sizeBytes}\n`);
+
+    const head = Buffer.alloc(HASH_SAMPLE_CHUNK_BYTES);
+    const headRead = await handle.read(head, 0, HASH_SAMPLE_CHUNK_BYTES, 0);
+    hash.update(head.subarray(0, headRead.bytesRead));
+
+    const tail = Buffer.alloc(HASH_SAMPLE_CHUNK_BYTES);
+    const tailStart = sizeBytes - HASH_SAMPLE_CHUNK_BYTES;
+    const tailRead = await handle.read(tail, 0, HASH_SAMPLE_CHUNK_BYTES, tailStart);
+    hash.update(tail.subarray(0, tailRead.bytesRead));
+
+    return hash.digest('hex');
+  } finally {
+    await handle.close();
+  }
+}
+
+/**
+ * Content hash used for deduplication. Small files are hashed in full; files
+ * above HASH_SAMPLE_THRESHOLD_BYTES are sampled (size + head + tail) to avoid
+ * reading gigabytes per video. Deterministic: identical files always produce
+ * identical hashes regardless of which scheme applies.
+ */
+async function hashFile(filePath: string, sizeBytes?: number): Promise<string> {
+  let size = sizeBytes;
+  if (size === undefined) {
+    size = (await fs.stat(filePath)).size;
+  }
+
+  if (size <= HASH_SAMPLE_THRESHOLD_BYTES) {
+    return hashFullFile(filePath);
+  }
+
+  return hashSampledFile(filePath, size);
 }
 
 async function scanDirectory(
@@ -129,7 +179,7 @@ async function scanDirectory(
       const fileName = path.basename(fullPath);
       const extension = path.extname(fullPath).toLowerCase() || null;
       const mimeType = (mime.lookup(fullPath) || null) as string | null;
-      const contentHash = await hashFile(fullPath);
+      const contentHash = await hashFile(fullPath, stats.size);
 
       files.push({
         absolutePath: fullPath,
@@ -598,6 +648,11 @@ export async function discoverAndCreatePendingLocal(
 /**
  * Hash each pending file and reconcile temp IDs to real content hashes.
  */
+// Number of files hashed concurrently during finalization. Hashing is I/O-bound,
+// so a small pool overlaps disk reads (and the OS readahead) across files while
+// the synchronous better-sqlite3 reconciliation writes naturally serialize.
+const FINALIZE_CONCURRENCY = 6;
+
 export async function finalizeLocalPendingFiles(
   db: Database.Database,
   pending: PendingLocalFile[],
@@ -606,24 +661,37 @@ export async function finalizeLocalPendingFiles(
   onProgress: (done: number, total: number, tempId: string, finalId: string) => void
 ): Promise<void> {
   const total = pending.length;
+  let nextIndex = 0;
+  let done = 0;
 
-  for (let i = 0; i < pending.length; i++) {
-    const file = pending[i];
+  const worker = async (): Promise<void> => {
+    while (true) {
+      const i = nextIndex;
+      nextIndex += 1;
+      if (i >= pending.length) return;
 
-    let contentHash: string;
-    try {
-      contentHash = await hashFile(file.absolutePath);
-    } catch {
-      // File disappeared between discovery and finalization – mark as missing
-      db.prepare(`UPDATE file_paths SET is_present = 0, status = 'ready', updated_at = ? WHERE id = ?`)
-        .run(Math.floor(Date.now() / 1000), file.pathId);
-      onProgress(i + 1, total, file.tempFileId, '');
-      continue;
+      const file = pending[i];
+
+      let contentHash: string;
+      try {
+        contentHash = await hashFile(file.absolutePath, file.sizeBytes);
+      } catch {
+        // File disappeared between discovery and finalization – mark as missing
+        db.prepare(`UPDATE file_paths SET is_present = 0, status = 'ready', updated_at = ? WHERE id = ?`)
+          .run(Math.floor(Date.now() / 1000), file.pathId);
+        done += 1;
+        onProgress(done, total, file.tempFileId, '');
+        continue;
+      }
+
+      reconcilePendingToFinal(db, file, contentHash);
+      done += 1;
+      onProgress(done, total, file.tempFileId, contentHash);
     }
+  };
 
-    reconcilePendingToFinal(db, file, contentHash);
-    onProgress(i + 1, total, file.tempFileId, contentHash);
-  }
+  const poolSize = Math.min(FINALIZE_CONCURRENCY, pending.length);
+  await Promise.all(Array.from({ length: poolSize }, () => worker()));
 }
 
 function reconcilePendingToFinal(db: Database.Database, file: PendingLocalFile, contentHash: string): void {

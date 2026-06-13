@@ -54,16 +54,23 @@ async function processJob(job: { data: IndexingJobData }): Promise<void> {
         payload: { stage: 'discovery', filesFound: pending.length },
       });
 
-      // Phase 2: hash each pending file and finalize
+      // Phase 2: hash each pending file and finalize.
+      // The SSE event fires per file (the frontend needs each temp→final ID to
+      // reconcile its feed), but the indexing_jobs row is only written every
+      // PROGRESS_PERSIST_EVERY files (and once at the end) to avoid a DB write
+      // per file during fast parallel hashing.
+      const PROGRESS_PERSIST_EVERY = 25;
       await finalizeLocalPendingFiles(db, pending, userId, jobId, (done, total, fileId, finalId) => {
         sseEventBus.emit(userId, {
           type: 'file_hashed',
           jobId,
           payload: { done, total, tempId: fileId, finalId },
         });
-        db.prepare(
-          `UPDATE indexing_jobs SET processed_files = ?, updated_at = ? WHERE id = ?`
-        ).run(done, Math.floor(Date.now() / 1000), jobId);
+        if (done % PROGRESS_PERSIST_EVERY === 0 || done === total) {
+          db.prepare(
+            `UPDATE indexing_jobs SET processed_files = ?, updated_at = ? WHERE id = ?`
+          ).run(done, Math.floor(Date.now() / 1000), jobId);
+        }
       });
     } else {
       const { remoteName, basePath, remoteType } = job.data;
