@@ -1,12 +1,39 @@
 import { getRootFolder, getStoredToken } from './storage';
 
+// The desktop shell launches the frontend with ?apiPort=…&mediaServerPort=… set
+// to the ephemeral ports it assigned its bundled backend/media-server. Those query
+// params are dropped on any navigation (notably the 401 redirect below), after
+// which we'd otherwise fall back to the fixed dev ports 3001/3002 — and if a PM2
+// stack is also running, silently talk to the WRONG backend (different DB + HMAC
+// secret). So we persist the injected ports to sessionStorage on first load and
+// read from there for the rest of the session.
 function getRuntimePort(paramName: string, fallbackPort: string): string {
   if (typeof window === 'undefined') {
     return fallbackPort;
   }
 
-  const runtimePort = new URLSearchParams(window.location.search).get(paramName);
-  return runtimePort || fallbackPort;
+  const storageKey = `runtime:${paramName}`;
+
+  const fromQuery = new URLSearchParams(window.location.search).get(paramName);
+  if (fromQuery) {
+    try {
+      window.sessionStorage.setItem(storageKey, fromQuery);
+    } catch {
+      // sessionStorage unavailable (private mode / disabled) — fall through.
+    }
+    return fromQuery;
+  }
+
+  try {
+    const fromStorage = window.sessionStorage.getItem(storageKey);
+    if (fromStorage) {
+      return fromStorage;
+    }
+  } catch {
+    // ignore
+  }
+
+  return fallbackPort;
 }
 
 export function getApiBase(): string {
@@ -65,10 +92,19 @@ export async function authenticatedFetch(
     headers,
   });
 
-  // Handle 401 - redirect to login
+  // Handle 401 - redirect to login. Preserve the runtime port query params so the
+  // desktop shell's ephemeral apiPort/mediaServerPort survive the navigation
+  // (getRuntimePort also persists them to sessionStorage as a backstop).
   if (response.status === 401) {
     if (typeof window !== 'undefined') {
-      window.location.href = '/';
+      const params = new URLSearchParams(window.location.search);
+      const preserved = new URLSearchParams();
+      for (const key of ['apiPort', 'mediaServerPort']) {
+        const value = params.get(key);
+        if (value) preserved.set(key, value);
+      }
+      const query = preserved.toString();
+      window.location.href = query ? `/?${query}` : '/';
     }
   }
 
