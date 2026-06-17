@@ -109,6 +109,12 @@ function isRcloneAvailable(): boolean {
 const MOUNT_BASE = path.join(os.homedir(), '.rclone-mounts', 'hetzner');
 const MOUNTS_DIR = path.join(os.homedir(), '.rclone-mounts');
 const SYMLINK_PATH = path.join(os.homedir(), 'hetzner_mount');
+// Cross-process ownership lock. The mount is a host-global singleton (one FUSE
+// mountpoint, one symlink), so only ONE backend process may manage its lifecycle.
+// A second instance (e.g. a PM2 stack running alongside the desktop app) adopts
+// the live mount read-only instead of mounting/unmounting/pkilling it — which is
+// what previously made two backends force-unmount each other into a stale mount.
+const OWNER_LOCK_PATH = path.join(MOUNTS_DIR, '.owner.lock');
 const CACHE_DIR = process.env.RCLONE_CACHE_DIR ?? path.join(os.homedir(), 'rclone-cache');
 
 const INACTIVITY_MS = 10 * 60 * 1000; // 10 minutes
@@ -175,6 +181,10 @@ class RcloneMountService {
   private watcherTimer: ReturnType<typeof setInterval> | null = null;
   private starting = false;
   private startingSince: number | null = null;
+  /** True when THIS process holds the ownership lock and may manage the mount lifecycle. */
+  private isOwner = false;
+  /** PID of the rclone daemon this process started, so teardown kills only our own daemon. */
+  private ownedDaemonPid: number | null = null;
   /** The directory that is currently (or was last) mounted. Starts as the preferred base. */
   private activeMountDir = MOUNT_BASE;
   /** Cache: { result, expiresAt } — avoids running `mount` on every API call. */
@@ -182,16 +192,40 @@ class RcloneMountService {
   /** In-flight `mount` call — all concurrent callers share the same subprocess. */
   private mountInFlight: Promise<string> | null = null;
 
-  /** Execute a subprocess with a hard timeout so calls cannot block forever. */
+  /**
+   * Execute a subprocess with a hard timeout so calls cannot block forever.
+   * Unlike execFile's built-in `timeout` option, this rejects on our own timer
+   * regardless of whether the child actually exits — `diskutil unmount force`
+   * against a busy-but-healthy FUSE mount can enter an uninterruptible kernel
+   * wait where even SIGKILL never lets the process exit, which would otherwise
+   * leave the returned promise (and everything awaiting it) hanging forever.
+   */
   private execWithTimeout(command: string, args: string[], timeoutMs: number): Promise<string> {
     return new Promise((resolve, reject) => {
-      execFile(command, args, { timeout: timeoutMs, maxBuffer: 1024 * 1024 }, (err, stdout) => {
+      let settled = false;
+
+      const child = execFile(command, args, { maxBuffer: 1024 * 1024 }, (err, stdout) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
         if (err) {
           reject(err);
           return;
         }
         resolve(stdout);
       });
+
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        try {
+          child.kill('SIGKILL');
+        } catch {
+          // best-effort — process may already be unkillable (uninterruptible wait)
+        }
+        reject(new Error(`${command} ${args.join(' ')} timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+      timer.unref?.();
     });
   }
 
@@ -200,19 +234,121 @@ class RcloneMountService {
     this.lastActivityAt = Date.now();
   }
 
+  /** True if a process with this PID is currently running (EPERM still means alive). */
+  private isProcessAlive(pid: number): boolean {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (err) {
+      return (err as NodeJS.ErrnoException)?.code === 'EPERM';
+    }
+  }
+
+  /** Read the owning PID from the lockfile, or null if absent/unparseable. */
+  private readLockOwner(): number | null {
+    try {
+      const raw = fs.readFileSync(OWNER_LOCK_PATH, 'utf8');
+      const pid = JSON.parse(raw)?.pid;
+      return Number.isInteger(pid) ? pid : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Acquire the mount-ownership lock. Returns true if this process now owns the
+   * mount lifecycle. Uses an atomic exclusive-create; a lock held by a dead PID is
+   * reclaimed. Idempotent — re-acquiring when already owner is a no-op true.
+   */
+  private acquireOwnership(): boolean {
+    if (this.isOwner) return true;
+
+    try {
+      fs.mkdirSync(MOUNTS_DIR, { recursive: true });
+    } catch {
+      // ignore — directory may already exist
+    }
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        const fd = fs.openSync(OWNER_LOCK_PATH, 'wx');
+        fs.writeSync(fd, JSON.stringify({ pid: process.pid, startedAt: Date.now() }));
+        fs.closeSync(fd);
+        this.isOwner = true;
+        return true;
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException)?.code !== 'EEXIST') {
+          console.warn('[rclone-mount] Could not write ownership lock:', err);
+          return false;
+        }
+
+        const owner = this.readLockOwner();
+        if (owner === process.pid) {
+          this.isOwner = true;
+          return true;
+        }
+        if (owner !== null && this.isProcessAlive(owner)) {
+          return false; // another live instance owns the mount
+        }
+
+        // Stale lock (owner is dead) — reclaim it and retry the create.
+        console.warn(`[rclone-mount] Reclaiming stale ownership lock (dead pid ${owner ?? 'unknown'}).`);
+        try {
+          fs.unlinkSync(OWNER_LOCK_PATH);
+        } catch {
+          // lost the race to another reclaimer — loop and re-check
+        }
+      }
+    }
+
+    return false;
+  }
+
+  /** Release the ownership lock if we hold it. */
+  private releaseOwnership(): void {
+    if (!this.isOwner) return;
+    if (this.readLockOwner() === process.pid) {
+      try {
+        fs.unlinkSync(OWNER_LOCK_PATH);
+      } catch {
+        // already gone
+      }
+    }
+    this.isOwner = false;
+  }
+
+  /** Find the rclone daemon PID serving a specific mount dir (so we kill only our own). */
+  private async findDaemonPid(dir: string): Promise<number | null> {
+    try {
+      const out = await this.execWithTimeout('pgrep', ['-f', `rclone mount ${REMOTE} ${dir}`], COMMAND_TIMEOUT_MS);
+      const pid = parseInt(out.trim().split('\n')[0], 10);
+      return Number.isInteger(pid) ? pid : null;
+    } catch {
+      return null;
+    }
+  }
+
   /**
    * Mountpoint check via device-ID comparison, run off the main thread with a hard timeout.
    * If the directory's device ID differs from its parent's, something is mounted on it.
-   * If a stat() call doesn't return within STAT_TIMEOUT_MS, the mountpoint is treated as
-   * "stale" — a dead FUSE daemon left the mount registered but unresponsive (D-state stat).
+   * If a stat() call doesn't return within STAT_TIMEOUT_MS, that alone doesn't mean the
+   * mount is dead — rclone's vfs-cache can make stat() briefly slow under heavy I/O, and
+   * force-unmounting a busy-but-healthy mount is exactly what wedges the whole VFS (the
+   * `diskutil unmount force` call itself goes uninterruptible and never returns). So a
+   * timeout is only treated as "stale" if no rclone daemon process is alive for this dir —
+   * otherwise we report "active" and let the busy mount keep working.
    */
   private async isMountpointActive(dir: string): Promise<'active' | 'inactive' | 'stale'> {
     const dirStat = await statWithTimeout(dir);
-    if (dirStat === STAT_TIMEOUT) return 'stale';
+    if (dirStat === STAT_TIMEOUT) {
+      return (await this.findDaemonPid(dir)) !== null ? 'active' : 'stale';
+    }
     if (dirStat === null) return 'inactive';
 
     const parentStat = await statWithTimeout(path.dirname(dir));
-    if (parentStat === STAT_TIMEOUT) return 'stale';
+    if (parentStat === STAT_TIMEOUT) {
+      return (await this.findDaemonPid(dir)) !== null ? 'active' : 'stale';
+    }
     if (parentStat === null) return 'inactive';
 
     return dirStat.dev !== parentStat.dev ? 'active' : 'inactive';
@@ -249,8 +385,14 @@ class RcloneMountService {
     }
 
     if (status === 'stale') {
-      console.warn(`[rclone-mount] Detected stale mountpoint at ${this.activeMountDir} — force-unmounting to self-heal.`);
-      await this.unmountAndKill();
+      // Only the owning instance may force-unmount. A non-owner leaves the mount
+      // alone (the owner's own self-heal / inactivity watcher will handle it).
+      if (this.isOwner) {
+        console.warn(`[rclone-mount] Detected stale mountpoint at ${this.activeMountDir} — force-unmounting to self-heal.`);
+        await this.unmountAndKill();
+      } else {
+        console.warn(`[rclone-mount] Mountpoint at ${this.activeMountDir} looks stale but this instance does not own it — not touching it.`);
+      }
       this.mountCache = { result: false, expiresAt: Date.now() + MOUNT_CACHE_TTL_MS };
       return false;
     }
@@ -307,14 +449,31 @@ class RcloneMountService {
   }
 
   private async unmountAndKill(): Promise<void> {
+    // Kill the daemon FIRST. Once the rclone process exits, macFUSE drops the
+    // mount and `diskutil unmount force` (or the stat-based checks) on an
+    // already-dead mount resolve quickly instead of blocking on a live FUSE
+    // channel — which is what previously wedged the VFS for the whole machine.
+    const pid = this.ownedDaemonPid ?? (await this.findDaemonPid(this.activeMountDir));
+    if (pid !== null) {
+      try {
+        process.kill(pid, 'SIGTERM');
+      } catch {
+        // already gone — fine
+      }
+      await new Promise<void>((r) => setTimeout(r, 500));
+      if (this.isProcessAlive(pid)) {
+        try {
+          process.kill(pid, 'SIGKILL');
+        } catch {
+          // already gone — fine
+        }
+        await new Promise<void>((r) => setTimeout(r, 500));
+      }
+    }
+    this.ownedDaemonPid = null;
+
     await this.unmountDir(this.activeMountDir);
     this.invalidateCache();
-    // Kill any lingering rclone mount daemon
-    try {
-      await this.execWithTimeout('pkill', ['-f', `rclone mount ${REMOTE}`], COMMAND_TIMEOUT_MS);
-    } catch {
-      // no process — fine
-    }
   }
 
   /**
@@ -413,14 +572,21 @@ class RcloneMountService {
   /** Cleanly unmount and tear down the symlink. Safe to call even when not mounted. */
   async stop(): Promise<void> {
     this.clearWatcher();
-    await this.unmountAndKill();
-    await this.cleanStaleSiblings();
-    try {
-      const stat = fs.lstatSync(SYMLINK_PATH);
-      if (stat.isSymbolicLink()) fs.unlinkSync(SYMLINK_PATH);
-    } catch {
-      // already gone
+
+    // Only the owner may unmount/kill and tear down the shared symlink. A non-owner
+    // just stops its watcher and drops its adopted reference.
+    if (this.isOwner) {
+      await this.unmountAndKill();
+      await this.cleanStaleSiblings();
+      try {
+        const stat = fs.lstatSync(SYMLINK_PATH);
+        if (stat.isSymbolicLink()) fs.unlinkSync(SYMLINK_PATH);
+      } catch {
+        // already gone
+      }
+      this.releaseOwnership();
     }
+
     this.activeMountDir = MOUNT_BASE; // reset for next mount attempt
     console.log('[rclone-mount] Mount stopped.');
   }
@@ -430,10 +596,28 @@ class RcloneMountService {
    * Calling recordActivity() before returning so the inactivity clock starts fresh.
    */
   async ensureRunning(): Promise<MountResult> {
-    if (await this.isMounted()) {
+    // Non-destructive liveness check first — never unmount another instance's mount.
+    if ((await this.isMountpointActive(this.activeMountDir)) === 'active') {
+      // The mount is already up. Adopt it; become owner only if nobody live holds
+      // the lock (e.g. it was started by a prior owner that has since exited).
+      this.acquireOwnership();
       this.recordActivity();
-      this.startInactivityWatcher();
+      if (this.isOwner) {
+        this.invalidateCache();
+        this.updateSymlink(this.activeMountDir);
+        this.startInactivityWatcher();
+      }
       return { mounted: true, status: 'mounted', message: 'rclone mount is ready', mountDir: SYMLINK_PATH };
+    }
+
+    // Not mounted. Only the owner may bring it up; a second instance waits.
+    if (!this.acquireOwnership()) {
+      return {
+        mounted: false,
+        status: 'mounting',
+        message: 'another instance is bringing up the rclone mount',
+        mountDir: SYMLINK_PATH,
+      };
     }
 
     if (this.starting) {
@@ -512,6 +696,8 @@ class RcloneMountService {
       for (let i = 0; i < 20; i++) {
         await new Promise<void>((r) => setTimeout(r, 1000));
         if (await this.isMounted()) {
+          // Record the daemon PID so teardown targets only our own process.
+          this.ownedDaemonPid = await this.findDaemonPid(mountDir);
           this.updateSymlink(mountDir);
           this.recordActivity();
           this.startInactivityWatcher();
