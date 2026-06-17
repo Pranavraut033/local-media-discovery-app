@@ -24,6 +24,10 @@ export interface CachedFileInfo {
   iv: Buffer;
 }
 
+// ponytail: in-memory IV cache — eliminates 4 syscalls (stat+open+read+close) per cached stream hit.
+// Populated on first disk read and on writeToCache; entries removed by evictIfNeeded.
+const fileInfoCache = new Map<string, CachedFileInfo>();
+
 export function getCachePath(mediaId: string): string {
   return path.join(config.cacheDir, `${mediaId}.enc`);
 }
@@ -63,8 +67,12 @@ export async function getEffectiveCacheLimitBytes(): Promise<number> {
 /**
  * Read the IV and derive the plaintext size from a cached file's stat.
  * Returns null if the file doesn't exist or is corrupted (< 16 bytes).
+ * Hot path: returns from in-memory cache after first read.
  */
 export async function getCachedFileInfo(mediaId: string): Promise<CachedFileInfo | null> {
+  const hit = fileInfoCache.get(mediaId);
+  if (hit) return hit;
+
   const cachePath = getCachePath(mediaId);
   let stat: fs.Stats;
   try {
@@ -78,7 +86,9 @@ export async function getCachedFileInfo(mediaId: string): Promise<CachedFileInfo
   try {
     const ivBuf = Buffer.allocUnsafe(16);
     await fd.read(ivBuf, 0, 16, 0);
-    return { cachePath, plaintextSize: stat.size - 16, iv: ivBuf };
+    const info: CachedFileInfo = { cachePath, plaintextSize: stat.size - 16, iv: ivBuf };
+    fileInfoCache.set(mediaId, info);
+    return info;
   } finally {
     await fd.close();
   }
@@ -189,9 +199,15 @@ export async function writeToCache(sourcePath: string, mediaId: string): Promise
     dest.write(iv, (err) => (err ? reject(err) : resolve()));
   });
 
+  let plaintextSize = 0;
+  const countBytes = new Transform({
+    transform(chunk: Buffer, _enc, cb) { plaintextSize += chunk.length; this.push(chunk); cb(); },
+  });
+
   try {
-    await pipeline(src, cipher, dest);
+    await pipeline(src, countBytes, cipher, dest);
     await fsp.rename(tmpPath, cachePath);
+    fileInfoCache.set(mediaId, { cachePath, plaintextSize, iv });
   } catch (err) {
     // Clean up the partial temp file on failure.
     await fsp.unlink(tmpPath).catch(() => undefined);
@@ -235,6 +251,8 @@ export async function evictIfNeeded(): Promise<void> {
   for (const entry of entries) {
     if (freed >= toFree) break;
     await fsp.unlink(entry.file).catch(() => undefined);
+    const mediaId = path.basename(entry.file, '.enc');
+    fileInfoCache.delete(mediaId);
     freed += entry.size;
   }
 }
