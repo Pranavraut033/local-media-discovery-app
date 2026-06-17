@@ -69,13 +69,7 @@ export default async function thumbnailRoutes(fastify: FastifyInstance): Promise
         // Determine media type
         const mediaType = media.type.toLowerCase() === 'video' ? 'video' : 'image';
 
-        // Generate or retrieve cached thumbnail
         const thumbnailPath = await thumbnailService.getThumbnail(id, media.path, mediaType);
-
-        // Check thumbnail file exists
-        await fs.access(thumbnailPath);
-
-        // Send thumbnail file
         const fileContent = await fs.readFile(thumbnailPath);
         return reply
           .type('image/webp')

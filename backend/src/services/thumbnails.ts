@@ -161,55 +161,36 @@ class ThumbnailService {
   }
 
   /**
-   * Generate thumbnail for video (extract first frame) - handles both local and rclone paths
+   * Generate thumbnail for video (extract first frame) - handles both local and rclone paths.
+   * Pipes ffmpeg mjpeg output directly to sharp — no PNG temp file.
    */
-  private async generateVideoThumbnail(
-    mediaPath: string,
-    thumbnailPath: string
-  ): Promise<void> {
+  private generateVideoThumbnail(mediaPath: string, thumbnailPath: string): Promise<void> {
     return new Promise((resolve, reject) => {
       const processVideo = (input: string | Readable) => {
+        const sharpPipeline = sharp()
+          .resize(config.thumbnails.width, config.thumbnails.height, {
+            fit: 'cover',
+            position: 'center',
+          })
+          .webp({ quality: config.thumbnails.quality });
+
+        sharpPipeline.toFile(thumbnailPath).then(() => resolve()).catch(reject);
+
         ffmpeg(input)
-          .screenshots({
-            count: 1,
-            folder: this.thumbnailDir,
-            filename: `${path.basename(thumbnailPath, '.webp')}.png`,
-            size: `${config.thumbnails.width}x${config.thumbnails.height}`,
-            timestamps: ['1%'], // Get first frame (1% into video)
+          .frames(1)
+          .format('mjpeg')
+          .on('error', (err) => {
+            console.error(`FFmpeg error for ${mediaPath}:`, err);
+            reject(err);
           })
-          .on('end', async () => {
-            try {
-              // Convert PNG to WebP for consistency
-              const pngPath = path.join(
-                this.thumbnailDir,
-                `${path.basename(thumbnailPath, '.webp')}.png`
-              );
-              await sharp(pngPath)
-                .webp({ quality: config.thumbnails.quality })
-                .toFile(thumbnailPath);
-              // Clean up PNG
-              await fs.unlink(pngPath);
-              resolve();
-            } catch (error) {
-              reject(error);
-            }
-          })
-          .on('error', (error) => {
-            console.error(`FFmpeg error for ${mediaPath}:`, error);
-            reject(error);
-          });
+          .pipe(sharpPipeline);
       };
 
       if (this.isRclonePath(mediaPath)) {
-        // For rclone paths, read buffer and convert to readable stream
         this.getFileBuffer(mediaPath)
-          .then((buffer) => {
-            const stream = Readable.from(buffer);
-            processVideo(stream);
-          })
+          .then((buffer) => processVideo(Readable.from(buffer)))
           .catch(reject);
       } else {
-        // For local paths, use path directly
         processVideo(mediaPath);
       }
     });
@@ -225,18 +206,14 @@ class ThumbnailService {
   ): Promise<string> {
     const thumbnailPath = this.getThumbnailPath(mediaId);
 
-    // Check if thumbnail exists in cache and is valid
+    // ponytail: skip getFileHash on cache hit — source files don't change in place on this app.
+    // Only verify the .webp still exists on disk; regenerate if missing.
     const cached = this.cache.get(mediaId);
     if (cached) {
       try {
-        const currentHash = await this.getFileHash(mediaPath);
-        if (cached.hash === currentHash) {
-          // Check if thumbnail file exists
-          await fs.access(cached.path);
-          return cached.path;
-        }
-      } catch (error) {
-        // Cache is invalid, regenerate
+        await fs.access(cached.path);
+        return cached.path;
+      } catch {
         this.cache.delete(mediaId);
       }
     }
