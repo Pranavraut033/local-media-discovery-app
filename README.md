@@ -8,6 +8,9 @@
 
 > **Live showcase:** open `landing/index.html` in your browser for an interactive overview.
 
+<!-- Add a screenshot or demo GIF here once available:
+     ![Local Media Discovery](docs/demo.gif) -->
+
 No cloud. No accounts. No telemetry. Your files stay on your machine.
 
 ---
@@ -106,6 +109,27 @@ npm run logs     # Stream all logs
 npm run restart  # Rolling restart
 npm run stop     # Stop all processes
 ```
+
+---
+
+## Desktop App
+
+The project also ships as a standalone Electron desktop app that bundles all three services — no separate terminals or PM2 required.
+
+```bash
+# Run the desktop app locally (installs deps, builds, and launches Electron)
+npm run desktop:dev
+```
+
+Build distributable installers:
+
+```bash
+npm run desktop:pack:mac   # macOS — DMG + zip
+npm run desktop:pack:win   # Windows — NSIS installer
+npm run desktop:pack:dir   # Unpacked directory (for testing the build)
+```
+
+Output is written to `desktop/dist/`. Native modules (`better-sqlite3`, `bcrypt`) are automatically rebuilt against Electron during packaging and restored afterward.
 
 ---
 
