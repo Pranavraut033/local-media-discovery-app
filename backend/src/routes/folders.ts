@@ -129,7 +129,6 @@ export default async function folderRoutes(fastify: FastifyInstance) {
               SELECT id, absolute_path, relative_path_from_root, name
               FROM folders
               WHERE user_id = ?
-                AND storage_mode = 'local'
               ORDER BY relative_path_from_root ASC
             `
           )
@@ -241,7 +240,6 @@ export default async function folderRoutes(fastify: FastifyInstance) {
               SELECT id, absolute_path, relative_path_from_root, name
               FROM folders
               WHERE user_id = ?
-                AND storage_mode = 'local'
                 AND absolute_path = ?
               LIMIT 1
             `
@@ -263,7 +261,6 @@ export default async function folderRoutes(fastify: FastifyInstance) {
               SELECT id, absolute_path, relative_path_from_root, name
               FROM folders
               WHERE user_id = ?
-                AND storage_mode = 'local'
             `
           )
           .all(userId) as FolderRow[];
@@ -341,7 +338,6 @@ export default async function folderRoutes(fastify: FastifyInstance) {
               SELECT id, absolute_path, relative_path_from_root, name
               FROM folders
               WHERE user_id = ?
-                AND storage_mode = 'local'
               ORDER BY relative_path_from_root ASC
             `
           )

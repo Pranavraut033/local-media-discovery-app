@@ -29,22 +29,34 @@ function attachStreamToken(item: {
   path: string;
   type: string;
   storageMode?: string;
+  serverId?: string | null;
   [key: string]: unknown;
 }) {
-  // Rclone items cannot be served by the media-server (it only reads local paths).
-  // Let them fall through to the backend's /api/media/file/:id rclone handler instead.
-  if (item.storageMode === 'rclone') return item;
-  const ext = path.extname(item.path).toLowerCase();
+  const ext = path.extname(item.path || '').toLowerCase();
   if (!ext) return item;
   const kind: 'image' | 'video' =
     item.type === 'video' || (typeof item.type === 'string' && item.type.startsWith('video/'))
       ? 'video'
       : 'image';
+
+  const isRemote = item.storageMode === 'rclone' || item.storageMode === 'webdav';
+  // Legacy rclone items without a serverId can't be served by the media-server yet.
+  if (isRemote && !item.serverId) return item;
+
   try {
-    const streamToken = signStreamToken(
-      { mediaId: item.id, path: item.path, ext, type: kind },
-      MEDIA_SERVER_SECRET
-    );
+    const payload = isRemote
+      ? {
+          mediaId: item.id,
+          path: '',
+          ext,
+          type: kind,
+          storageMode: item.storageMode as 'rclone' | 'webdav',
+          serverId: item.serverId as string,
+          remotePath: item.path,
+        }
+      : { mediaId: item.id, path: item.path, ext, type: kind, storageMode: 'local' as const };
+
+    const streamToken = signStreamToken(payload, MEDIA_SERVER_SECRET);
     return { ...item, streamToken };
   } catch {
     return item;

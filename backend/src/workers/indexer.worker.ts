@@ -16,6 +16,8 @@ import {
   finalizeRclonePendingFiles,
   indexRcloneFilesStreaming,
 } from '../services/rclone-indexer.js';
+import { indexRemoteFilesStreaming } from '../services/remote/indexer.js';
+import { getServerById } from '../services/remote/servers-db.js';
 import { invalidateFeedCache } from '../services/feed.js';
 
 async function processJob(job: { data: IndexingJobData }): Promise<void> {
@@ -72,38 +74,44 @@ async function processJob(job: { data: IndexingJobData }): Promise<void> {
           ).run(done, Math.floor(Date.now() / 1000), jobId);
         }
       });
+    } else if (type === 'remote') {
+      // Generic remote provider path (rclone via rcd, webdav, …)
+      const { serverId, remotePath } = job.data;
+      if (!serverId || remotePath === undefined) throw new Error('serverId and remotePath required for remote job');
+
+      const server = getServerById(db, serverId);
+      if (!server) throw new Error(`Remote server not found: ${serverId}`);
+
+      const indexedCount = await indexRemoteFilesStreaming(
+        db, server, remotePath, userId, jobId,
+        (count) => {
+          db.prepare(`UPDATE indexing_jobs SET total_files = ?, updated_at = ? WHERE id = ?`).run(count, Math.floor(Date.now() / 1000), jobId);
+          sseEventBus.emit(userId, { type: 'job_progress', jobId, payload: { stage: 'discovery', filesFound: count } });
+        },
+        (done, total) => {
+          db.prepare(`UPDATE indexing_jobs SET processed_files = ?, updated_at = ? WHERE id = ?`).run(done, Math.floor(Date.now() / 1000), jobId);
+          sseEventBus.emit(userId, { type: 'file_hashed', jobId, payload: { done, total } });
+        }
+      );
+      db.prepare(`UPDATE indexing_jobs SET total_files = ?, processed_files = ?, updated_at = ? WHERE id = ?`)
+        .run(indexedCount, indexedCount, Math.floor(Date.now() / 1000), jobId);
+
     } else {
+      // Legacy rclone via FUSE mount subprocess (type === 'rclone')
       const { remoteName, basePath, remoteType } = job.data;
       if (!remoteName || basePath === undefined) throw new Error('remoteName and basePath required for rclone job');
 
-      // Streaming single-phase indexer: discover via fast-list then write ready in batches
       const indexedCount = await indexRcloneFilesStreaming(
-        db,
-        remoteName,
-        basePath,
-        remoteType || 'unknown',
-        userId,
-        jobId,
-        // onDiscovery – fires once with total count after fast-list completes
+        db, remoteName, basePath, remoteType || 'unknown', userId, jobId,
         (count) => {
           db.prepare(`UPDATE indexing_jobs SET total_files = ?, updated_at = ? WHERE id = ?`).run(count, Math.floor(Date.now() / 1000), jobId);
-          sseEventBus.emit(userId, {
-            type: 'job_progress',
-            jobId,
-            payload: { stage: 'discovery', filesFound: count },
-          });
+          sseEventBus.emit(userId, { type: 'job_progress', jobId, payload: { stage: 'discovery', filesFound: count } });
         },
-        // onBatchReady – fires after each batch of 50 is written as ready
         (done, total, _batchIds) => {
           db.prepare(`UPDATE indexing_jobs SET processed_files = ?, updated_at = ? WHERE id = ?`).run(done, Math.floor(Date.now() / 1000), jobId);
-          sseEventBus.emit(userId, {
-            type: 'file_hashed',
-            jobId,
-            payload: { done, total },
-          });
+          sseEventBus.emit(userId, { type: 'file_hashed', jobId, payload: { done, total } });
         }
       );
-
       db.prepare(`UPDATE indexing_jobs SET total_files = ?, processed_files = ?, updated_at = ? WHERE id = ?`)
         .run(indexedCount, indexedCount, Math.floor(Date.now() / 1000), jobId);
     }

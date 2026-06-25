@@ -30,6 +30,36 @@ function getRootFolder(db: Database.Database, userId: string): string | null {
   return row?.local_root_path || null;
 }
 
+// Remote (rclone/webdav) sources are rooted at a folder whose relative_path_from_root
+// has no '/' (same shape as the top-level segment derived below). Look up that folder's
+// absolute_path and server display name so remote sources don't surface as a raw,
+// subfolder-looking id.
+function getRemoteSourceInfo(
+  db: Database.Database,
+  userId: string,
+  sourceId: string
+): { folderPath: string; displayName: string } | null {
+  const row = db
+    .prepare(
+      `
+        SELECT f.absolute_path AS absolutePath, rs.display_name AS displayName
+        FROM folders f
+        LEFT JOIN remote_servers rs ON rs.id = f.server_id
+        WHERE f.user_id = ?
+          AND f.relative_path_from_root = ?
+          AND f.storage_mode IN ('rclone', 'webdav')
+        LIMIT 1
+      `
+    )
+    .get(userId, sourceId) as { absolutePath: string; displayName: string | null } | undefined;
+
+  if (!row) {
+    return null;
+  }
+
+  return { folderPath: row.absolutePath, displayName: row.displayName || sourceId };
+}
+
 export function getAllSourcesV2(db: Database.Database, userId: string): SourceInfoV2[] {
   const rows = db
     .prepare(
@@ -60,12 +90,24 @@ export function getAllSourcesV2(db: Database.Database, userId: string): SourceIn
     return a.localeCompare(b);
   });
 
-  return orderedSourceIds.map((sourceId) => ({
-    id: sourceId,
-    folderPath: deriveFolderPath(rootFolder, sourceId),
-    displayName: sourceId === 'root' ? 'Root' : sourceId,
-    avatarSeed: sourceId,
-  }));
+  return orderedSourceIds.map((sourceId) => {
+    if (sourceId === 'root') {
+      return {
+        id: sourceId,
+        folderPath: deriveFolderPath(rootFolder, sourceId),
+        displayName: 'Root',
+        avatarSeed: sourceId,
+      };
+    }
+
+    const remoteInfo = getRemoteSourceInfo(db, userId, sourceId);
+    return {
+      id: sourceId,
+      folderPath: remoteInfo?.folderPath ?? deriveFolderPath(rootFolder, sourceId),
+      displayName: remoteInfo?.displayName ?? sourceId,
+      avatarSeed: sourceId,
+    };
+  });
 }
 
 export function getSourceByIdV2(db: Database.Database, userId: string, sourceId: string): SourceInfoV2 | null {
@@ -102,10 +144,12 @@ export function getSourceByIdV2(db: Database.Database, userId: string, sourceId:
     return null;
   }
 
+  const remoteInfo = getRemoteSourceInfo(db, userId, sourceId);
+
   return {
     id: sourceId,
-    folderPath: deriveFolderPath(rootFolder, sourceId),
-    displayName: sourceId === 'root' ? 'Root' : sourceId,
+    folderPath: remoteInfo?.folderPath ?? deriveFolderPath(rootFolder, sourceId),
+    displayName: remoteInfo?.displayName ?? sourceId,
     avatarSeed: sourceId,
   };
 }

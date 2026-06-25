@@ -2,8 +2,8 @@
  * RcloneMountService — manages the rclone FUSE mount lifecycle entirely inside the backend process.
  *
  * Design:
- *  - Uses `rclone mount --daemon` so rclone forks itself into the background and the spawn call
- *    returns immediately. No caffeinate, no PM2 wrapper needed.
+ *  - Spawns `rclone mount` detached ourselves (no `--daemon`) and tracks the child pid directly —
+ *    rclone's own --daemon self-fork is flaky on macOS even when the identical foreground mount works.
  *  - The real FUSE mountpoint is $HOME/.rclone-mounts/hetzner — a stable, user-owned directory
  *    that is never cleaned by macOS periodic scripts (unlike /tmp) and survives reboots.
  *  - ~/hetzner_mount is kept as a symlink pointing at that dir for compatibility.
@@ -15,7 +15,7 @@
  *  - stop() uses `umount -f` (macOS) / `fusermount -u` (Linux) which causes the daemon to exit.
  */
 
-import { execFile, execFileSync, execSync } from 'child_process';
+import { execFile, execFileSync, execSync, spawn } from 'child_process';
 import fs from 'fs';
 import fsp from 'fs/promises';
 import path from 'path';
@@ -123,7 +123,6 @@ const MOUNT_CHECK_TIMEOUT_MS = 2000; // max time to wait for `mount` command
 const MOUNT_CACHE_TTL_MS = 5000; // cache positive/negative result for 5 s
 const COMMAND_TIMEOUT_MS = 3000; // timeout for unmount/kill commands
 const STAT_TIMEOUT_MS = 1500; // max time to wait for a (possibly stale-FUSE) stat() call
-const MOUNT_START_TIMEOUT_MS = 15000; // timeout for `rclone mount --daemon` launch
 const START_GUARD_TIMEOUT_MS = 120000; // break stale "starting" state after 2 minutes
 
 /** Sentinel returned by statWithTimeout() when a stat() call doesn't return in time. */
@@ -667,37 +666,44 @@ class RcloneMountService {
 
       console.log(`[rclone-mount] Launching rclone daemon: ${rcloneBinary} ${REMOTE} → ${mountDir}`);
 
-      await this.execWithTimeout(rcloneBinary, [
+      // ponytail: rclone's own --daemon self-fork is flaky on macOS (observed: "Daemon timed out",
+      // exits with code 1) even though the identical mount succeeds in the foreground. Spawn it
+      // ourselves detached instead and track the child pid directly — same pattern as rclone-rcd.ts.
+      const child = spawn(rcloneBinary, [
         'mount', REMOTE, mountDir,
-        '--daemon',
         '--allow-other',
         '--allow-non-empty',
         '--dir-cache-time', '24h',
         '--poll-interval', '30s',
         '--fast-list',
         '--vfs-cache-mode', 'full',
-        '--vfs-cache-max-age', '1h',
+        '--vfs-cache-max-age', '24h',      // was 1h — keep VFS cache longer, avoids re-download on revisit
         '--vfs-cache-max-size', '10G',
-        '--vfs-cache-poll-interval', '1m',
-        '--vfs-read-ahead', '256M',
-        '--vfs-read-chunk-size', '4M',
-        '--vfs-read-chunk-size-limit', '256M',
-        '--buffer-size', '256M',
+        '--vfs-cache-poll-interval', '5m',  // was 1m — less overhead with longer cache age
+        '--vfs-read-ahead', '64M',          // was 256M — less aggressive pre-fetch, lower memory pressure
+        '--vfs-read-chunk-size', '512k',    // was 4M — 8x faster first byte on initial request
+        '--vfs-read-chunk-size-limit', '128M', // was 256M — still grows for sequential streaming
+        '--vfs-fast-fingerprint',           // skip full-hash fingerprint for faster directory listings
+        '--buffer-size', '64M',             // was 256M — adequate for streaming, less memory
         '--cache-dir', CACHE_DIR,
-        '--transfers', '8',
-        '--checkers', '16',
+        '--transfers', '4',                 // was 8 — fewer parallel transfers reduces congestion
+        '--checkers', '8',                  // was 16
         '--multi-thread-streams', '4',
         '--multi-thread-cutoff', '16M',
         '--no-modtime',
         '--log-level', 'INFO',
-      ], MOUNT_START_TIMEOUT_MS);
+      ], { stdio: ['ignore', 'pipe', 'pipe'], detached: true });
+      child.unref();
+      child.stderr?.on('data', (d: Buffer) => {
+        const msg = d.toString().trim();
+        if (msg) console.log(`[rclone-mount] ${msg}`);
+      });
+      this.ownedDaemonPid = child.pid ?? null;
 
-      // Poll until the FUSE mount appears (rclone daemon may take a few seconds)
+      // Poll until the FUSE mount appears (the process may take a few seconds to mount)
       for (let i = 0; i < 20; i++) {
         await new Promise<void>((r) => setTimeout(r, 1000));
         if (await this.isMounted()) {
-          // Record the daemon PID so teardown targets only our own process.
-          this.ownedDaemonPid = await this.findDaemonPid(mountDir);
           this.updateSymlink(mountDir);
           this.recordActivity();
           this.startInactivityWatcher();

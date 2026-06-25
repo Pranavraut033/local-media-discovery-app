@@ -31,6 +31,14 @@ export default async function eventsRoutes(fastify: FastifyInstance): Promise<vo
         return reply.code(401).send({ error: 'Invalid or expired token' });
       }
 
+      // @fastify/cors sets Access-Control-Allow-Origin via reply.header() in an
+      // onRequest hook, which is normally flushed onto the socket by reply.send().
+      // Since we write the raw response ourselves below, that flush never happens
+      // and the CORS header gets silently dropped unless we copy it over first.
+      for (const [key, value] of Object.entries(reply.getHeaders())) {
+        if (value !== undefined) reply.raw.setHeader(key, value);
+      }
+
       // Set SSE headers
       reply.raw.writeHead(200, {
         'Content-Type': 'text/event-stream',

@@ -20,6 +20,8 @@ interface RecentRootFolderRow {
   path: string;
   name: string;
   lastIndexedAt: number;
+  serverId: string | null;
+  serverType: string | null;
 }
 
 export default async function configRoutes(fastify: FastifyInstance): Promise<void> {
@@ -98,8 +100,10 @@ export default async function configRoutes(fastify: FastifyInstance): Promise<vo
     }
   );
 
-  // Get recently indexed local root folders for the authenticated user.
-  // These come from DB (folders table) and are scoped per-user.
+  // Get recently indexed root folders for the authenticated user — local AND
+  // remote (rclone/webdav). Remote rows carry serverId/serverType so the
+  // frontend can re-trigger indexing via /api/servers/:id/add-source instead
+  // of the local-only /api/config/root-folder.
   fastify.get(
     '/api/config/recent-folders',
     {
@@ -114,14 +118,19 @@ export default async function configRoutes(fastify: FastifyInstance): Promise<vo
           .prepare(
             `
               SELECT
-                absolute_path AS path,
-                name,
-                MAX(updated_at) AS lastIndexedAt
-              FROM folders
-              WHERE user_id = ?
-                AND storage_mode = 'local'
-                AND relative_path_from_root = ''
-              GROUP BY absolute_path, name
+                f.absolute_path AS path,
+                f.name AS name,
+                MAX(f.updated_at) AS lastIndexedAt,
+                f.server_id AS serverId,
+                rs.server_type AS serverType
+              FROM folders f
+              LEFT JOIN remote_servers rs ON rs.id = f.server_id
+              WHERE f.user_id = ?
+                AND (
+                  f.relative_path_from_root = ''
+                  OR f.relative_path_from_root = '__server_root_' || f.server_id
+                )
+              GROUP BY f.absolute_path, f.name, f.server_id
               ORDER BY lastIndexedAt DESC
               LIMIT 10
             `

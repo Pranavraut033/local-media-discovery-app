@@ -10,6 +10,7 @@ import path from 'path';
 
 interface ThumbnailQuery {
   size?: 'small' | 'medium' | 'large';
+  token?: string;
 }
 
 export default async function thumbnailRoutes(fastify: FastifyInstance): Promise<void> {
@@ -33,14 +34,17 @@ export default async function thumbnailRoutes(fastify: FastifyInstance): Promise
              AND latest.max_seen = fp.last_seen_at
             WHERE fp.user_id = ? AND fp.is_present = 1
           )
-          SELECT lp.absolute_path AS path, f.media_kind AS type
+          SELECT lp.absolute_path AS path, f.media_kind AS type,
+                 lp.storage_mode AS storageMode, lp.server_id AS serverId
           FROM files f
           JOIN latest_paths lp ON lp.file_id = f.id
           WHERE f.id = ?
           LIMIT 1
         `
       )
-      .get(userId, userId, fileId) as { path: string; type: string } | undefined;
+      .get(userId, userId, fileId) as
+      | { path: string; type: string; storageMode: 'local' | 'rclone' | 'webdav'; serverId: string | null }
+      | undefined;
   };
 
   /**
@@ -49,15 +53,32 @@ export default async function thumbnailRoutes(fastify: FastifyInstance): Promise
    */
   fastify.get<{ Params: { id: string }; Querystring: ThumbnailQuery }>(
     '/api/thumbnail/:id',
-    {
-      onRequest: [fastify.authenticate],
-    },
     async (
       request: FastifyRequest<{ Params: { id: string }; Querystring: ThumbnailQuery }>,
       reply: FastifyReply
     ) => {
       const { id } = request.params;
-      const userId = request.user!.userId;
+
+      // Accept a ?token= query param (used for <video poster>/<img src>, which can't
+      // set an Authorization header) alongside the normal Bearer header — same pattern
+      // as /api/media/file/:id.
+      let userId: string;
+      const token = request.query.token;
+      if (token) {
+        try {
+          const decoded = fastify.jwt.verify<{ userId: string }>(token);
+          userId = decoded.userId;
+        } catch {
+          return reply.code(401).send({ error: 'Invalid or expired token' });
+        }
+      } else {
+        try {
+          await request.jwtVerify();
+          userId = request.user!.userId;
+        } catch {
+          return reply.code(401).send({ error: 'Unauthorized' });
+        }
+      }
 
       try {
         const media = resolveMediaForUser(userId, id);
@@ -69,7 +90,13 @@ export default async function thumbnailRoutes(fastify: FastifyInstance): Promise
         // Determine media type
         const mediaType = media.type.toLowerCase() === 'video' ? 'video' : 'image';
 
-        const thumbnailPath = await thumbnailService.getThumbnail(id, media.path, mediaType);
+        const thumbnailPath = await thumbnailService.getThumbnail(
+          id,
+          media.path,
+          mediaType,
+          media.storageMode,
+          media.serverId
+        );
         const fileContent = await fs.readFile(thumbnailPath);
         return reply
           .type('image/webp')
@@ -125,7 +152,9 @@ export default async function thumbnailRoutes(fastify: FastifyInstance): Promise
               const thumbnailPath = await thumbnailService.getThumbnail(
                 id,
                 media.path,
-                mediaType
+                mediaType,
+                media.storageMode,
+                media.serverId
               );
               return { id, success: true, thumbnailUrl: `/api/thumbnail/${id}` };
             } catch (error) {

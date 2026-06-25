@@ -75,6 +75,8 @@ interface FeedItem {
   depth: number;
   status: 'pending' | 'ready';
   tempFileId?: string;
+  storageMode?: string;
+  serverId?: string | null;
 }
 
 export type FeedSourceType = 'local' | 'remote' | 'all';
@@ -247,6 +249,8 @@ export function generateFeed(db: Database.Database, options: FeedOptions = {}): 
         f.created_at AS createdAt,
         lp.status AS status,
         lp.temp_file_id AS tempFileId,
+        lp.storage_mode AS storageMode,
+        lp.server_id AS serverId,
         CASE WHEN ulf.file_id IS NULL THEN 0 ELSE 1 END AS liked,
         CASE WHEN usf.file_id IS NULL THEN 0 ELSE 1 END AS saved,
         CASE WHEN uhf.file_id IS NULL THEN 0 ELSE 1 END AS hidden
@@ -269,6 +273,8 @@ export function generateFeed(db: Database.Database, options: FeedOptions = {}): 
     createdAt: number;
     status: string;
     tempFileId: string | null;
+    storageMode: string;
+    serverId: string | null;
   }>;
 
   if (allMedia.length === 0) {
@@ -393,6 +399,8 @@ export function generateFeed(db: Database.Database, options: FeedOptions = {}): 
       depth: media.depth,
       status: (media.status === 'pending' ? 'pending' : 'ready') as 'pending' | 'ready',
       ...(media.tempFileId ? { tempFileId: media.tempFileId } : {}),
+      storageMode: media.storageMode,
+      serverId: media.serverId,
     });
     lastUsedSourceId = media.sourceId;
   }

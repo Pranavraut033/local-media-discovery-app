@@ -26,6 +26,8 @@ import discoverRoutes from './routes/discover.js';
 import { initThumbnailService } from './services/thumbnails.js';
 import { startIndexingWorker } from './workers/indexer.worker.js';
 import { rcloneMountService } from './services/rclone-mount.js';
+import { startRcd, stopRcd } from './services/rclone-rcd.js';
+import serversRoutes from './routes/servers.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -108,12 +110,21 @@ await fastify.register(rcloneRoutes);
 await fastify.register(remoteRcloneConfigRoutes);
 await fastify.register(eventsRoutes);
 await fastify.register(discoverRoutes);
+await fastify.register(serversRoutes);
 
 // Start BullMQ indexing worker (in-process)
 startIndexingWorker();
 
-// Auto-start rclone mount (non-fatal if rclone not configured)
-rcloneMountService.startOnInit();
+// Start rcd sidecar for remote servers (non-mount approach).
+// Falls back to FUSE mount if RCLONE_USE_MOUNT=1.
+// Awaited so remote-server requests right after boot don't race a null client.
+await startRcd();
+
+// Auto-start rclone mount — fallback only, off by default now that rcd is the
+// primary remote transport. Set RCLONE_USE_MOUNT=1 to restore the old FUSE path.
+if (process.env.RCLONE_USE_MOUNT === '1') {
+  rcloneMountService.startOnInit();
+}
 
 // Health check
 fastify.get('/api/health', async () => {
@@ -136,6 +147,7 @@ process.on('uncaughtException', (error: NodeJS.ErrnoException) => {
 process.on('SIGINT', async () => {
   console.log('Shutting down gracefully...');
   await stopWatcher();
+  stopRcd();
   await rcloneMountService.shutdown();
   closeDatabase();
   fastify.close(() => {
@@ -147,6 +159,7 @@ process.on('SIGINT', async () => {
 process.on('SIGTERM', async () => {
   console.log('Shutting down gracefully (SIGTERM)...');
   await stopWatcher();
+  stopRcd();
   await rcloneMountService.shutdown();
   closeDatabase();
   fastify.close(() => {

@@ -36,6 +36,31 @@ export const userStorageConfigs = sqliteTable(
   (table) => [unique('ux_user_storage_configs_user').on(table.userId)]
 );
 
+export const remoteServers = sqliteTable(
+  'remote_servers',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    /** Provider registry key: 'rclone' | 'webdav' */
+    serverType: text('server_type').notNull(),
+    displayName: text('display_name').notNull(),
+    /** rclone remote type (sftp/s3/b2/webdav/…) — drives the icon; null for webdav serverType */
+    rcloneRemoteType: text('rclone_remote_type'),
+    /** AES-256-GCM encrypted JSON blob of connection params */
+    connectionEncrypted: text('connection_encrypted').notNull(),
+    connectionNonce: text('connection_nonce'),
+    connectionKdfSalt: text('connection_kdf_salt'),
+    createdAt: integer('created_at').notNull().default(nowEpoch),
+    updatedAt: integer('updated_at').notNull().default(nowEpoch),
+  },
+  (table) => [
+    index('idx_remote_servers_user').on(table.userId),
+    check('chk_remote_servers_type', sql`${table.serverType} IN ('rclone', 'webdav')`),
+  ]
+);
+
 export const folders = sqliteTable(
   'folders',
   {
@@ -46,6 +71,7 @@ export const folders = sqliteTable(
     parentFolderId: text('parent_folder_id').references((): any => folders.id, {
       onDelete: 'set null',
     }),
+    serverId: text('server_id').references(() => remoteServers.id, { onDelete: 'set null' }),
     storageMode: text('storage_mode').notNull(),
     absolutePath: text('absolute_path').notNull(),
     relativePathFromRoot: text('relative_path_from_root').notNull(),
@@ -60,7 +86,7 @@ export const folders = sqliteTable(
       table.relativePathFromRoot
     ),
     index('idx_folders_user_parent').on(table.userId, table.parentFolderId),
-    check('chk_folders_storage_mode', sql`${table.storageMode} IN ('local', 'rclone')`),
+    check('chk_folders_storage_mode', sql`${table.storageMode} IN ('local', 'rclone', 'webdav')`),
   ]
 );
 
@@ -96,6 +122,7 @@ export const filePaths = sqliteTable(
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
     folderId: text('folder_id').references(() => folders.id, { onDelete: 'set null' }),
+    serverId: text('server_id').references(() => remoteServers.id, { onDelete: 'set null' }),
     storageMode: text('storage_mode').notNull(),
     fileName: text('file_name').notNull(),
     absolutePath: text('absolute_path').notNull(),
@@ -113,7 +140,7 @@ export const filePaths = sqliteTable(
     unique('ux_file_paths_user_absolute_path').on(table.userId, table.absolutePath),
     index('idx_file_paths_file').on(table.fileId),
     index('idx_file_paths_user_file').on(table.userId, table.fileId),
-    check('chk_file_paths_storage_mode', sql`${table.storageMode} IN ('local', 'rclone')`),
+    check('chk_file_paths_storage_mode', sql`${table.storageMode} IN ('local', 'rclone', 'webdav')`),
     check('chk_file_paths_is_present', sql`${table.isPresent} IN (0, 1)`),
     check('chk_file_paths_status', sql`${table.status} IN ('pending', 'ready')`),
   ]
@@ -137,6 +164,7 @@ export const indexingJobs = sqliteTable(
   },
   (table) => [
     index('idx_indexing_jobs_user').on(table.userId, table.createdAt),
+    check('chk_indexing_jobs_job_type', sql`${table.jobType} IN ('local', 'rclone', 'remote')`),
   ]
 );
 
@@ -225,5 +253,5 @@ export const userDiscoverSession = sqliteTable('user_discover_session', {
   updatedAt: integer('updated_at').notNull().default(nowEpoch),
 });
 
-export type StorageMode = 'local' | 'rclone';
+export type StorageMode = 'local' | 'rclone' | 'webdav';
 export type MediaKind = 'image' | 'video' | 'other';

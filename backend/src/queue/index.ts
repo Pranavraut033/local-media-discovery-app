@@ -9,13 +9,17 @@ import IORedis from 'ioredis';
 export interface IndexingJobData {
   jobId: string;
   userId: string;
-  type: 'local' | 'rclone';
+  type: 'local' | 'rclone' | 'remote';
   // local
   rootFolder?: string;
-  // rclone
+  // rclone (legacy)
   remoteName?: string;
   basePath?: string;
   remoteType?: string;
+  // remote (new generic path via remote_servers)
+  serverId?: string;
+  serverType?: string;
+  remotePath?: string;
 }
 
 export const redisConnection = new IORedis({
