@@ -19,7 +19,10 @@ cd media-server && npm run dev  # Media server on :3002 (optional for local file
 
 # Production
 npm run build   # Compiles all three services (TS → JS)
-npm start       # Build + launch via PM2 ecosystem
+npm start       # Build + launch the Electron desktop app
+
+# Desktop app dev (spawns backend/media-server/next dev for you)
+npm run desktop:dev
 
 # Quality checks — run these for touched areas before finishing
 cd backend && npm run type-check
@@ -31,14 +34,11 @@ cd backend && npm run db:migrate  # Run Drizzle migrations
 # First-time setup
 cd backend && npm run dev         # Initializes DB on first run, then Ctrl+C
 cd backend && npm run create-user 123456  # Create a 6-digit PIN user
-
-# PM2 process management
-npm run status / logs / restart / stop
 ```
 
 ## Architecture
 
-Three independent processes managed by PM2 (`ecosystem.config.cjs`):
+Three independent processes, spawned and supervised by the Electron main process (`desktop/main.cjs`) — no PM2:
 
 | Process | Port | Responsibility |
 |---------|------|----------------|
@@ -106,7 +106,7 @@ Images: `.jpg`, `.jpeg`, `.png`, `.webp`, `.gif` | Videos: `.mp4`, `.webm`, `.mo
 - DB must be initialized before running `create-user`; run `npm run dev` once to trigger auto-init
 - If auth seems broken in dev, check token state in localStorage/Zustand and follow `AUTH_SETUP.md`
 - Media server needs `MEDIA_SERVER_SECRET` env var that matches the backend's — if streaming fails, verify both processes share the same secret
-- `ecosystem.config.cjs` also manages `rclone-mount` and `rclone-watchdog` PM2 processes for FUSE mounts (auto-stops after 10 min inactivity)
+- Rclone FUSE mounts (`backend/src/services/rclone-mount.ts`) are self-managed, not PM2-managed — ownership lock file plus an inactivity timeout (10 min) that auto-unmounts
 
 ## Documentation Map
 
@@ -115,3 +115,4 @@ Images: `.jpg`, `.jpeg`, `.png`, `.webp`, `.gif` | Videos: `.mp4`, `.webm`, `.mo
 - `AUTH_SETUP.md` — authentication setup and troubleshooting
 - `MIGRATION_ZUSTAND.md` — state management refactor notes and store patterns
 - `agents.md` — agent workflow constraints and task boundaries
+- `REMOTE_SERVERS.md` — canonical YAML schema and worked examples for rclone/WebDAV remote servers

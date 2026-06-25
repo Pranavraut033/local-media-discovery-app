@@ -32,7 +32,7 @@ No cloud. No accounts. No telemetry. Your files stay on your machine.
 
 ## Architecture
 
-Three independent processes managed by PM2:
+Three independent processes, spawned and supervised by the Electron desktop app (no PM2):
 
 | Process | Port | Responsibility |
 |---|---|---|
@@ -49,7 +49,6 @@ The media server is stateless — it verifies 2-hour HMAC tokens signed by the b
 - **Node.js 18+** and npm
 - **ffmpeg** (for video thumbnail generation) — installed automatically via `ffmpeg-static`
 - Media files on local disk or accessible via rclone remote
-- **PM2** for production: `npm install -g pm2`
 
 ---
 
@@ -96,28 +95,17 @@ Find your host IP (`ifconfig` / `ipconfig`), then open `http://<host-ip>:3000` i
 
 ---
 
-## Production
+## Desktop App
+
+Production runs as a standalone Electron desktop app that bundles all three services — no separate terminals, no process manager.
 
 ```bash
 npm run build   # Compiles all three services
-npm start       # Build + launch via PM2
+npm start       # Build + launch the desktop app
 ```
 
 ```bash
-npm run status   # PM2 process list
-npm run logs     # Stream all logs
-npm run restart  # Rolling restart
-npm run stop     # Stop all processes
-```
-
----
-
-## Desktop App
-
-The project also ships as a standalone Electron desktop app that bundles all three services — no separate terminals or PM2 required.
-
-```bash
-# Run the desktop app locally (installs deps, builds, and launches Electron)
+# Run the desktop app in dev mode (tsx watch + next dev, no build step)
 npm run desktop:dev
 ```
 
@@ -197,7 +185,6 @@ local-media-discovery-app/
 ├── frontend/         # Next.js static export, Zustand stores, TanStack Query
 ├── media-server/     # HMAC-gated media streaming and thumbnail cache
 ├── landing/          # Standalone showcase page (open index.html in browser)
-├── ecosystem.config.cjs  # PM2 process definitions
 └── PRD.md            # Product requirements and design decisions
 ```
 
