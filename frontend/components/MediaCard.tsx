@@ -9,13 +9,15 @@ import { VideoPlayer } from './VideoPlayer';
 import { LikeButton, SaveButton, HideButton } from './InteractionButtons';
 import { useEffect, useRef, useState } from 'react';
 import { useLikeMutation, useSaveMutation, useViewMutation, useHideMutation, FeedItem } from '@/lib/hooks';
-import { getStreamUrl } from '@/lib/api';
+import { getStreamUrl, getThumbnailUrl } from '@/lib/api';
 import { Maximize2 } from 'lucide-react';
 
 
 interface MediaCardProps {
   media: FeedItem;
+  index?: number;
   onVisible?: () => void;
+  onVisibleIndexChange?: (index: number, visible: boolean) => void;
   onViewSource?: (
     sourceId: string,
     displayName: string,
@@ -30,7 +32,7 @@ interface MediaCardProps {
   enableMobileAutoplay?: boolean;
 }
 
-export function MediaCard({ media, onVisible, onViewSource, onVideoExpand, mode = 'feed', className = '', enableHoverAutoplay = true, enableMobileAutoplay = true }: MediaCardProps) {
+export function MediaCard({ media, index, onVisible, onVisibleIndexChange, onViewSource, onVideoExpand, mode = 'feed', className = '', enableHoverAutoplay = true, enableMobileAutoplay = true }: MediaCardProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const hasRecordedView = useRef(false);
   const [currentLiked, setCurrentLiked] = useState(media?.liked ?? false);
@@ -79,6 +81,7 @@ export function MediaCard({ media, onVisible, onViewSource, onVideoExpand, mode 
             viewMutation.mutate({ mediaId: media.id, sourceId: media.sourceId });
           }, 1000);
         }
+        if (index !== undefined) onVisibleIndexChange?.(index, entry.isIntersecting);
       },
       { threshold: 0.5 }
     );
@@ -89,8 +92,9 @@ export function MediaCard({ media, onVisible, onViewSource, onVideoExpand, mode 
 
     return () => {
       observer.disconnect();
+      if (index !== undefined) onVisibleIndexChange?.(index, false);
     };
-  }, [media?.id, media?.sourceId, onVisible, viewMutation]);
+  }, [media?.id, media?.sourceId, index, onVisible, onVisibleIndexChange, viewMutation]);
 
   if (!media) {
     return null;
@@ -149,6 +153,7 @@ export function MediaCard({ media, onVisible, onViewSource, onVideoExpand, mode 
             <VideoPlayer
               key={mediaSource}
               src={mediaSource}
+              poster={getThumbnailUrl(media.id)}
               mode={mode}
               className={isReelsMode ? 'w-full h-full' : 'w-full'}
               shouldAutoPlayOnHover={enableHoverAutoplay}

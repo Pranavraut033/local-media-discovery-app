@@ -123,6 +123,18 @@ export function getMediaUrl(mediaId: string): string {
   return url.toString();
 }
 
+export function getThumbnailUrl(mediaId: string): string {
+  const base = getApiBase();
+  const url = new URL(`${base}/api/thumbnail/${mediaId}`);
+  const token = getStoredToken();
+
+  if (token) {
+    url.searchParams.set('token', token);
+  }
+
+  return url.toString();
+}
+
 export function getMediaServerBase(): string {
   if (process.env.NEXT_PUBLIC_MEDIA_SERVER_URL) {
     return process.env.NEXT_PUBLIC_MEDIA_SERVER_URL;
@@ -155,12 +167,19 @@ export async function prefetchMediaFiles(tokens: string[]): Promise<void> {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ tokens }),
-      // Non-critical — ignore errors silently.
       signal: AbortSignal.timeout(5000),
     });
   } catch {
     // Media server may not be running; ignore.
   }
+}
+
+export function cancelPrefetch(): void {
+  // Fire-and-forget — no await, non-critical
+  fetch(`${getMediaServerBase()}/prefetch`, {
+    method: 'DELETE',
+    signal: AbortSignal.timeout(2000),
+  }).catch(() => undefined);
 }
 
 /**
@@ -268,7 +287,7 @@ export interface RcloneMountEnsureResponse {
   status: 'mounted' | 'mounting' | 'error' | 'unmounted';
   message?: string;
   mountDir?: string;
-  pm2Status?: string | null;
+  mountProcessStatus?: string | null;
 }
 
 let _ensureMountInFlight: Promise<RcloneMountEnsureResponse> | null = null;

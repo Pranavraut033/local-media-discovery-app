@@ -6,6 +6,7 @@
 
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useInfiniteFeed, useLikeMutation, useSaveMutation, useMediaPreload } from '@/lib/hooks';
+import { cancelPrefetch } from '@/lib/api';
 import { useQueryClient } from '@tanstack/react-query';
 import type { FeedItem } from '@/lib/hooks';
 import { MediaCard } from './MediaCard';
@@ -87,10 +88,30 @@ export function Feed({ initialMode, onViewSource, onModeChange }: FeedProps) {
 
   const currentMedia = allItems[currentIndex];
 
-  // Preload next media items for better performance
-  const mediaIds = allItems.map(item => item.id);
-  useMediaPreload(mediaIds, {
-    prefetchDistance: 5,
+  // Grid (feed) mode has no single "current" item — currentIndex never moves
+  // there — so track which cards are actually on screen via each MediaCard's
+  // IntersectionObserver and use the topmost visible one as the preload anchor.
+  // Reels mode keeps using currentIndex (one card at a time, already accurate).
+  const [visibleIndices, setVisibleIndices] = useState<Set<number>>(new Set());
+  const handleVisibleIndexChange = useCallback((index: number, visible: boolean) => {
+    setVisibleIndices((prev) => {
+      if (visible === prev.has(index)) return prev;
+      const next = new Set(prev);
+      if (visible) next.add(index); else next.delete(index);
+      return next;
+    });
+  }, []);
+  const previewBaseIndex = mode === 'feed' && visibleIndices.size > 0
+    ? Math.min(...visibleIndices)
+    : currentIndex;
+
+  // Preload only the next 3 items from the anchor — not the whole list from index 0.
+  const nearMediaIds = useMemo(
+    () => allItems.slice(previewBaseIndex, previewBaseIndex + 3).map((item) => item.id),
+    [allItems, previewBaseIndex]
+  );
+  useMediaPreload(nearMediaIds, {
+    prefetchDistance: 3,
     enableThumbnails: true,
     enableMetadata: true,
   });
@@ -206,6 +227,16 @@ export function Feed({ initialMode, onViewSource, onModeChange }: FeedProps) {
       setIsResuming(false);
     }
   }, [allItems, isResuming]);
+
+  // Cancel background downloads when this view is hidden or unmounted (page switch, tab hide).
+  useEffect(() => {
+    const handleHide = () => { if (document.hidden) cancelPrefetch(); };
+    document.addEventListener('visibilitychange', handleHide);
+    return () => {
+      document.removeEventListener('visibilitychange', handleHide);
+      cancelPrefetch();
+    };
+  }, []);
 
   // Let the layout react to feed/reels mode for global chrome visibility.
   useEffect(() => {
@@ -549,14 +580,16 @@ export function Feed({ initialMode, onViewSource, onModeChange }: FeedProps) {
             className={MEDIA_MASONRY_CLASS}
             columnClassName={MEDIA_MASONRY_COLUMN_CLASS}
           >
-            {allItems.map((item) => (
+            {allItems.map((item, index) => (
               <div
                 key={item.id}
                 className="mb-2 md:mb-4 break-inside-avoid"
               >
                 <MediaCard
                   media={item}
+                  index={index}
                   onVisible={() => { }}
+                  onVisibleIndexChange={handleVisibleIndexChange}
                   onViewSource={onViewSource}
                   onVideoExpand={(src, title) => setExpandedVideo({ src, title })}
                   mode="feed"

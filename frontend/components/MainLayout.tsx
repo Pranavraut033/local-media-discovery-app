@@ -76,11 +76,15 @@ export default function MainLayout() {
     checkRootFolder();
   }, []);
 
-  const handleFolderSelected = () => {
-    // Selecting a local folder should always scope the feed to local-only content.
-    // This prevents stale 'all'/'remote' feedSourceType from a previous session
-    // from causing rclone fetches after a fresh local-folder selection.
-    useUIStore.getState().setPreferences({ feedSourceType: 'local' });
+  const handleFolderSelected = (source: 'local' | 'remote' = 'local') => {
+    // Local selection scopes the feed to local-only content, preventing a stale
+    // 'all'/'remote' feedSourceType from a previous session from causing remote
+    // fetches right after a fresh local-folder pick.
+    // Remote selection sets 'all' so existing local content (if any) keeps
+    // showing alongside the newly added server. 'all' also persists across
+    // refresh (unlike the in-memory rootFolderSet flag), which is what keeps
+    // the app on the feed instead of bouncing back to folder selection.
+    useUIStore.getState().setPreferences({ feedSourceType: source === 'remote' ? 'all' : 'local' });
     setRootFolderSet(true);
   };
 
@@ -122,6 +126,7 @@ export default function MainLayout() {
   };
 
   const handleRootFolderReset = () => {
+    useUIStore.getState().setPreferences({ feedSourceType: 'local' });
     setRootFolderSet(false);
     setCurrentView('feed');
   };

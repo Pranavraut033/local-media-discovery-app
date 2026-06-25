@@ -5,13 +5,13 @@
 'use client';
 
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Play, Pause, Volume2, VolumeX, Maximize2, ZoomIn, ZoomOut } from 'lucide-react';
+import { Play, Pause, Volume2, VolumeX, Maximize2, ZoomIn, ZoomOut, Loader2 } from 'lucide-react';
 
 interface VideoPlayerProps {
   src: string;
+  poster?: string;
   mode?: 'feed' | 'reels';
   className?: string;
-  onLoad?: () => void;
   autoPlay?: boolean;
   muted?: boolean;
   shouldAutoPlayOnHover?: boolean;
@@ -19,11 +19,20 @@ interface VideoPlayerProps {
   isCardHovered?: boolean;
 }
 
+// ponytail: remote-backed videos share one rclone connection to the backend
+// server — playing several at once causes contention (one streams, the rest
+// stall buffering forever, see session notes on rcd concurrency). Track the
+// single active element module-wide and fully cancel the loser's in-flight
+// fetch (pause alone leaves the browser still downloading buffered-ahead
+// bytes). Upgrade path if this proves too aggressive: a small allowlist of
+// N concurrent slots instead of 1.
+let activeRemoteVideo: HTMLVideoElement | null = null;
+
 export function VideoPlayer({
   src,
+  poster,
   mode = 'feed',
   className = '',
-  onLoad,
   autoPlay = false,
   muted = true,
   shouldAutoPlayOnHover = true,
@@ -35,7 +44,6 @@ export function VideoPlayer({
   const [isPlaying, setIsPlaying] = useState(false);
   const [isMuted, setIsMuted] = useState(muted);
   const [hasError, setHasError] = useState(false);
-  const [isLoading, setIsLoading] = useState(true);
   const [scale, setScale] = useState(1);
   const [position, setPosition] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
@@ -47,6 +55,8 @@ export function VideoPlayer({
   const [isHovered, setIsHovered] = useState(false);
   const [isVisible, setIsVisible] = useState(false);
   const observerRef = useRef<IntersectionObserver | null>(null);
+  const retryCount = useRef(0);
+  const retryTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const isReelsMode = mode === 'reels';
   const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
@@ -54,6 +64,9 @@ export function VideoPlayer({
     ((shouldAutoPlayOnHover && (isHovered || isCardHovered) && !isMobile) ||
       (shouldAutoPlayOnMobileVisible && isVisible && isMobile));
   const showExpandedControls = !isReelsMode && (isHovered || isSeeking);
+  // ponytail: preload=none in feed (many cards, avoids parallel rclone metadata requests);
+  // preload=auto in reels (single current video, start buffering immediately).
+  const preloadValue = isReelsMode ? 'auto' : 'none';
   const showProgressInExpandedControls = !hasError && duration > 0 && showExpandedControls;
   const showBottomPlayingProgress = !isReelsMode && !hasError && duration > 0 && isPlaying && !showExpandedControls;
   const showStaticReelsControls = isReelsMode && !hasError;
@@ -61,6 +74,13 @@ export function VideoPlayer({
 
   const stopEventPropagation = (e: React.SyntheticEvent) => {
     e.stopPropagation();
+  };
+
+  // AbortError fires whenever pause() interrupts a play() promise before it
+  // settles (e.g. a quick hover-in/hover-out) — expected, not a real failure.
+  const logPlayError = (err: unknown) => {
+    if (err instanceof DOMException && err.name === 'AbortError') return;
+    console.error('Video play failed:', err);
   };
 
   // Set up intersection observer for mobile visibility detection
@@ -86,18 +106,42 @@ export function VideoPlayer({
   }, [shouldAutoPlayOnMobileVisible, isMobile]);
 
   // Keep the media element aligned with the desired autoplay behavior.
+  // ponytail: debounce the "start playing" edge by ~200ms so a quick mouse
+  // sweep across many cards doesn't fire a live remote request per card — only
+  // the one the user settles on. Stopping (hover-out) stays immediate so the
+  // remote lane frees up right away.
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
 
-    if (shouldAutoPlay) {
-      video.play().catch((err) => {
-        console.error('Video play failed:', err);
-      });
-    } else {
+    if (!shouldAutoPlay) {
+      if (activeRemoteVideo === video) activeRemoteVideo = null;
       video.pause();
+      return;
     }
+
+    const timer = setTimeout(() => {
+      if (activeRemoteVideo && activeRemoteVideo !== video) {
+        activeRemoteVideo.pause();
+        // load() (without touching the src attribute, which React owns) aborts
+        // the in-flight network request per spec; preload="none" in feed mode
+        // means it won't immediately re-fetch.
+        activeRemoteVideo.load();
+      }
+      activeRemoteVideo = video;
+      video.play().catch(logPlayError);
+    }, 200);
+
+    return () => clearTimeout(timer);
   }, [shouldAutoPlay]);
+
+  // Clear the slot on unmount so a removed card doesn't permanently block playback.
+  useEffect(() => {
+    const video = videoRef.current;
+    return () => {
+      if (activeRemoteVideo === video) activeRemoteVideo = null;
+    };
+  }, []);
 
   // Sync mute state with React state
   useEffect(() => {
@@ -112,9 +156,7 @@ export function VideoPlayer({
     if (!video) return;
 
     if (video.paused) {
-      video.play().catch((err) => {
-        console.error('Video play failed:', err);
-      });
+      video.play().catch(logPlayError);
       return;
     }
 
@@ -123,11 +165,6 @@ export function VideoPlayer({
 
   const handleMuteToggle = () => {
     setIsMuted(!isMuted);
-  };
-
-  const handleLoadedData = () => {
-    setIsLoading(false);
-    onLoad?.();
   };
 
   const handleError = (e: React.SyntheticEvent<HTMLVideoElement, Event>) => {
@@ -150,10 +187,31 @@ export function VideoPlayer({
       : { currentSrc: video?.currentSrc };
 
     console.error('Video error:', details);
-    setHasError(true);
-    setIsLoading(false);
     setIsPlaying(false);
+    setHasError(true);
+
+    // ponytail: remote streams can hiccup (rcd crash/restart, ~8s worst case) —
+    // retry a few times before giving up, instead of a permanent error on first hit.
+    const MAX_RETRIES = 3;
+    if (retryCount.current < MAX_RETRIES) {
+      retryCount.current += 1;
+      retryTimeout.current = setTimeout(() => {
+        const video = videoRef.current;
+        if (video) {
+          video.load();
+          setHasError(false);
+        }
+      }, 3000);
+    }
   };
+
+  // MediaCard keys VideoPlayer by mediaSource, so a new src always remounts
+  // this component fresh — no manual reset-on-src-change needed here.
+  useEffect(() => {
+    return () => {
+      if (retryTimeout.current) clearTimeout(retryTimeout.current);
+    };
+  }, []);
 
   const handleFullscreen = () => {
     const video = videoRef.current;
@@ -258,8 +316,14 @@ export function VideoPlayer({
 
   if (hasError) {
     return (
-      <div className={`w-full ${isReelsMode ? 'h-full' : 'min-h-50'} bg-gray-200 dark:bg-gray-800 flex items-center justify-center ${className}`}>
-        <span className="text-gray-500 dark:text-gray-400">Video failed to load</span>
+      <div className={`relative w-full ${isReelsMode ? 'h-full' : 'min-h-50'} bg-gray-200 dark:bg-gray-800 ${className}`}>
+        {poster && (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={poster} alt="" className="absolute inset-0 w-full h-full object-cover" />
+        )}
+        <div className="absolute inset-0 flex items-center justify-center bg-black/20">
+          <Loader2 className="w-8 h-8 text-white animate-spin" />
+        </div>
       </div>
     );
   }
@@ -285,22 +349,16 @@ export function VideoPlayer({
         onTouchEnd={handleDoubleTap}
         style={{ cursor: isDragging ? 'grabbing' : scale > 1 ? 'grab' : 'default' }}
       >
-      {isLoading && (
-        <div className="absolute inset-0 flex items-center justify-center bg-gray-900 z-10">
-          <div className="w-8 h-8 border-4 border-gray-600 border-t-white rounded-full animate-spin"></div>
-        </div>
-      )}
-
       <video
         ref={videoRef}
         src={src}
+        poster={poster}
         className={isReelsMode ? 'max-w-full max-h-full object-contain' : 'w-full h-auto object-contain'}
         style={{
           transform: `scale(${scale}) translate(${position.x / scale}px, ${position.y / scale}px)`,
           transition: isDragging ? 'none' : 'transform 0.2s ease-out',
         }}
         loop
-        onLoadedData={handleLoadedData}
         onLoadedMetadata={handleLoadedMetadata}
         onTimeUpdate={handleTimeUpdate}
         onPlay={() => setIsPlaying(true)}
@@ -309,7 +367,7 @@ export function VideoPlayer({
         muted={isMuted}
         playsInline
         controls={false}
-        preload="metadata"
+        preload={preloadValue}
       />
 
       {/* Expanded controls - visible while hovering/seeking */}
@@ -429,7 +487,7 @@ export function VideoPlayer({
       )}
 
       {/* Zoom Controls - Only in reels mode */}
-      {isReelsMode && !isLoading && !hasError && (
+      {isReelsMode && !hasError && (
         <div className="absolute bottom-20 right-4 flex flex-col gap-2 z-20 pointer-events-auto">
           <button
             onClick={(e) => {

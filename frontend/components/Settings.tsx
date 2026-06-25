@@ -5,12 +5,12 @@
 'use client';
 
 import { useState, useEffect, useMemo } from 'react';
-import { Settings as SettingsIcon, ArrowLeft, RotateCw, Eye, LogOut, FolderTree, Maximize, Minimize, Power } from 'lucide-react';
+import { Settings as SettingsIcon, ArrowLeft, RotateCw, Eye, LogOut, FolderTree, Maximize, Minimize, Power, Server, Plus, Trash2 } from 'lucide-react';
 import { getPreferences, setPreferences, ViewMode, clearRecentFolders, clearRootFolder } from '@/lib/storage';
-import { getApiBase, authenticatedFetch } from '@/lib/api';
+import { getApiBase, authenticatedFetch, ensureRcloneMount } from '@/lib/api';
 import { useSources, useFolderTree, useHideFolderMutation } from '@/lib/hooks';
 import { FolderTreeView } from './FolderTreeView';
-// import { RemoteSourcesSection } from './RemoteSourcesSection'; // rclone disabled
+import { AddServerModal } from './AddServerModal';
 import { useFullscreen } from '@/lib/useFullscreen';
 import { useFoldersStore } from '@/lib/stores/folders.store';
 import { isDesktopRuntime, quitDesktopApp } from '@/lib/desktop';
@@ -42,8 +42,18 @@ export function Settings({ onBack, onViewHidden, onRootFolderReset }: SettingsPr
   const [isSaving, setIsSaving] = useState(false);
   const [isResetting, setIsResetting] = useState(false);
   const [isShuttingDown, setIsShuttingDown] = useState(false);
+  const [mountStatus, setMountStatus] = useState<'mounted' | 'unmounted' | 'mounting' | 'error' | 'unavailable' | null>(null);
+  const [isMounting, setIsMounting] = useState(false);
+  const [remoteServers, setRemoteServers] = useState<Array<{ id: string; displayName: string; serverType: string }>>([]);
+  const [showAddServer, setShowAddServer] = useState(false);
   // Fetch user sources
   const { data: sources } = useSources();
+
+  const loadRemoteServers = () =>
+    authenticatedFetch(`${API_URL}/api/servers`)
+      .then((r) => r.ok ? r.json() : [])
+      .then(setRemoteServers)
+      .catch(() => setRemoteServers([]));
 
   // Prefer root source and fall back to folder/display matches before first source.
   const currentSource = useMemo(() => {
@@ -97,6 +107,15 @@ export function Settings({ onBack, onViewHidden, onRootFolderReset }: SettingsPr
           hiddenCount: hiddenData.count || 0,
           rootFolder: statsData.root_folder || 'Not set',
         });
+
+        // Fetch rclone mount status (non-fatal)
+        const mountRes = await authenticatedFetch(`${API_URL}/api/rclone/mount/status`).catch(() => null);
+        if (mountRes?.ok) {
+          const mountData = await mountRes.json();
+          setMountStatus(mountData.mounted ? 'mounted' : 'unmounted');
+        } else {
+          setMountStatus('unavailable');
+        }
       } catch (err) {
         console.error('Failed to load settings:', err);
         setError('Failed to load settings');
@@ -106,6 +125,8 @@ export function Settings({ onBack, onViewHidden, onRootFolderReset }: SettingsPr
     };
 
     loadSettings();
+    loadRemoteServers();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [API_URL]);
 
   const handleViewModeChange = (mode: ViewMode) => {
@@ -180,12 +201,25 @@ export function Settings({ onBack, onViewHidden, onRootFolderReset }: SettingsPr
     }
   };
 
+  const handleRemount = async () => {
+    setIsMounting(true);
+    setMountStatus('mounting');
+    try {
+      const result = await ensureRcloneMount();
+      setMountStatus(result.mounted ? 'mounted' : result.status === 'error' ? 'error' : 'mounting');
+    } catch {
+      setMountStatus('error');
+    } finally {
+      setIsMounting(false);
+    }
+  };
+
   const isDesktop = isDesktopRuntime();
 
   const handleShutdown = async () => {
     const confirmMessage = isDesktop
       ? 'Quit Local Media Discovery? All background services will be stopped.'
-      : 'Stop all services (backend, frontend, media-server)? The app will become unavailable until you restart PM2.';
+      : 'Stop all services (backend, frontend, media-server)? The app will become unavailable until you restart it.';
 
     if (!confirm(confirmMessage)) {
       return;
@@ -551,7 +585,31 @@ export function Settings({ onBack, onViewHidden, onRootFolderReset }: SettingsPr
         {/* System Control */}
         <div className="mb-8">
           <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">System Control</h2>
-          <div className="p-4 bg-gray-50 dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700">
+          <div className="p-4 bg-gray-50 dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 space-y-4">
+
+            {/* rclone Mount */}
+            {mountStatus !== 'unavailable' && mountStatus !== null && (
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="font-medium text-gray-900 dark:text-white">rclone Mount</p>
+                  <p className="text-sm mt-0.5">
+                    {mountStatus === 'mounted' && <span className="text-green-600 dark:text-green-400">Mounted</span>}
+                    {mountStatus === 'unmounted' && <span className="text-red-500">Unmounted</span>}
+                    {mountStatus === 'mounting' && <span className="text-yellow-500">Mounting…</span>}
+                    {mountStatus === 'error' && <span className="text-red-500">Mount failed</span>}
+                  </p>
+                </div>
+                <button
+                  onClick={handleRemount}
+                  disabled={isMounting || mountStatus === 'mounting'}
+                  className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg transition-colors font-medium flex items-center gap-2 shrink-0"
+                >
+                  <RotateCw size={15} className={isMounting ? 'animate-spin' : ''} />
+                  {isMounting ? 'Mounting…' : 'Remount'}
+                </button>
+              </div>
+            )}
+
             <div className="flex items-center justify-between mb-3">
               <div>
                 <p className="font-medium text-gray-900 dark:text-white">{isDesktop ? 'Quit App' : 'Stop All Services'}</p>
@@ -559,9 +617,7 @@ export function Settings({ onBack, onViewHidden, onRootFolderReset }: SettingsPr
                   {isDesktop ? (
                     'Closes the app and stops the backend and media server'
                   ) : (
-                    <>
-                      Runs <code className="font-mono text-xs bg-gray-200 dark:bg-gray-700 px-1 rounded">pm2 stop all</code> — stops backend, frontend, and media-server
-                    </>
+                    'Stops backend, frontend, and media-server'
                   )}
                 </p>
               </div>
@@ -586,14 +642,52 @@ export function Settings({ onBack, onViewHidden, onRootFolderReset }: SettingsPr
           </div>
         </div>
 
-        {/* Remote (rclone) sources — temporarily disabled
-        <RemoteSourcesSection
-          className="mb-8"
-          onSourcesUpdated={() => {
-            window.location.reload();
-          }}
-        />
-        */}
+        {/* Remote Servers */}
+        <div className="mb-8">
+          <h2 className="text-lg font-semibold text-(--surface-ink) mb-3 flex items-center gap-2">
+            <Server size={18} />
+            Remote Servers{remoteServers.length > 0 ? ` (${remoteServers.length})` : ''}
+          </h2>
+          <div className="p-4 bg-(--surface-low) rounded-2xl flex flex-col gap-3">
+            {remoteServers.length === 0 ? (
+              <p className="text-sm text-(--outline)">No remote servers configured. Add one to browse rclone or WebDAV sources.</p>
+            ) : (
+              remoteServers.map((s) => (
+                <div key={s.id} className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <Server size={16} className="text-(--outline) shrink-0" />
+                    <span className="text-sm text-(--surface-ink) truncate">{s.displayName}</span>
+                    <span className="text-xs text-(--outline) shrink-0">{s.serverType}</span>
+                  </div>
+                  <button
+                    onClick={async () => {
+                      await authenticatedFetch(`${API_URL}/api/servers/${s.id}`, { method: 'DELETE' });
+                      loadRemoteServers();
+                    }}
+                    className="shrink-0 text-(--error) hover:opacity-70"
+                    title="Remove server"
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                </div>
+              ))
+            )}
+            <button
+              onClick={() => setShowAddServer(true)}
+              className="flex items-center gap-2 text-sm text-(--primary) hover:opacity-70 mt-1"
+            >
+              <Plus size={16} />
+              Add Remote Server…
+            </button>
+          </div>
+        </div>
+
+        {showAddServer && (
+          <AddServerModal
+            onClose={() => setShowAddServer(false)}
+            onAdded={() => { setShowAddServer(false); loadRemoteServers(); }}
+          />
+        )}
       </div>
 
       {/* Save indicator */}
