@@ -14,8 +14,9 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { verifyStreamToken } from '../tokens.js';
 import { config } from '../config.js';
-import { isCached } from '../services/cache.js';
-import { enqueueDownload, DownloadPriority } from '../services/queue.js';
+import { isCached, localSource } from '../services/cache.js';
+import { enqueueDownload, clearQueue, DownloadPriority } from '../services/queue.js';
+import { openRemoteRange } from '../services/remote/fetcher.js';
 
 interface PrefetchBody {
   tokens?: unknown;
@@ -50,19 +51,36 @@ export default async function prefetchRoute(fastify: FastifyInstance): Promise<v
           continue;
         }
 
-        const { mediaId, path: mountPath } = payload;
+        const { mediaId, path: mountPath, storageMode, serverId, remotePath } = payload;
 
         if (isCached(mediaId)) {
           already_cached.push(mediaId);
           continue;
         }
 
+        const isRemote = storageMode === 'rclone' || storageMode === 'webdav';
         const priority = i < NEAR_WINDOW ? DownloadPriority.NEAR : DownloadPriority.FAR;
-        enqueueDownload(mediaId, mountPath, priority);
+
+        if (isRemote && serverId && remotePath) {
+          enqueueDownload(
+            mediaId,
+            () => openRemoteRange(serverId, remotePath).then((r) => r.stream),
+            priority
+          );
+        } else {
+          enqueueDownload(mediaId, localSource(mountPath), priority);
+        }
         queued.push(mediaId);
       }
 
       return reply.code(202).send({ queued, already_cached, invalid });
     }
   );
+
+  // Cancel all pending and in-flight background downloads.
+  // Called by the frontend when the user navigates away or hides the page.
+  fastify.delete('/prefetch', async (_request, reply) => {
+    clearQueue();
+    return reply.code(204).send();
+  });
 }

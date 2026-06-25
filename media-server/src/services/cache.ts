@@ -176,13 +176,18 @@ export function createDecryptRangeStream(info: CachedFileInfo, start: number, en
 }
 
 /**
- * Download `sourcePath` from the rclone VFS mount, encrypt it with AES-256-CTR,
- * and store it atomically in the cache.
+ * Encrypt and cache a file. `openSource` returns a Readable of the plaintext bytes.
+ * - Local: `localSource(path)` — wraps fs.createReadStream
+ * - Remote: `() => openRemoteRange(serverId, remotePath).then(r => r.stream)`
  *
  * Atomic: written to `.tmp` first, then renamed. A crash mid-write leaves
  * only a `.tmp` file which is never served.
  */
-export async function writeToCache(sourcePath: string, mediaId: string): Promise<void> {
+export async function writeToCache(
+  openSource: () => Promise<Readable> | Readable,
+  mediaId: string,
+  signal?: AbortSignal
+): Promise<void> {
   const key = getEncryptionKey();
   const iv = randomBytes(16);
   const cachePath = getCachePath(mediaId);
@@ -190,7 +195,7 @@ export async function writeToCache(sourcePath: string, mediaId: string): Promise
 
   ensureCacheDir();
 
-  const src = fs.createReadStream(sourcePath);
+  const src = await openSource();
   const cipher = createCipheriv('aes-256-ctr', key, iv);
   const dest = fs.createWriteStream(tmpPath);
 
@@ -205,7 +210,7 @@ export async function writeToCache(sourcePath: string, mediaId: string): Promise
   });
 
   try {
-    await pipeline(src, countBytes, cipher, dest);
+    await pipeline(src, countBytes, cipher, dest, ...(signal ? [{ signal }] : []));
     await fsp.rename(tmpPath, cachePath);
     fileInfoCache.set(mediaId, { cachePath, plaintextSize, iv });
   } catch (err) {
@@ -213,6 +218,11 @@ export async function writeToCache(sourcePath: string, mediaId: string): Promise
     await fsp.unlink(tmpPath).catch(() => undefined);
     throw err;
   }
+}
+
+/** Convenience opener for local filesystem sources. */
+export function localSource(sourcePath: string): () => Readable {
+  return () => fs.createReadStream(sourcePath);
 }
 
 /**
