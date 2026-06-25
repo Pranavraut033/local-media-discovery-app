@@ -42,6 +42,7 @@
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
     "@types/fluent-ffmpeg": "^2.1.28",
+    "@types/js-yaml": "^4.0.9",
     "@types/mime-types": "^3.0.1",
     "@types/node": "^25.0.9",
     "drizzle-kit": "^0.31.4",

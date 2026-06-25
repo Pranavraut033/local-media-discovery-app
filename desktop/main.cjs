@@ -1,5 +1,6 @@
 const { app, BrowserWindow, ipcMain, dialog, safeStorage } = require('electron');
 const path = require('path');
+
 const fs = require('fs');
 const fsp = require('fs/promises');
 const http = require('http');
@@ -10,6 +11,9 @@ const { spawn } = require('child_process');
 const BACKEND_PORT = 3001;
 const MEDIA_SERVER_PORT = 3002;
 const FRONTEND_PORT = 3000;
+
+// ponytail: skip build in dev, use tsx watch + next dev directly
+const IS_DEV = process.env.ELECTRON_DEV === '1';
 
 /** @type {BrowserWindow | null} */
 let mainWindow = null;
@@ -260,30 +264,37 @@ async function loadOrCreateSecrets(runtimeDir) {
 }
 
 async function startBackend() {
-  const backendScript = getAppCodePath('backend', 'dist', 'index.js');
   const cfg = runtimeState.startupConfig;
-  const nodeRuntime = getNodeRuntime();
+  const backendDir = getAppCodePath('backend');
+  const nodeRuntime = IS_DEV ? { env: {} } : getNodeRuntime();
+  const [spawnCmd, spawnArgs, spawnCwd] = IS_DEV
+    ? [path.join(backendDir, 'node_modules', '.bin', 'tsx'), ['watch', 'src/index.ts'], backendDir]
+    : [nodeRuntime.command, [getAppCodePath('backend', 'dist', 'index.js')], getAppCodePath('backend', 'dist')];
 
   for (let attempt = 0; attempt < 4; attempt += 1) {
     const backendPort = runtimeState.ports.backend;
     let combinedOutput = '';
-    console.log(`Attempt ${attempt + 1}: starting backend on port ${backendPort} using ${nodeRuntime.command}`);
+    console.log(`Attempt ${attempt + 1}: starting backend on port ${backendPort}`);
 
-    backendProcess = spawn(nodeRuntime.command, [backendScript], {
+    backendProcess = spawn(spawnCmd, spawnArgs, {
       env: {
         ...process.env,
         ...nodeRuntime.env,
-        NODE_ENV: 'production',
+        NODE_ENV: IS_DEV ? 'development' : 'production',
         PORT: String(backendPort),
         JWT_SECRET: cfg.jwtSecret,
         MEDIA_SERVER_SECRET: cfg.mediaServerSecret,
         DB_PATH: cfg.dbPath,
         RCLONE_CONFIG: cfg.rcloneConfigPath,
       },
-      cwd: path.dirname(backendScript),
+      cwd: spawnCwd,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 
+    backendProcess.on('error', (err) => {
+      console.error('Backend spawn error:', err);
+    });
+    
     backendProcess.stdout?.on('data', (chunk) => {
       combinedOutput += chunk.toString();
     });
@@ -318,27 +329,33 @@ async function startBackend() {
 }
 
 async function startMediaServer() {
-  const mediaScript = getAppCodePath('media-server', 'dist', 'index.js');
   const cfg = runtimeState.startupConfig;
-  const nodeRuntime = getNodeRuntime();
+  const mediaDir = getAppCodePath('media-server');
+  const nodeRuntime = IS_DEV ? { env: {} } : getNodeRuntime();
+  const [spawnCmd, spawnArgs, spawnCwd] = IS_DEV
+    ? [path.join(mediaDir, 'node_modules', '.bin', 'tsx'), ['watch', 'src/index.ts'], mediaDir]
+    : [nodeRuntime.command, [getAppCodePath('media-server', 'dist', 'index.js')], getAppCodePath('media-server', 'dist')];
 
   for (let attempt = 0; attempt < 4; attempt += 1) {
     const mediaServerPort = runtimeState.ports.mediaServer;
     let combinedOutput = '';
-    console.log(`Attempt ${attempt + 1}: starting media-server on port ${mediaServerPort} using ${nodeRuntime.command}`);
+    console.log(`Attempt ${attempt + 1}: starting media-server on port ${mediaServerPort}`);
 
-    mediaServerProcess = spawn(nodeRuntime.command, [mediaScript], {
+    mediaServerProcess = spawn(spawnCmd, spawnArgs, {
       env: {
         ...process.env,
         ...nodeRuntime.env,
-        NODE_ENV: 'production',
+        NODE_ENV: IS_DEV ? 'development' : 'production',
         PORT: String(mediaServerPort),
         MEDIA_SERVER_SECRET: cfg.mediaServerSecret,
         CACHE_DIR: path.join(cfg.runtimeDir, 'media-cache'),
         KEYFILE_PATH: path.join(cfg.runtimeDir, '.media-server-key'),
         RCLONE_CONFIG: cfg.rcloneConfigPath,
+        // Backend may have been bumped off its preferred port (EADDRINUSE) —
+        // media-server's internal /connection lookup needs the real port, not its 3001 default.
+        BACKEND_INTERNAL_URL: `http://127.0.0.1:${runtimeState.ports.backend}`,
       },
-      cwd: path.dirname(mediaScript),
+      cwd: spawnCwd,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 
@@ -376,6 +393,30 @@ async function startMediaServer() {
 }
 
 async function startFrontendServer() {
+  if (IS_DEV) {
+    const frontendDir = getAppCodePath('frontend');
+    const nextBin = path.join(frontendDir, 'node_modules', '.bin', 'next');
+    const devPort = runtimeState.ports.frontend;
+    console.log(`Dev mode: starting next dev on port ${devPort}`);
+    // ponytail: frontendServer stays null in dev; cleanup in shutdownChildren handles the next dev process via backendProcess/mediaServerProcess list
+    const nextProc = spawn(nextBin, ['dev', '-H', '127.0.0.1', '-p', String(devPort)], {
+      cwd: frontendDir,
+      env: { ...process.env, NODE_ENV: 'development' },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    pipeChildLogs('frontend', nextProc);
+    nextProc.on('exit', (code, signal) => {
+      if (!isQuitting) {
+        dialog.showErrorBox('Frontend stopped', `next dev exited (code=${code}, signal=${signal || 'none'}).`);
+        app.quit();
+      }
+    });
+    // reuse the frontendServer slot so shutdownChildren can kill it
+    frontendServer = /** @type {any} */ (nextProc);
+    await waitForHealth(`http://127.0.0.1:${devPort}`, 60000);
+    return;
+  }
+
   const frontendDir = getAppCodePath('frontend', 'out');
   const frontendPort = runtimeState.ports.frontend;
 
@@ -490,7 +531,11 @@ async function shutdownChildren() {
   mediaServerProcess = null;
 
   if (frontendServer) {
-    await new Promise((resolve) => frontendServer.close(() => resolve()));
+    if (IS_DEV) {
+      frontendServer.kill('SIGTERM');
+    } else {
+      await new Promise((resolve) => frontendServer.close(() => resolve()));
+    }
     frontendServer = null;
   }
 }
