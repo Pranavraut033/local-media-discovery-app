@@ -58,7 +58,9 @@ export default async function prefetchRoute(fastify: FastifyInstance): Promise<v
           continue;
         }
 
-        const isRemote = storageMode === 'rclone' || storageMode === 'webdav';
+        // rclone-mode files are read from the FUSE mount, same as local files —
+        // only webdav (no mount) needs the live remote-fetch path here.
+        const isRemote = storageMode === 'webdav';
         const priority = i < NEAR_WINDOW ? DownloadPriority.NEAR : DownloadPriority.FAR;
 
         if (isRemote && serverId && remotePath) {

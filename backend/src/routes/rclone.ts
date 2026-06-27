@@ -18,7 +18,9 @@ import {
   scanRemoteForMedia,
 } from '../services/rclone.js';
 import { enqueueIndexingJob } from '../queue/index.js';
-import { rcloneMountService } from '../services/rclone-mount.js';
+import { rcloneMountManager } from '../services/rclone-mount.js';
+import { getServerById } from '../services/remote/servers-db.js';
+import { mountRemoteFor } from './servers.js';
 
 interface AddRcloneSourceBody {
   remote_name: string;
@@ -61,7 +63,6 @@ interface FolderRecord {
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const mountDir = path.join(process.env.HOME || '', 'hetzner_mount');
 
 function runCommand(command: string, args: string[], cwd?: string): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
@@ -74,13 +75,6 @@ function runCommand(command: string, args: string[], cwd?: string): Promise<{ st
     });
   });
 }
-
-// Kept for use in non-mount route helpers below
-async function isMountActive(): Promise<boolean> {
-  return rcloneMountService.isMounted();
-}
-
-
 
 function normalizeSegment(input: string): string {
   return input.trim().replace(/^\/+|\/+$/g, '');
@@ -245,27 +239,45 @@ export default async function rcloneRoutes(fastify: FastifyInstance): Promise<vo
     console.warn('rclone is not installed or not in PATH. Rclone features will be limited.');
   }
 
-  fastify.get('/api/rclone/mount/status', async (_request: FastifyRequest, reply: FastifyReply) => {
-    const mounted = await rcloneMountService.isMounted();
-    rcloneMountService.recordActivity();
+  fastify.get<{ Querystring: { serverId?: string } }>(
+    '/api/rclone/mount/status',
+    async (request, reply: FastifyReply) => {
+      const { serverId } = request.query;
+      if (!serverId) return reply.code(400).send({ error: 'serverId is required' });
 
-    return reply.send({
-      mounted,
-      mountDir,
-      status: mounted ? 'mounted' : 'unmounted',
-    });
-  });
+      const mounted = await rcloneMountManager.isMounted(serverId);
+      rcloneMountManager.recordActivity(serverId);
 
-  fastify.post('/api/rclone/mount/ensure', async (_request: FastifyRequest, reply: FastifyReply) => {
-    rcloneMountService.recordActivity();
-    const result = await rcloneMountService.ensureRunning();
-
-    if (result.status === 'error') {
-      return reply.code(500).send(result);
+      return reply.send({
+        mounted,
+        mountDir: rcloneMountManager.getMountDir(serverId),
+        status: mounted ? 'mounted' : 'unmounted',
+      });
     }
+  );
 
-    return reply.send(result);
-  });
+  fastify.post<{ Querystring: { serverId?: string } }>(
+    '/api/rclone/mount/ensure',
+    async (request, reply: FastifyReply) => {
+      const { serverId } = request.query;
+      if (!serverId) return reply.code(400).send({ error: 'serverId is required' });
+
+      const db = getDatabase();
+      const server = getServerById(db, serverId);
+      if (!server || server.serverType !== 'rclone') {
+        return reply.code(404).send({ error: 'rclone server not found' });
+      }
+
+      rcloneMountManager.recordActivity(serverId);
+      const result = await rcloneMountManager.ensureRunning(serverId, mountRemoteFor(server.connection));
+
+      if (result.status === 'error') {
+        return reply.code(500).send(result);
+      }
+
+      return reply.send(result);
+    }
+  );
 
   fastify.get(
     '/api/rclone/remotes',

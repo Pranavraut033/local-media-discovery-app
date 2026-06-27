@@ -164,6 +164,9 @@ export function createDecryptRangeStream(info: CachedFileInfo, start: number, en
   const fileEnd = 16 + end; // inclusive
 
   const fileStream = fs.createReadStream(info.cachePath, { start: fileStart, end: fileEnd });
+  // ponytail: .pipe() doesn't forward 'error' to its destination — without this,
+  // a read failure on the cache file crashes the whole process (unhandled 'error').
+  fileStream.on('error', (err) => decipher.destroy(err));
 
   if (alignOffset === 0) {
     fileStream.pipe(decipher);
@@ -222,7 +225,15 @@ export async function writeToCache(
 
 /** Convenience opener for local filesystem sources. */
 export function localSource(sourcePath: string): () => Readable {
-  return () => fs.createReadStream(sourcePath);
+  return () => {
+    const stream = fs.createReadStream(sourcePath);
+    // ponytail: rclone's VFS can list a file via stat() but fail to open it (stale
+    // listing). A no-op listener here just prevents the unhandled-'error' process
+    // crash if that fires before writeToCache's pipeline() attaches its own —
+    // pipeline still sees the error and propagates/cleans up normally.
+    stream.on('error', () => undefined);
+    return stream;
+  };
 }
 
 /**

@@ -7,8 +7,9 @@
  *  1. Verify the stream token (HMAC-SHA256, signed by the backend).
  *  2. If the file is cached on SSD: decrypt and serve the requested range.
  *  3. If NOT cached:
- *     - Local: stream directly from the filesystem path (POSIX file read).
- *     - Remote (rclone/webdav): fetch range from rcd / WebDAV server directly.
+ *     - Local, and rclone-mode remote (read from its FUSE mount): stream
+ *       directly from the filesystem path (POSIX file read).
+ *     - Webdav-without-rclone: fetch range from the WebDAV server directly.
  *
  * Live requests are never queued — users always get data immediately.
  * Background prefetch fills the cache so next request is served from SSD.
@@ -102,7 +103,10 @@ export default async function streamRoute(fastify: FastifyInstance): Promise<voi
 
       const { mediaId, path: mountPath, ext, type, storageMode, serverId, remotePath } = payload;
       const contentType = MIME_MAP[ext] || 'application/octet-stream';
-      const isRemote = storageMode === 'rclone' || storageMode === 'webdav';
+      // rclone-mode files are read from the FUSE mount via the local-file branch below
+      // (their `path` is already the resolved mount path) — only webdav (no mount)
+      // needs the live remote-fetch path here.
+      const isRemote = storageMode === 'webdav';
 
       // ── 1. Try cached path first ──────────────────────────────────────────
       const cached = await getCachedFileInfo(mediaId);
@@ -151,8 +155,9 @@ export default async function streamRoute(fastify: FastifyInstance): Promise<voi
       // ── 2. Not cached ─────────────────────────────────────────────────────
 
       if (isRemote && serverId && remotePath) {
-        // Remote file: ranged fetch from rcd / WebDAV.
-        // rcd (--rc-serve) and WebDAV both support Range natively.
+        // Remote file (webdav-without-rclone only — rclone-mode reaches the
+        // local-file branch below instead): ranged fetch over HTTP, which
+        // supports Range natively.
         //
         // The remote can't serve many concurrent live ranges, so this request
         // holds a "live lane" (pausing background cache-fills) for as long as

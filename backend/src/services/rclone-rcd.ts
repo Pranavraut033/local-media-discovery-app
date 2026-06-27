@@ -1,9 +1,11 @@
 /**
- * rclone rcd sidecar — one local daemon serves all remotes via HTTP.
- * Uses `rclone rcd --rc-serve` so file bytes are range-capable over HTTP.
- * Replaces the FUSE mount as the default remote transport.
+ * rclone rcd sidecar — one local daemon backs directory listing, thumbnail
+ * generation, and remote_servers config (create/update/delete) for every
+ * configured remote via its rc control-plane API.
  *
- * ponytail: mount kept as fallback behind RCLONE_USE_MOUNT=1, delete once rcd proven.
+ * File streaming does NOT go through this daemon — rclone-type remotes are
+ * read straight from their FUSE mount (see rclone-mount.ts); only
+ * webdav-without-rclone remotes do a live HTTP fetch (fetcher.ts).
  */
 import { spawn, type ChildProcess } from 'child_process';
 import fs from 'fs';
@@ -82,6 +84,18 @@ class RcdClient {
     catch { return false; }
   }
 
+  /** True if this rcd's active config file matches the given path. */
+  async usesConfig(configPath: string): Promise<boolean> {
+    try {
+      const res = await this.ax.post('/config/paths', {});
+      return path.resolve(res.data?.config ?? '') === path.resolve(configPath);
+    } catch { return false; }
+  }
+
+  async quit(): Promise<void> {
+    await this.ax.post('/core/quit', {});
+  }
+
   /** List one directory level. fsStr = "remote:", remote = "sub/path" */
   async listDir(fsStr: string, remote: string): Promise<RcdListItem[]> {
     const res = await this.ax.post('/operations/list', { fs: fsStr, remote });
@@ -119,54 +133,6 @@ class RcdClient {
     }
   }
 
-  /**
-   * Returns the URL for ranged-GET file access via --rc-serve.
-   * The media-server uses this to fetch bytes without going through the rc API.
-   * rclone's rc-serve route matches the literal pattern `[fsname]remotepath`
-   * (brackets included) — `fsname:remotepath` concatenated without brackets
-   * never matches the route regex and 404s, even though the fs/remote split
-   * is identical to what /operations/list accepts.
-   */
-  serveUrl(absolutePath: string): string {
-    const { fs, remote } = splitFsRemote(normalizeRclonePath(absolutePath));
-    return `${RC_URL}/${encodeURI(`[${fs}]${remote}`)}`;
-  }
-
-  /** Fetch a whole file's bytes via --rc-serve. Used by the backend's own thumbnail generator. */
-  async fetchFile(absolutePath: string): Promise<Buffer> {
-    const { fs, remote } = splitFsRemote(normalizeRclonePath(absolutePath));
-    const url = `/${encodeURI(`[${fs}]${remote}`)}`;
-    // ponytail: rcd can crash mid-request and self-restart (~7s worst case, see
-    // startRcd's exit handler below). Retry through that window rather than
-    // failing every thumbnail the moment it happens.
-    const RETRY_DELAYS_MS = [1500, 3000, 4000];
-    for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
-      try {
-        const res = await this.ax.get(url, { responseType: 'arraybuffer' });
-        return Buffer.from(res.data as ArrayBuffer);
-      } catch (err: any) {
-        const isConnRefused = err?.code === 'ECONNREFUSED' || err?.cause?.code === 'ECONNREFUSED';
-        if (!isConnRefused || attempt === RETRY_DELAYS_MS.length) throw err;
-        await new Promise((r) => setTimeout(r, RETRY_DELAYS_MS[attempt]));
-      }
-    }
-    throw new Error('unreachable');
-  }
-}
-
-function splitFsRemote(absolutePath: string): { fs: string; remote: string } {
-  const colonIdx = absolutePath.indexOf(':');
-  return {
-    fs: absolutePath.slice(0, colonIdx + 1),
-    remote: absolutePath.slice(colonIdx + 1),
-  };
-}
-
-// Some rclone crypt configs report a literal "." root segment (their `remote =`
-// param ends in a bare dot, e.g. "Base:."), which leaks into decrypted listing
-// paths as "remote:./sub/path" — not a valid rcd serve path. Strip it.
-function normalizeRclonePath(p: string): string {
-  return p.replace(/^([^:]+:)\.\/?/, '$1');
 }
 
 async function walkRecursive(client: RcdClient, fsStr: string, remote: string): Promise<RcdListItem[]> {
@@ -189,19 +155,23 @@ export function getRcdClient(): RcdClient | null {
 }
 
 export async function startRcd(): Promise<void> {
-  if (process.env.RCLONE_USE_MOUNT === '1') {
-    console.log('[rcd] RCLONE_USE_MOUNT=1: skipping rcd sidecar (using FUSE mount)');
-    return;
-  }
-
   // A previous dev session (or a crashed/killed Electron run) can leave an
   // orphaned `rclone rcd` bound to RC_PORT. Spawning another one just loops
   // forever on EADDRINUSE — ping first and adopt it instead of spawning.
+  // But only adopt it if it's serving the SAME config this run expects —
+  // otherwise remotes configured under the old rcd (e.g. a stale dev config)
+  // silently don't exist for mounts spawned with this run's RCLONE_CONFIG,
+  // and a "didn't find section in config file" mount failure follows.
   const existing = new RcdClient();
   if (await existing.ping()) {
-    console.log('[rcd] reusing already-running rcd on', RC_URL);
-    _client = existing;
-    return;
+    const sameConfig = !process.env.RCLONE_CONFIG || (await existing.usesConfig(process.env.RCLONE_CONFIG));
+    if (sameConfig) {
+      console.log('[rcd] reusing already-running rcd on', RC_URL);
+      _client = existing;
+      return;
+    }
+    console.warn('[rcd] orphaned rcd on', RC_URL, 'uses a different config — killing it to start fresh');
+    await existing.quit().catch(() => undefined);
   }
 
   let bin: string;
@@ -215,7 +185,6 @@ export async function startRcd(): Promise<void> {
     `--rc-addr=127.0.0.1:${RC_PORT}`,
     `--rc-user=${RC_USER}`,
     `--rc-pass=${RC_PASS}`,
-    '--rc-serve',   // enables GET /[remote:path] for ranged file access
     '--log-level=WARNING',
     // ponytail: no --read-only here — rcd doesn't mount a VFS, so that flag (mount/serve-only)
     // is rejected and crashes the daemon on every start. Read-only is enforced by app code only

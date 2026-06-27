@@ -26,13 +26,10 @@ export const config = {
   // 5% is plenty when only 3 items are pre-cached at a time; raise via env var if desired.
   cacheFreeSpacePercent: parseFloat(process.env.CACHE_FREE_SPACE_PERCENT || '0.05'),
   // Max concurrent background cache-fill downloads from the mount.
-  // ponytail: 1, not 3 — concurrent remote reads are the actual bottleneck
-  // (rcd/WebDAV can't serve them in parallel); sequential fills are proven fine.
+  // ponytail: 1, not 3 — concurrent live WebDAV reads are the actual bottleneck
+  // (rclone-mode remotes go through the FUSE mount's own VFS cache instead);
+  // sequential fills are proven fine.
   downloadConcurrency: parseInt(process.env.DOWNLOAD_CONCURRENCY || '1', 10),
-  // rclone rcd sidecar — for ranged GET of remote files without a FUSE mount.
-  rcloneRcUrl: process.env.RCLONE_RC_URL || 'http://127.0.0.1:5574',
-  rcloneRcUser: process.env.RCLONE_RC_USER || 'local-media',
-  rcloneRcPass: process.env.RCLONE_RC_PASS || 'local-media-rcd-pass',
   // Internal backend URL for decrypting server credentials.
   backendInternalUrl: process.env.BACKEND_INTERNAL_URL || 'http://127.0.0.1:3001',
   // Warning if running with the default insecure secret.

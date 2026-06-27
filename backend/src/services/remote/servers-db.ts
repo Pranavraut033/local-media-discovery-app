@@ -35,6 +35,16 @@ export function listServers(db: Database.Database, userId: string): Omit<RemoteS
   }));
 }
 
+/** All rclone-type servers across all users — used to bring up mounts on backend startup. */
+export function listAllRcloneServers(db: Database.Database): RemoteServer[] {
+  const rows = db.prepare(
+    `SELECT * FROM remote_servers WHERE server_type = 'rclone'`
+  ).all() as RemoteServerRow[];
+  return rows
+    .map((r) => rowToServer(r, r.user_id))
+    .filter((s): s is RemoteServer => s !== null);
+}
+
 export function getServer(db: Database.Database, id: string, userId: string): RemoteServer | null {
   const row = db.prepare(
     `SELECT * FROM remote_servers WHERE id = ? AND user_id = ?`

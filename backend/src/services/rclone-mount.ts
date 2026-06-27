@@ -1,18 +1,20 @@
 /**
- * RcloneMountService — manages the rclone FUSE mount lifecycle entirely inside the backend process.
+ * RcloneMountService — manages one rclone FUSE mount per remote_servers row.
  *
- * Design:
+ * Design (per-server instance, generalized from a former single-remote singleton):
  *  - Spawns `rclone mount` detached ourselves (no `--daemon`) and tracks the child pid directly —
  *    rclone's own --daemon self-fork is flaky on macOS even when the identical foreground mount works.
- *  - The real FUSE mountpoint is $HOME/.rclone-mounts/hetzner — a stable, user-owned directory
- *    that is never cleaned by macOS periodic scripts (unlike /tmp) and survives reboots.
- *  - ~/hetzner_mount is kept as a symlink pointing at that dir for compatibility.
+ *  - Each server gets its own mountpoint at $HOME/.rclone-mounts/<serverId> — a stable,
+ *    user-owned directory that is never cleaned by macOS periodic scripts (unlike /tmp) and
+ *    survives reboots.
  *  - If macFUSE refuses to release the preferred dir (stale lock), a timestamped sibling
- *    (~/.rclone-mounts/hetzner_<epoch>) is used as fallback and the symlink is updated.
+ *    (~/.rclone-mounts/<serverId>_<epoch>) is used as fallback.
  *    Old stale sibling dirs are cleaned up when stop() runs.
  *  - Activity is tracked via recordActivity(); any rclone API call should invoke it.
  *  - An inactivity watcher fires every 60 s and calls stop() after 10 min of silence.
  *  - stop() uses `umount -f` (macOS) / `fusermount -u` (Linux) which causes the daemon to exit.
+ *  - rcloneMountManager (bottom of file) is the public surface — it owns one instance per
+ *    serverId and is what the rest of the backend should import.
  */
 
 import { execFile, execFileSync, execSync, spawn } from 'child_process';
@@ -24,8 +26,6 @@ import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-
-const REMOTE = 'hetzner-crypt:/';
 
 function getBundledRclonePath(): string | null {
   const resourcesPath = (process as any).resourcesPath || '';
@@ -95,27 +95,8 @@ function getRclonePath(): string | null {
   return getBundledRclonePath() ?? getSystemRclonePath();
 }
 
-function isRcloneAvailable(): boolean {
-  const binary = getRclonePath();
-  if (!binary) return false;
-
-  try {
-    execFileSync(binary, ['version'], { stdio: 'ignore' });
-    return true;
-  } catch {
-    return false;
-  }
-}
-const MOUNT_BASE = path.join(os.homedir(), '.rclone-mounts', 'hetzner');
 const MOUNTS_DIR = path.join(os.homedir(), '.rclone-mounts');
-const SYMLINK_PATH = path.join(os.homedir(), 'hetzner_mount');
-// Cross-process ownership lock. The mount is a host-global singleton (one FUSE
-// mountpoint, one symlink), so only ONE backend process may manage its lifecycle.
-// A second instance (e.g. a PM2 stack running alongside the desktop app) adopts
-// the live mount read-only instead of mounting/unmounting/pkilling it — which is
-// what previously made two backends force-unmount each other into a stale mount.
-const OWNER_LOCK_PATH = path.join(MOUNTS_DIR, '.owner.lock');
-const CACHE_DIR = process.env.RCLONE_CACHE_DIR ?? path.join(os.homedir(), 'rclone-cache');
+const RCLONE_CACHE_BASE = process.env.RCLONE_CACHE_DIR ?? path.join(os.homedir(), 'rclone-cache');
 
 const INACTIVITY_MS = 10 * 60 * 1000; // 10 minutes
 const CHECK_INTERVAL_MS = 60 * 1000; // check every 60 s
@@ -175,7 +156,15 @@ export interface MountResult {
   mountDir: string;
 }
 
+/** Manages the FUSE mount lifecycle for a single remote_servers row. */
 class RcloneMountService {
+  private readonly serverId: string;
+  private readonly remote: string;
+  private readonly mountBase: string;
+  private readonly ownerLockPath: string;
+  private readonly cacheDir: string;
+  private readonly siblingPrefix: RegExp;
+
   private lastActivityAt = 0;
   private watcherTimer: ReturnType<typeof setInterval> | null = null;
   private starting = false;
@@ -185,11 +174,31 @@ class RcloneMountService {
   /** PID of the rclone daemon this process started, so teardown kills only our own daemon. */
   private ownedDaemonPid: number | null = null;
   /** The directory that is currently (or was last) mounted. Starts as the preferred base. */
-  private activeMountDir = MOUNT_BASE;
+  private activeMountDir: string;
   /** Cache: { result, expiresAt } — avoids running `mount` on every API call. */
   private mountCache: { result: boolean; expiresAt: number } | null = null;
   /** In-flight `mount` call — all concurrent callers share the same subprocess. */
   private mountInFlight: Promise<string> | null = null;
+
+  constructor(serverId: string, remote: string) {
+    this.serverId = serverId;
+    this.remote = remote;
+    this.mountBase = path.join(MOUNTS_DIR, serverId);
+    this.activeMountDir = this.mountBase;
+    this.ownerLockPath = path.join(MOUNTS_DIR, `.owner-${serverId}.lock`);
+    this.cacheDir = path.join(RCLONE_CACHE_BASE, serverId);
+    this.siblingPrefix = new RegExp(`^${serverId}_\\d+$`);
+  }
+
+  /**
+   * Directory other code should read mounted files from. Usually `mountBase`,
+   * but if a busy-retry fell back to a timestamped sibling dir, that's the one
+   * actually mounted — report it instead so token/thumbnail path resolution
+   * doesn't point at an empty directory.
+   */
+  getMountDir(): string {
+    return this.activeMountDir;
+  }
 
   /**
    * Execute a subprocess with a hard timeout so calls cannot block forever.
@@ -246,7 +255,7 @@ class RcloneMountService {
   /** Read the owning PID from the lockfile, or null if absent/unparseable. */
   private readLockOwner(): number | null {
     try {
-      const raw = fs.readFileSync(OWNER_LOCK_PATH, 'utf8');
+      const raw = fs.readFileSync(this.ownerLockPath, 'utf8');
       const pid = JSON.parse(raw)?.pid;
       return Number.isInteger(pid) ? pid : null;
     } catch {
@@ -270,14 +279,14 @@ class RcloneMountService {
 
     for (let attempt = 0; attempt < 3; attempt += 1) {
       try {
-        const fd = fs.openSync(OWNER_LOCK_PATH, 'wx');
+        const fd = fs.openSync(this.ownerLockPath, 'wx');
         fs.writeSync(fd, JSON.stringify({ pid: process.pid, startedAt: Date.now() }));
         fs.closeSync(fd);
         this.isOwner = true;
         return true;
       } catch (err) {
         if ((err as NodeJS.ErrnoException)?.code !== 'EEXIST') {
-          console.warn('[rclone-mount] Could not write ownership lock:', err);
+          console.warn(`[rclone-mount:${this.serverId}] Could not write ownership lock:`, err);
           return false;
         }
 
@@ -291,9 +300,9 @@ class RcloneMountService {
         }
 
         // Stale lock (owner is dead) — reclaim it and retry the create.
-        console.warn(`[rclone-mount] Reclaiming stale ownership lock (dead pid ${owner ?? 'unknown'}).`);
+        console.warn(`[rclone-mount:${this.serverId}] Reclaiming stale ownership lock (dead pid ${owner ?? 'unknown'}).`);
         try {
-          fs.unlinkSync(OWNER_LOCK_PATH);
+          fs.unlinkSync(this.ownerLockPath);
         } catch {
           // lost the race to another reclaimer — loop and re-check
         }
@@ -308,7 +317,7 @@ class RcloneMountService {
     if (!this.isOwner) return;
     if (this.readLockOwner() === process.pid) {
       try {
-        fs.unlinkSync(OWNER_LOCK_PATH);
+        fs.unlinkSync(this.ownerLockPath);
       } catch {
         // already gone
       }
@@ -319,7 +328,7 @@ class RcloneMountService {
   /** Find the rclone daemon PID serving a specific mount dir (so we kill only our own). */
   private async findDaemonPid(dir: string): Promise<number | null> {
     try {
-      const out = await this.execWithTimeout('pgrep', ['-f', `rclone mount ${REMOTE} ${dir}`], COMMAND_TIMEOUT_MS);
+      const out = await this.execWithTimeout('pgrep', ['-f', `rclone mount ${this.remote} ${dir}`], COMMAND_TIMEOUT_MS);
       const pid = parseInt(out.trim().split('\n')[0], 10);
       return Number.isInteger(pid) ? pid : null;
     } catch {
@@ -387,10 +396,10 @@ class RcloneMountService {
       // Only the owning instance may force-unmount. A non-owner leaves the mount
       // alone (the owner's own self-heal / inactivity watcher will handle it).
       if (this.isOwner) {
-        console.warn(`[rclone-mount] Detected stale mountpoint at ${this.activeMountDir} — force-unmounting to self-heal.`);
+        console.warn(`[rclone-mount:${this.serverId}] Detected stale mountpoint at ${this.activeMountDir} — force-unmounting to self-heal.`);
         await this.unmountAndKill();
       } else {
-        console.warn(`[rclone-mount] Mountpoint at ${this.activeMountDir} looks stale but this instance does not own it — not touching it.`);
+        console.warn(`[rclone-mount:${this.serverId}] Mountpoint at ${this.activeMountDir} looks stale but this instance does not own it — not touching it.`);
       }
       this.mountCache = { result: false, expiresAt: Date.now() + MOUNT_CACHE_TTL_MS };
       return false;
@@ -417,7 +426,7 @@ class RcloneMountService {
     const status = await this.isMountpointActive(dir);
     if (status === 'active') return true;
     if (status === 'stale') {
-      console.warn(`[rclone-mount] Detected stale mountpoint at ${dir} — force-unmounting to self-heal.`);
+      console.warn(`[rclone-mount:${this.serverId}] Detected stale mountpoint at ${dir} — force-unmounting to self-heal.`);
       await this.unmountDir(dir);
       this.invalidateCache();
       return false;
@@ -477,16 +486,16 @@ class RcloneMountService {
 
   /**
    * Resolve which directory to mount into.
-   * Prefers MOUNT_BASE; falls back to a timestamped sibling if macFUSE still holds MOUNT_BASE.
+   * Prefers mountBase; falls back to a timestamped sibling if macFUSE still holds mountBase.
    */
   private async resolveMountDir(): Promise<string> {
     // If the base dir is not stuck, always prefer it
-    if (!(await this.isDirStillMounted(MOUNT_BASE))) {
-      return MOUNT_BASE;
+    if (!(await this.isDirStillMounted(this.mountBase))) {
+      return this.mountBase;
     }
-    // macFUSE still has MOUNT_BASE locked — pick a fresh sibling to avoid "Resource busy"
-    const fallback = `${MOUNT_BASE}_${Date.now()}`;
-    console.warn(`[rclone-mount] ${MOUNT_BASE} is stale-locked by macFUSE — falling back to ${fallback}`);
+    // macFUSE still has mountBase locked — pick a fresh sibling to avoid "Resource busy"
+    const fallback = `${this.mountBase}_${Date.now()}`;
+    console.warn(`[rclone-mount:${this.serverId}] ${this.mountBase} is stale-locked by macFUSE — falling back to ${fallback}`);
     return fallback;
   }
 
@@ -495,8 +504,7 @@ class RcloneMountService {
     try {
       const entries = fs.readdirSync(MOUNTS_DIR);
       for (const entry of entries) {
-        // Match hetzner_<digits> pattern — these are old fallback dirs
-        if (!/^hetzner_\d+$/.test(entry)) continue;
+        if (!this.siblingPrefix.test(entry)) continue;
         const fullPath = path.join(MOUNTS_DIR, entry);
         if (await this.isDirStillMounted(fullPath)) continue; // still in use — skip
         try {
@@ -507,37 +515,6 @@ class RcloneMountService {
       }
     } catch {
       // MOUNTS_DIR may not exist yet
-    }
-  }
-
-  private updateSymlink(target: string): void {
-    try {
-      const stat = fs.lstatSync(SYMLINK_PATH);
-      if (stat.isSymbolicLink()) {
-        fs.unlinkSync(SYMLINK_PATH);
-      } else if (stat.isDirectory()) {
-        const entries = fs.readdirSync(SYMLINK_PATH);
-        if (entries.length === 0) {
-          fs.rmdirSync(SYMLINK_PATH);
-        } else {
-          const backupPath = `${SYMLINK_PATH}.backup-${Date.now()}`;
-          fs.renameSync(SYMLINK_PATH, backupPath);
-          console.warn(`[rclone-mount] Existing directory at ${SYMLINK_PATH} was moved to ${backupPath} so symlink can be created.`);
-        }
-      } else {
-        const backupPath = `${SYMLINK_PATH}.backup-${Date.now()}`;
-        fs.renameSync(SYMLINK_PATH, backupPath);
-        console.warn(`[rclone-mount] Existing file at ${SYMLINK_PATH} was moved to ${backupPath} so symlink can be created.`);
-      }
-    } catch {
-      // doesn't exist yet — no action needed
-    }
-
-    try {
-      fs.symlinkSync(target, SYMLINK_PATH);
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.warn(`[rclone-mount] Failed to create symlink ${SYMLINK_PATH} -> ${target}: ${msg}`);
     }
   }
 
@@ -552,7 +529,7 @@ class RcloneMountService {
       const idleMs = Date.now() - this.lastActivityAt;
       if (idleMs >= INACTIVITY_MS) {
         console.log(
-          `[rclone-mount] Inactivity timeout (${Math.round(idleMs / 1000)}s idle) — stopping mount`
+          `[rclone-mount:${this.serverId}] Inactivity timeout (${Math.round(idleMs / 1000)}s idle) — stopping mount`
         );
         await this.stop();
       }
@@ -568,26 +545,20 @@ class RcloneMountService {
     }
   }
 
-  /** Cleanly unmount and tear down the symlink. Safe to call even when not mounted. */
+  /** Cleanly unmount. Safe to call even when not mounted. */
   async stop(): Promise<void> {
     this.clearWatcher();
 
-    // Only the owner may unmount/kill and tear down the shared symlink. A non-owner
-    // just stops its watcher and drops its adopted reference.
+    // Only the owner may unmount/kill. A non-owner just stops its watcher and
+    // drops its adopted reference.
     if (this.isOwner) {
       await this.unmountAndKill();
       await this.cleanStaleSiblings();
-      try {
-        const stat = fs.lstatSync(SYMLINK_PATH);
-        if (stat.isSymbolicLink()) fs.unlinkSync(SYMLINK_PATH);
-      } catch {
-        // already gone
-      }
       this.releaseOwnership();
     }
 
-    this.activeMountDir = MOUNT_BASE; // reset for next mount attempt
-    console.log('[rclone-mount] Mount stopped.');
+    this.activeMountDir = this.mountBase; // reset for next mount attempt
+    console.log(`[rclone-mount:${this.serverId}] Mount stopped.`);
   }
 
   /**
@@ -603,10 +574,9 @@ class RcloneMountService {
       this.recordActivity();
       if (this.isOwner) {
         this.invalidateCache();
-        this.updateSymlink(this.activeMountDir);
         this.startInactivityWatcher();
       }
-      return { mounted: true, status: 'mounted', message: 'rclone mount is ready', mountDir: SYMLINK_PATH };
+      return { mounted: true, status: 'mounted', message: 'rclone mount is ready', mountDir: this.activeMountDir };
     }
 
     // Not mounted. Only the owner may bring it up; a second instance waits.
@@ -615,13 +585,13 @@ class RcloneMountService {
         mounted: false,
         status: 'mounting',
         message: 'another instance is bringing up the rclone mount',
-        mountDir: SYMLINK_PATH,
+        mountDir: this.activeMountDir,
       };
     }
 
     if (this.starting) {
       if (this.startingSince && (Date.now() - this.startingSince) > START_GUARD_TIMEOUT_MS) {
-        console.warn('[rclone-mount] Previous startup attempt appears stuck; resetting start guard and retrying.');
+        console.warn(`[rclone-mount:${this.serverId}] Previous startup attempt appears stuck; resetting start guard and retrying.`);
         this.starting = false;
         this.startingSince = null;
       }
@@ -633,12 +603,11 @@ class RcloneMountService {
           this.starting = false;
           this.startingSince = null;
           this.invalidateCache();
-          this.updateSymlink(this.activeMountDir);
           this.recordActivity();
           this.startInactivityWatcher();
-          return { mounted: true, status: 'mounted', message: 'rclone mount is ready', mountDir: SYMLINK_PATH };
+          return { mounted: true, status: 'mounted', message: 'rclone mount is ready', mountDir: this.activeMountDir };
         }
-        return { mounted: false, status: 'mounting', message: 'rclone mount is already starting', mountDir: SYMLINK_PATH };
+        return { mounted: false, status: 'mounting', message: 'rclone mount is already starting', mountDir: this.activeMountDir };
       }
     }
 
@@ -649,95 +618,135 @@ class RcloneMountService {
       await this.unmountAndKill();
       await new Promise<void>((r) => setTimeout(r, 500));
 
-      // If macFUSE still holds the preferred dir, fall back to a timestamped sibling
-      const mountDir = await this.resolveMountDir();
-      this.activeMountDir = mountDir;
-      fs.mkdirSync(mountDir, { recursive: true });
-
       const rcloneBinary = getRclonePath();
       if (!rcloneBinary) {
         return {
           mounted: false,
           status: 'error',
           message: 'rclone binary not found. Install rclone or add it to PATH.',
-          mountDir: SYMLINK_PATH,
+          mountDir: this.activeMountDir,
         };
       }
 
-      console.log(`[rclone-mount] Launching rclone daemon: ${rcloneBinary} ${REMOTE} → ${mountDir}`);
+      // If macFUSE still holds the preferred dir, fall back to a timestamped sibling.
+      // mount_macfuse can also report "Resource busy" on the underlying /dev/macfuseN
+      // device on a dir that LOOKS free (a previous crashed daemon hadn't released it
+      // yet) — spawnAndWait() detects that case and we retry with a fresh sibling dir
+      // a few more times rather than giving up on the very first attempt.
+      let mountDir = await this.resolveMountDir();
+      const MAX_BUSY_RETRIES = 3;
 
-      // ponytail: rclone's own --daemon self-fork is flaky on macOS (observed: "Daemon timed out",
-      // exits with code 1) even though the identical mount succeeds in the foreground. Spawn it
-      // ourselves detached instead and track the child pid directly — same pattern as rclone-rcd.ts.
-      const child = spawn(rcloneBinary, [
-        'mount', REMOTE, mountDir,
-        '--allow-other',
-        '--allow-non-empty',
-        '--dir-cache-time', '24h',
-        '--poll-interval', '30s',
-        '--fast-list',
-        '--vfs-cache-mode', 'full',
-        '--vfs-cache-max-age', '24h',      // was 1h — keep VFS cache longer, avoids re-download on revisit
-        '--vfs-cache-max-size', '10G',
-        '--vfs-cache-poll-interval', '5m',  // was 1m — less overhead with longer cache age
-        '--vfs-read-ahead', '64M',          // was 256M — less aggressive pre-fetch, lower memory pressure
-        '--vfs-read-chunk-size', '512k',    // was 4M — 8x faster first byte on initial request
-        '--vfs-read-chunk-size-limit', '128M', // was 256M — still grows for sequential streaming
-        '--vfs-fast-fingerprint',           // skip full-hash fingerprint for faster directory listings
-        '--buffer-size', '64M',             // was 256M — adequate for streaming, less memory
-        '--cache-dir', CACHE_DIR,
-        '--transfers', '4',                 // was 8 — fewer parallel transfers reduces congestion
-        '--checkers', '8',                  // was 16
-        '--multi-thread-streams', '4',
-        '--multi-thread-cutoff', '16M',
-        '--no-modtime',
-        '--log-level', 'INFO',
-      ], { stdio: ['ignore', 'pipe', 'pipe'], detached: true });
-      child.unref();
-      child.stderr?.on('data', (d: Buffer) => {
-        const msg = d.toString().trim();
-        if (msg) console.log(`[rclone-mount] ${msg}`);
-      });
-      this.ownedDaemonPid = child.pid ?? null;
+      for (let attempt = 0; ; attempt++) {
+        this.activeMountDir = mountDir;
+        fs.mkdirSync(mountDir, { recursive: true });
 
-      // Poll until the FUSE mount appears (the process may take a few seconds to mount)
-      for (let i = 0; i < 20; i++) {
-        await new Promise<void>((r) => setTimeout(r, 1000));
-        if (await this.isMounted()) {
-          this.updateSymlink(mountDir);
+        const result = await this.spawnAndWait(rcloneBinary, mountDir);
+
+        if (result.outcome === 'mounted') {
           this.recordActivity();
           this.startInactivityWatcher();
-          console.log('[rclone-mount] Mount is ready.');
-          return { mounted: true, status: 'mounted', message: 'rclone mount is ready', mountDir: SYMLINK_PATH };
+          console.log(`[rclone-mount:${this.serverId}] Mount is ready.`);
+          return { mounted: true, status: 'mounted', message: 'rclone mount is ready', mountDir: this.activeMountDir };
         }
-      }
 
-      console.warn('[rclone-mount] Daemon launched but mount not visible yet.');
-      return {
-        mounted: false,
-        status: 'mounting',
-        message: 'rclone daemon started; mount is not ready yet — retry in a moment',
-        mountDir: SYMLINK_PATH,
-      };
+        if (result.outcome === 'busy' && attempt < MAX_BUSY_RETRIES) {
+          mountDir = `${this.mountBase}_${Date.now()}`;
+          console.warn(`[rclone-mount:${this.serverId}] Mountpoint reported busy — retrying with fresh dir ${mountDir} (attempt ${attempt + 2}/${MAX_BUSY_RETRIES + 1}).`);
+          continue;
+        }
+
+        if (result.outcome === 'failed') {
+          return { mounted: false, status: 'error', message: result.message, mountDir: this.activeMountDir };
+        }
+
+        // 'timeout', or 'busy' with retries exhausted
+        console.warn(`[rclone-mount:${this.serverId}] Daemon launched but mount not visible yet.`);
+        return {
+          mounted: false,
+          status: 'mounting',
+          message: 'rclone daemon started; mount is not ready yet — retry in a moment',
+          mountDir: this.activeMountDir,
+        };
+      }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      console.error('[rclone-mount] Failed to start:', msg);
-      return { mounted: false, status: 'error', message: msg, mountDir: SYMLINK_PATH };
+      console.error(`[rclone-mount:${this.serverId}] Failed to start:`, msg);
+      return { mounted: false, status: 'error', message: msg, mountDir: this.activeMountDir };
     } finally {
       this.starting = false;
       this.startingSince = null;
     }
   }
 
-  /** Called from backend index.ts on startup. Failures are logged but do not crash the server. */
-  async startOnInit(): Promise<void> {
-    console.log('[rclone-mount] Auto-starting on backend init…');
-    try {
-      const result = await this.ensureRunning();
-      console.log(`[rclone-mount] Init result: ${result.status} — ${result.message}`);
-    } catch (err) {
-      console.error('[rclone-mount] Non-fatal init error:', err);
+  /**
+   * Spawn the rclone mount daemon into `mountDir` and wait up to 20s for it to come up.
+   * Watches stderr for macFUSE's "Resource busy" device-contention error and the child's
+   * own exit so a doomed attempt is detected well before the 20s timeout.
+   */
+  private async spawnAndWait(
+    rcloneBinary: string,
+    mountDir: string
+  ): Promise<{ outcome: 'mounted' } | { outcome: 'busy' } | { outcome: 'failed'; message: string } | { outcome: 'timeout' }> {
+    console.log(`[rclone-mount:${this.serverId}] Launching rclone daemon: ${rcloneBinary} ${this.remote} → ${mountDir}`);
+
+    // ponytail: rclone's own --daemon self-fork is flaky on macOS (observed: "Daemon timed out",
+    // exits with code 1) even though the identical mount succeeds in the foreground. Spawn it
+    // ourselves detached instead and track the child pid directly — same pattern as rclone-rcd.ts.
+    fs.mkdirSync(this.cacheDir, { recursive: true });
+    const child = spawn(rcloneBinary, [
+      'mount', this.remote, mountDir,
+      '--allow-other',
+      '--allow-non-empty',
+      '--dir-cache-time', '24h',
+      '--poll-interval', '30s',
+      '--fast-list',
+      '--vfs-cache-mode', 'full',
+      '--vfs-cache-max-age', '24h',
+      '--vfs-cache-max-size', '10G',
+      '--vfs-cache-poll-interval', '5m',
+      '--vfs-read-ahead', '64M',
+      '--vfs-read-chunk-size', '512k',
+      '--vfs-read-chunk-size-limit', '128M',
+      '--vfs-fast-fingerprint',
+      '--buffer-size', '64M',
+      '--cache-dir', this.cacheDir,
+      '--transfers', '4',
+      '--checkers', '8',
+      '--multi-thread-streams', '4',
+      '--multi-thread-cutoff', '16M',
+      '--no-modtime',
+      '--log-level', 'INFO',
+    ], { stdio: ['ignore', 'pipe', 'pipe'], detached: true });
+    child.unref();
+
+    let sawBusy = false;
+    let hasExited = false;
+    let exitCode: number | null = null;
+    let exitSignal: NodeJS.Signals | null = null;
+    child.stderr?.on('data', (d: Buffer) => {
+      const msg = d.toString().trim();
+      if (msg) console.log(`[rclone-mount:${this.serverId}] ${msg}`);
+      if (/resource busy/i.test(msg)) sawBusy = true;
+    });
+    child.once('exit', (code, signal) => {
+      hasExited = true;
+      exitCode = code;
+      exitSignal = signal;
+    });
+    this.ownedDaemonPid = child.pid ?? null;
+
+    // Poll until the FUSE mount appears (the process may take a few seconds to mount)
+    for (let i = 0; i < 20; i++) {
+      await new Promise<void>((r) => setTimeout(r, 1000));
+      if (await this.isMounted()) {
+        return { outcome: 'mounted' };
+      }
+      if (hasExited) {
+        if (sawBusy) return { outcome: 'busy' };
+        return { outcome: 'failed', message: `rclone exited (code ${exitCode}, signal ${exitSignal}) before the mount appeared` };
+      }
     }
+    return { outcome: 'timeout' };
   }
 
   /** Called from backend index.ts on graceful shutdown. */
@@ -746,4 +755,67 @@ class RcloneMountService {
   }
 }
 
-export const rcloneMountService = new RcloneMountService();
+/**
+ * Public surface — one RcloneMountService per serverId, created lazily on first use.
+ * `remote` should be `connection.cryptRemoteName ?? connection.remoteName` (the rclone
+ * config entry that `provisionRemotes()` already created for this server).
+ */
+class RcloneMountManager {
+  private instances = new Map<string, RcloneMountService>();
+
+  private getOrCreate(serverId: string, remote: string): RcloneMountService {
+    let instance = this.instances.get(serverId);
+    if (!instance) {
+      instance = new RcloneMountService(serverId, remote);
+      this.instances.set(serverId, instance);
+    }
+    return instance;
+  }
+
+  async ensureRunning(serverId: string, remote: string): Promise<MountResult> {
+    return this.getOrCreate(serverId, remote).ensureRunning();
+  }
+
+  async stop(serverId: string): Promise<void> {
+    const instance = this.instances.get(serverId);
+    if (!instance) return;
+    await instance.stop();
+    this.instances.delete(serverId);
+  }
+
+  async isMounted(serverId: string): Promise<boolean> {
+    const instance = this.instances.get(serverId);
+    if (!instance) return false;
+    return instance.isMounted();
+  }
+
+  recordActivity(serverId: string): void {
+    this.instances.get(serverId)?.recordActivity();
+  }
+
+  /**
+   * The directory mounted files actually live under. Reflects the live instance's
+   * active mount dir (which may be a busy-retry sibling, not the deterministic
+   * base) when one exists; falls back to the deterministic base path otherwise —
+   * callers should `ensureRunning()` first for an accurate answer.
+   */
+  getMountDir(serverId: string): string {
+    return this.instances.get(serverId)?.getMountDir() ?? path.join(MOUNTS_DIR, serverId);
+  }
+
+  /**
+   * Resolve a stored `{remoteName}:{relativePath}` value (see rclone.provider.ts) to its
+   * absolute path on disk under this server's mount. Pure, no I/O.
+   */
+  resolveLocalPath(serverId: string, remotePath: string): string {
+    const relPath = remotePath.slice(remotePath.indexOf(':') + 1);
+    return path.join(this.getMountDir(serverId), relPath);
+  }
+
+  async shutdownAll(): Promise<void> {
+    await Promise.all(Array.from(this.instances.values()).map((i) => i.shutdown()));
+    this.instances.clear();
+  }
+}
+
+export const rcloneMountManager = new RcloneMountManager();

@@ -13,7 +13,7 @@ import os from 'os';
 import crypto from 'crypto';
 import { getDatabase } from '../db/index.js';
 import { getServerById } from './remote/servers-db.js';
-import { getRcdClient } from './rclone-rcd.js';
+import { rcloneMountManager } from './rclone-mount.js';
 import { fetchWebdavFile } from './remote/webdav.provider.js';
 
 export type StorageMode = 'local' | 'rclone' | 'webdav';
@@ -87,8 +87,9 @@ class ThumbnailService {
   }
 
   /**
-   * Fetch file bytes — local filesystem read, or remote fetch via rcd (rclone)
-   * / authenticated GET (webdav), keyed by the file's stored storage_mode.
+   * Fetch file bytes — local filesystem read (also used for rclone-mode files,
+   * which read straight from their FUSE mount), or authenticated GET for webdav,
+   * keyed by the file's stored storage_mode.
    */
   private async getFileBuffer(
     mediaPath: string,
@@ -100,9 +101,9 @@ class ThumbnailService {
     }
 
     if (storageMode === 'rclone') {
-      const client = getRcdClient();
-      if (!client) throw new Error('rcd sidecar not ready — cannot fetch remote file');
-      return await client.fetchFile(mediaPath);
+      if (!serverId) throw new Error(`rclone file ${mediaPath} is missing serverId`);
+      const mountPath = rcloneMountManager.resolveLocalPath(serverId, mediaPath);
+      return await fs.readFile(mountPath);
     }
 
     // webdav

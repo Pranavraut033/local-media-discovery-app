@@ -1,7 +1,7 @@
 /**
  * Rclone remote provider.
- * Uses the local rcd sidecar (rclone rcd --rc-serve) for listing and validation.
- * File bytes are fetched directly from the rcd HTTP server (range-capable).
+ * Uses the local rcd sidecar's rc control-plane API for listing and validation.
+ * File bytes are read from the rclone FUSE mount (see rclone-mount.ts), not rcd.
  */
 import mime from 'mime-types';
 import { getRcdClient } from '../rclone-rcd.js';

@@ -10,6 +10,7 @@ import { getDatabase } from '../db/index.js';
 import { generatePaginatedFeed } from '../services/feed.js';
 import type { FeedSourceType } from '../services/feed.js';
 import { signStreamToken } from '../tokens.js';
+import { rcloneMountManager } from '../services/rclone-mount.js';
 
 const MEDIA_SERVER_SECRET =
   process.env.MEDIA_SERVER_SECRET || 'media-server-default-secret-change-me';
@@ -24,10 +25,13 @@ function withStreamToken<T extends { id: string; path: string; type: string; sto
   if (isRemote && !item.serverId) return item; // legacy rclone without serverId — skip
 
   try {
+    // rclone-mode files are served straight from the FUSE mount, same as local files —
+    // resolve the mount path here so media-server's local-file branch can read it directly,
+    // with no live rcd-serve fetch involved.
     const payload = isRemote
       ? {
           mediaId: item.id,
-          path: '',
+          path: item.storageMode === 'rclone' ? rcloneMountManager.resolveLocalPath(item.serverId!, item.path) : '',
           ext,
           type: kind,
           storageMode: item.storageMode as 'rclone' | 'webdav',
@@ -646,19 +650,19 @@ export default async function feedRoutes(fastify: FastifyInstance): Promise<void
 
         const contentType = mimeTypes[ext] || 'application/octet-stream';
 
-        // Remote (rclone/webdav) files: fetched in full via the rcd sidecar or webdav
-        // provider — same path as thumbnail generation. This route is only hit when
-        // media-server is unavailable, so a full-buffer fallback (no Range support) is
-        // acceptable; media-server's stream route handles ranged remote reads normally.
+        // Remote (rclone/webdav) files. This route is only hit when media-server is
+        // unavailable, so a full-buffer fallback (no Range support) is acceptable;
+        // media-server's stream route handles ranged remote reads normally.
+        // rclone-mode reads straight from the FUSE mount (same FS the backend already
+        // mounted) instead of round-tripping through rcd's HTTP serve route.
         if (media.storageMode === 'rclone' || media.storageMode === 'webdav') {
           let buffer: Buffer;
           if (media.storageMode === 'rclone') {
-            const { getRcdClient } = await import('../services/rclone-rcd.js');
-            const client = getRcdClient();
-            if (!client) {
-              return reply.code(503).send({ error: 'Remote file service unavailable' });
+            if (!media.serverId) {
+              return reply.code(404).send({ error: 'Remote server not found for file' });
             }
-            buffer = await client.fetchFile(media.path);
+            const mountPath = rcloneMountManager.resolveLocalPath(media.serverId, media.path);
+            buffer = await fs.readFile(mountPath);
           } else {
             if (!media.serverId) {
               return reply.code(404).send({ error: 'Remote server not found for file' });

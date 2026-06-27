@@ -28,6 +28,12 @@ import {
 } from '../services/remote/servers-db.js';
 import { getProvider } from '../services/remote/registry.js';
 import { getRcdClient, RC_URL } from '../services/rclone-rcd.js';
+import { rcloneMountManager } from '../services/rclone-mount.js';
+
+/** The rclone remote to mount for a server's connection (crypt wraps the base remote when present). */
+export function mountRemoteFor(connection: Record<string, string>): string {
+  return `${connection.cryptRemoteName ?? connection.remoteName}:/`;
+}
 
 const MEDIA_SERVER_SECRET =
   process.env.MEDIA_SERVER_SECRET || 'media-server-default-secret-change-me';
@@ -215,6 +221,13 @@ export default async function serversRoutes(fastify: FastifyInstance): Promise<v
 
       const db = getDatabase();
       const id = createServer(db, userId, def.type, def.displayName, def.rcloneRemoteType ?? null, connection);
+
+      if (def.type === 'rclone') {
+        rcloneMountManager.ensureRunning(id, mountRemoteFor(connection)).catch((err) => {
+          fastify.log.warn({ err, serverId: id }, '[servers] mount did not come up at create time — will retry on first stream request');
+        });
+      }
+
       return reply.code(201).send({ id, serverType: def.type, displayName: def.displayName });
     }
   );
@@ -249,6 +262,7 @@ export default async function serversRoutes(fastify: FastifyInstance): Promise<v
 
       // Remove old rclone config entries before recreating
       if (existing.serverType === 'rclone') {
+        await rcloneMountManager.stop(req.params.id);
         await cleanupRcloneRemotes(existing.connection, fastify.log);
       }
 
@@ -261,6 +275,13 @@ export default async function serversRoutes(fastify: FastifyInstance): Promise<v
 
       const updated = updateServer(db, req.params.id, userId, def.displayName, def.rcloneRemoteType ?? null, connection);
       if (!updated) return reply.code(404).send({ error: 'Server not found' });
+
+      if (def.type === 'rclone') {
+        rcloneMountManager.ensureRunning(req.params.id, mountRemoteFor(connection)).catch((err) => {
+          fastify.log.warn({ err, serverId: req.params.id }, '[servers] remount after update did not come up — will retry on first stream request');
+        });
+      }
+
       return reply.send({ id: req.params.id, serverType: def.type, displayName: def.displayName });
     }
   );
@@ -272,6 +293,7 @@ export default async function serversRoutes(fastify: FastifyInstance): Promise<v
       const db = getDatabase();
       const server = getServer(db, req.params.id, userId);
       if (server?.serverType === 'rclone') {
+        await rcloneMountManager.stop(req.params.id);
         await cleanupRcloneRemotes(server.connection, fastify.log);
       }
       const deleted = deleteServer(db, req.params.id, userId);

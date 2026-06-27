@@ -25,9 +25,10 @@ import eventsRoutes from './routes/events.js';
 import discoverRoutes from './routes/discover.js';
 import { initThumbnailService } from './services/thumbnails.js';
 import { startIndexingWorker } from './workers/indexer.worker.js';
-import { rcloneMountService } from './services/rclone-mount.js';
+import { rcloneMountManager } from './services/rclone-mount.js';
 import { startRcd, stopRcd } from './services/rclone-rcd.js';
-import serversRoutes from './routes/servers.js';
+import serversRoutes, { mountRemoteFor } from './routes/servers.js';
+import { listAllRcloneServers } from './services/remote/servers-db.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -115,15 +116,18 @@ await fastify.register(serversRoutes);
 // Start BullMQ indexing worker (in-process)
 startIndexingWorker();
 
-// Start rcd sidecar for remote servers (non-mount approach).
-// Falls back to FUSE mount if RCLONE_USE_MOUNT=1.
-// Awaited so remote-server requests right after boot don't race a null client.
+// Start rcd sidecar — control plane for remote_servers (listing, thumbnails,
+// config create/update/delete) for every configured remote. Awaited so
+// remote-server requests right after boot don't race a null client.
 await startRcd();
 
-// Auto-start rclone mount — fallback only, off by default now that rcd is the
-// primary remote transport. Set RCLONE_USE_MOUNT=1 to restore the old FUSE path.
-if (process.env.RCLONE_USE_MOUNT === '1') {
-  rcloneMountService.startOnInit();
+// Bring up a FUSE mount for every configured rclone-type remote server.
+// Non-fatal — a server whose mount fails to start here gets retried lazily
+// on its next ensureRunning() call (e.g. from servers.ts create/update).
+for (const server of listAllRcloneServers(getDatabase())) {
+  rcloneMountManager.ensureRunning(server.id, mountRemoteFor(server.connection)).catch((err) => {
+    console.error(`[rclone-mount:${server.id}] Non-fatal init error:`, err);
+  });
 }
 
 // Health check
@@ -148,7 +152,7 @@ process.on('SIGINT', async () => {
   console.log('Shutting down gracefully...');
   await stopWatcher();
   stopRcd();
-  await rcloneMountService.shutdown();
+  await rcloneMountManager.shutdownAll();
   closeDatabase();
   fastify.close(() => {
     console.log('Server closed');
@@ -160,7 +164,7 @@ process.on('SIGTERM', async () => {
   console.log('Shutting down gracefully (SIGTERM)...');
   await stopWatcher();
   stopRcd();
-  await rcloneMountService.shutdown();
+  await rcloneMountManager.shutdownAll();
   closeDatabase();
   fastify.close(() => {
     console.log('Server closed');

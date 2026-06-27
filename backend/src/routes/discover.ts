@@ -6,6 +6,7 @@ import type { FastifyInstance } from 'fastify';
 import path from 'path';
 import { getDatabase } from '../db/index.js';
 import { signStreamToken } from '../tokens.js';
+import { rcloneMountManager } from '../services/rclone-mount.js';
 import {
   getDiscoverFeed,
   appendDiscoverSession,
@@ -44,10 +45,11 @@ function attachStreamToken(item: {
   if (isRemote && !item.serverId) return item;
 
   try {
+    // rclone-mode files are served straight from the FUSE mount, same as local files.
     const payload = isRemote
       ? {
           mediaId: item.id,
-          path: '',
+          path: item.storageMode === 'rclone' ? rcloneMountManager.resolveLocalPath(item.serverId as string, item.path) : '',
           ext,
           type: kind,
           storageMode: item.storageMode as 'rclone' | 'webdav',
