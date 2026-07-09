@@ -1,18 +1,59 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import MainLayout from '@/components/MainLayout';
 import LoginScreen from '@/components/LoginScreen';
 import SetupScreen from '@/components/SetupScreen';
 import { useAuth } from '@/lib/auth';
 import { authenticatedFetch, ensureRcloneMount, getApiBase } from '@/lib/api';
-import { getRootFolder } from '@/lib/storage';
+import { useFoldersStore } from '@/lib/stores/folders.store';
+import { RotateCw, X } from 'lucide-react';
 
 export default function Home() {
   const { isAuthenticated, isLoading, requiresSetup } = useAuth();
   const autoIndexBootstrapDoneRef = useRef(false);
+  const [showRemountPrompt, setShowRemountPrompt] = useState(false);
+  const [isRemounting, setIsRemounting] = useState(false);
+
+  // Re-check the rclone mount whenever the app window comes back into view
+  // (e.g. minimized/closed and reopened) — the mount can have been torn down
+  // by the backend's inactivity timeout while the window was hidden.
+  useEffect(() => {
+    if (!isAuthenticated) return;
+
+    const checkMount = async () => {
+      try {
+        const result = await ensureRcloneMount();
+        setShowRemountPrompt(!(result.mounted || result.status === 'mounted'));
+      } catch {
+        setShowRemountPrompt(true);
+      }
+    };
+
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') checkMount();
+    };
+
+    window.addEventListener('focus', checkMount);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      window.removeEventListener('focus', checkMount);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [isAuthenticated]);
+
+  const handleRemountClick = async () => {
+    setIsRemounting(true);
+    try {
+      const result = await ensureRcloneMount();
+      setShowRemountPrompt(!(result.mounted || result.status === 'mounted'));
+    } finally {
+      setIsRemounting(false);
+    }
+  };
 
   useEffect(() => {
+    if (!isAuthenticated) return;
     let cancelled = false;
 
     const bootstrapMount = async () => {
@@ -50,7 +91,7 @@ export default function Home() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [isAuthenticated]);
 
   useEffect(() => {
     if (!isAuthenticated || autoIndexBootstrapDoneRef.current) {
@@ -75,7 +116,7 @@ export default function Home() {
         }
 
         // Only re-trigger indexing for a folder the user has explicitly selected.
-        const targetRootFolder = getRootFolder();
+        const targetRootFolder = useFoldersStore.getState().rootFolder;
         if (!targetRootFolder) {
           return;
         }
@@ -119,5 +160,25 @@ export default function Home() {
     return <LoginScreen />;
   }
 
-  return <MainLayout />;
+  return (
+    <>
+      <MainLayout />
+      {showRemountPrompt && (
+        <div className="fixed bottom-4 right-4 z-50 surface-panel px-4 py-3 flex items-center gap-3 shadow-lg max-w-sm">
+          <span className="text-sm text-[var(--surface-muted)]">Remote source isn&apos;t mounted.</span>
+          <button
+            onClick={handleRemountClick}
+            disabled={isRemounting}
+            className="flex items-center gap-1 text-sm font-medium text-[var(--primary)] disabled:opacity-50"
+          >
+            <RotateCw size={14} className={isRemounting ? 'animate-spin' : ''} />
+            {isRemounting ? 'Remounting…' : 'Remount'}
+          </button>
+          <button onClick={() => setShowRemountPrompt(false)} aria-label="Dismiss" className="text-[var(--surface-muted)]">
+            <X size={14} />
+          </button>
+        </div>
+      )}
+    </>
+  );
 }

@@ -10,7 +10,7 @@ import { useState, useEffect } from 'react';
 import { Folder, ChevronRight, Home, HardDrive, Play, Server, Globe, Database, Lock, Cloud, Plus, Pencil, Trash2 } from 'lucide-react';
 import { getApiBase, authenticatedFetch } from '@/lib/api';
 import { RecentFolders } from './RecentFolders';
-import { setRootFolder } from '@/lib/storage';
+import { useFoldersStore } from '@/lib/stores/folders.store';
 import { useIndexingStore } from '@/lib/stores/indexing.store';
 import { AddServerModal } from './AddServerModal';
 
@@ -194,12 +194,12 @@ export default function FolderSelection({ onFolderSelected }: FolderSelectionPro
     try {
       setIsLoading(true);
       setError('');
-      setRootFolder(path);
+      useFoldersStore.getState().setRootFolder(path);
       const response = await authenticatedFetch(`${API_URL}/api/config/root-folder`, {
         method: 'POST',
         body: JSON.stringify({ path }),
       });
-      if (!response.ok) { setRootFolder(''); throw new Error('Failed to set root folder'); }
+      if (!response.ok) { useFoldersStore.getState().setRootFolder(''); throw new Error('Failed to set root folder'); }
       const data = await response.json();
       if (data.jobId) {
         setActiveJobId(data.jobId);
@@ -226,7 +226,7 @@ export default function FolderSelection({ onFolderSelected }: FolderSelectionPro
       });
       if (!response.ok) throw new Error('Failed to start remote indexing');
       const data = await response.json();
-      setRootFolder(path);
+      useFoldersStore.getState().setRootFolder(path);
       if (data.jobId) {
         setActiveJobId(data.jobId);
         setActiveJobSource('remote');

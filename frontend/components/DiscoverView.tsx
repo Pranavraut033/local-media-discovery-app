@@ -17,7 +17,7 @@ import {
 } from '@/lib/hooks';
 import type { FeedItem } from '@/lib/hooks';
 import { MediaCard } from './MediaCard';
-import { PlyrVideoModal } from './PlyrVideoModal';
+import { KeyboardShortcutsGuide } from './KeyboardShortcutsGuide';
 import {
   Grid3x3,
   Layers,
@@ -27,6 +27,7 @@ import {
   Bookmark,
   Maximize,
   Minimize,
+  Keyboard,
 } from 'lucide-react';
 import Masonry from 'react-masonry-css';
 import { useFullscreen } from '@/lib/useFullscreen';
@@ -53,9 +54,9 @@ export function DiscoverView({ onViewSource }: DiscoverViewProps) {
   const [items, setItems] = useState<FeedItem[]>([]);
   const [currentBatchIds, setCurrentBatchIds] = useState<string[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
-  const [expandedVideo, setExpandedVideo] = useState<{ src: string; title?: string } | null>(null);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [isAtEnd, setIsAtEnd] = useState(false);
+  const [showShortcuts, setShowShortcuts] = useState(false);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
@@ -200,6 +201,17 @@ export function DiscoverView({ onViewSource }: DiscoverViewProps) {
 
   const currentMedia = items[currentIndex];
 
+  // Grid card's "open" button jumps straight to that item in the single-video
+  // view — same data, just a mode + index switch, no refetch.
+  const handleOpenInReels = useCallback((index: number) => {
+    setCurrentIndex(index);
+    setMode('reels');
+  }, []);
+
+  const toggleMode = useCallback(() => {
+    setMode((m) => (m === 'reels' ? 'feed' : 'reels'));
+  }, []);
+
   const handleLike = useCallback(async () => {
     if (currentMedia) {
       await likeMutation.mutateAsync({ mediaId: currentMedia.id, sourceId: currentMedia.sourceId });
@@ -211,6 +223,57 @@ export function DiscoverView({ onViewSource }: DiscoverViewProps) {
       await saveMutation.mutateAsync({ mediaId: currentMedia.id, sourceId: currentMedia.sourceId });
     }
   }, [currentMedia, saveMutation]);
+
+  // Global keyboard shortcuts — same scheme as Feed.tsx. Up/Down/Like/Save are
+  // reels-only; grid/fullscreen toggle and the shortcuts guide work in either view.
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
+        return;
+      }
+
+      if (e.key === '?') {
+        e.preventDefault();
+        setShowShortcuts((prev) => !prev);
+        return;
+      }
+      if (e.key === 'Escape' && showShortcuts) {
+        e.preventDefault();
+        setShowShortcuts(false);
+        return;
+      }
+      if (e.key === 'g' || e.key === 'G') {
+        e.preventDefault();
+        toggleMode();
+        return;
+      }
+      if (e.key === 'f' || e.key === 'F') {
+        e.preventDefault();
+        toggleFullscreen();
+        return;
+      }
+
+      if (mode !== 'reels') return;
+
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setCurrentIndex((p) => Math.max(p - 1, 0));
+      } else if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setCurrentIndex((p) => Math.min(p + 1, items.length - 1));
+      } else if (e.key === 'l' || e.key === 'L') {
+        e.preventDefault();
+        handleLike();
+      } else if (e.key === 's' || e.key === 'S') {
+        e.preventDefault();
+        handleSave();
+      }
+    };
+
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [mode, items.length, showShortcuts, handleLike, handleSave, toggleMode, toggleFullscreen]);
 
   const seenCount = sessionData?.seenCount ?? 0;
   const isBusy =
@@ -310,7 +373,7 @@ export function DiscoverView({ onViewSource }: DiscoverViewProps) {
 
         {/* Mode toggle */}
         <button
-          onClick={() => setMode((m) => (m === 'reels' ? 'feed' : 'reels'))}
+          onClick={toggleMode}
           className="h-10 w-10 rounded-lg bg-black/40 text-white/80 hover:text-white backdrop-blur-md border border-white/15 flex items-center justify-center transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300"
           aria-label={mode === 'reels' ? 'Switch to grid' : 'Switch to reels'}
         >
@@ -323,6 +386,14 @@ export function DiscoverView({ onViewSource }: DiscoverViewProps) {
           aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
         >
           {isFullscreen ? <Minimize size={20} /> : <Maximize size={20} />}
+        </button>
+
+        <button
+          onClick={() => setShowShortcuts(true)}
+          className="h-10 w-10 rounded-lg bg-black/40 text-white/80 hover:text-white backdrop-blur-md border border-white/15 flex items-center justify-center transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300"
+          aria-label="Show keyboard shortcuts"
+        >
+          <Keyboard size={20} />
         </button>
       </div>
     </div>
@@ -452,6 +523,8 @@ export function DiscoverView({ onViewSource }: DiscoverViewProps) {
             busy={resetSession.isPending}
           />
         )}
+
+        <KeyboardShortcutsGuide isOpen={showShortcuts} onClose={() => setShowShortcuts(false)} />
       </div>
     );
   }
@@ -471,13 +544,14 @@ export function DiscoverView({ onViewSource }: DiscoverViewProps) {
             className={MEDIA_MASONRY_CLASS}
             columnClassName={MEDIA_MASONRY_COLUMN_CLASS}
           >
-            {items.map((item) => (
+            {items.map((item, index) => (
               <div key={item.id} className="mb-2 md:mb-4 break-inside-avoid">
                 <MediaCard
                   media={item}
+                  index={index}
                   onVisible={() => { }}
                   onViewSource={onViewSource}
-                  onVideoExpand={(src, title) => setExpandedVideo({ src, title })}
+                  onOpenInReels={handleOpenInReels}
                   mode="feed"
                   enableHoverAutoplay
                   className="w-full rounded-2xl overflow-hidden"
@@ -492,13 +566,6 @@ export function DiscoverView({ onViewSource }: DiscoverViewProps) {
         </div>
       </div>
 
-      <PlyrVideoModal
-        isOpen={expandedVideo !== null}
-        src={expandedVideo?.src ?? ''}
-        title={expandedVideo?.title}
-        onClose={() => setExpandedVideo(null)}
-      />
-
       {showResetConfirm && (
         <ResetConfirmDialog
           seenCount={seenCount}
@@ -507,6 +574,8 @@ export function DiscoverView({ onViewSource }: DiscoverViewProps) {
           busy={resetSession.isPending}
         />
       )}
+
+      <KeyboardShortcutsGuide isOpen={showShortcuts} onClose={() => setShowShortcuts(false)} />
     </div>
   );
 }

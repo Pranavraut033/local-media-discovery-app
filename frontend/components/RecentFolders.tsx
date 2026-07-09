@@ -7,7 +7,7 @@
 import { useState, useEffect } from 'react';
 import { FolderOpen, Clock, Server } from 'lucide-react';
 import { getApiBase, authenticatedFetch } from '@/lib/api';
-import { setRootFolder } from '@/lib/storage';
+import { useFoldersStore } from '@/lib/stores/folders.store';
 
 interface RecentFoldersProps {
   onFolderSelect?: (source?: 'local' | 'remote') => void;
@@ -69,7 +69,7 @@ export function RecentFolders({ onFolderSelect }: RecentFoldersProps) {
 
       if (!response.ok) throw new Error('Failed to set root folder');
 
-      setRootFolder(folder.path);
+      useFoldersStore.getState().setRootFolder(folder.path);
       onFolderSelect?.('local');
     } catch (error) {
       console.error('Failed to select folder:', error);

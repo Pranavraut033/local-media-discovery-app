@@ -1,4 +1,8 @@
-import { getRootFolder, getStoredToken } from './storage';
+import { useFoldersStore } from './stores/folders.store';
+import { useAuthStore } from './stores/auth.store';
+
+const getRootFolder = (): string | null => useFoldersStore.getState().rootFolder;
+const getStoredToken = (): string | null => useAuthStore.getState().token;
 
 // The desktop shell launches the frontend with ?apiPort=…&mediaServerPort=… set
 // to the ephemeral ports it assigned its bundled backend/media-server. Those query
@@ -196,20 +200,15 @@ export interface FolderNode {
 const base = getApiBase();
 
 export async function getFolderTree(sourceIds: string[]): Promise<FolderNode> {
-
-  const responses = await Promise.all(
-    sourceIds.map((sourceId) =>
-      authenticatedFetch(`${base}/api/folders/tree?sourceId=${encodeURIComponent(sourceId)}`)
-    )
-  ).then((responses) => {
-    if (!responses.every(response => response.ok)) {
-      throw new Error('Failed to fetch folder tree');
-    }
-
-    return Promise.all(responses.map((response) => response.json()));
-  });
-
-  const root = getRootFolder()!
+  // A single missing/invalid source (e.g. a stale rclone source) shouldn't blank out
+  // the whole tree, so failed sources are skipped rather than failing the batch.
+  const results = await Promise.all(
+    sourceIds.map(async (sourceId) => {
+      const response = await authenticatedFetch(`${base}/api/folders/tree?sourceId=${encodeURIComponent(sourceId)}`);
+      if (!response.ok) return null;
+      return { sourceId, node: (await response.json()) as FolderNode };
+    })
+  );
 
   // Add sourceId to each node recursively
   const addSourceIdToNodes = (node: FolderNode, sourceId: string): FolderNode => ({
@@ -218,19 +217,20 @@ export async function getFolderTree(sourceIds: string[]): Promise<FolderNode> {
     children: node.children.map(child => addSourceIdToNodes(child, sourceId)),
   });
 
-  const children = (responses as FolderNode[]).map((node, index) => ({
-    ...addSourceIdToNodes(node, sourceIds[index]),
-    mediaCount: node.mediaCount || node.children.reduce((sum, child) => sum + child.mediaCount, 0),
-  }))
+  const children = results
+    .filter((result): result is { sourceId: string; node: FolderNode } => result !== null)
+    .map(({ sourceId, node }) => ({
+      ...addSourceIdToNodes(node, sourceId),
+      mediaCount: node.mediaCount || node.children.reduce((sum, child) => sum + child.mediaCount, 0),
+    }));
 
   return {
-    path: root,
+    path: getRootFolder() ?? 'Root',
     name: 'Root',
     mediaCount: children.reduce((sum, node) => sum + node.mediaCount, 0),
     hidden: false,
     children,
   };
-
 }
 
 export async function toggleFolderHide(
@@ -292,28 +292,37 @@ export interface RcloneMountEnsureResponse {
 
 let _ensureMountInFlight: Promise<RcloneMountEnsureResponse> | null = null;
 
+async function getRcloneServerId(): Promise<string | null> {
+  const response = await authenticatedFetch(`${base}/api/servers`).catch(() => null);
+  if (!response?.ok) return null;
+  const servers = (await response.json().catch(() => [])) as Array<{ id: string; serverType: string }>;
+  return servers.find((s) => s.serverType === 'rclone')?.id ?? null;
+}
+
 export function ensureRcloneMount(): Promise<RcloneMountEnsureResponse> {
   if (_ensureMountInFlight) return _ensureMountInFlight;
 
-  _ensureMountInFlight = fetch(`${base}/api/rclone/mount/ensure`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: '{}',
-  })
-    .then(async (response) => {
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        return {
-          mounted: false,
-          status: 'error' as const,
-          message: (data && typeof data.message === 'string' ? data.message : undefined) || 'Failed to ensure rclone mount',
-        };
-      }
-      return data as RcloneMountEnsureResponse;
-    })
-    .finally(() => {
-      _ensureMountInFlight = null;
+  _ensureMountInFlight = (async () => {
+    const serverId = await getRcloneServerId();
+    if (!serverId) {
+      return { mounted: false, status: 'unmounted' as const, message: 'No rclone remote server configured' };
+    }
+
+    const response = await authenticatedFetch(`${base}/api/rclone/mount/ensure?serverId=${encodeURIComponent(serverId)}`, {
+      method: 'POST',
     });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      return {
+        mounted: false,
+        status: 'error' as const,
+        message: (data && typeof data.message === 'string' ? data.message : undefined) || 'Failed to ensure rclone mount',
+      };
+    }
+    return data as RcloneMountEnsureResponse;
+  })().finally(() => {
+    _ensureMountInFlight = null;
+  });
 
   return _ensureMountInFlight;
 }

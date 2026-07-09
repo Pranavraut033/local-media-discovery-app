@@ -14,9 +14,9 @@ import { Settings } from '@/components/Settings';
 import { SourceView } from '@/components/SourceView';
 import { DiscoverView } from '@/components/DiscoverView';
 import { NavigationBar, type NavTab } from '@/components/NavigationBar';
-import { getRootFolder, clearRootFolder } from '@/lib/storage';
 import type { FeedMode } from '@/components/Feed';
 import { useUIStore } from '@/lib/stores/ui.store';
+import { useFoldersStore } from '@/lib/stores/folders.store';
 import ScanningProgressDialog from '@/components/ScanningProgressDialog';
 import { getApiBase, authenticatedFetch } from '@/lib/api';
 
@@ -44,7 +44,7 @@ export default function MainLayout() {
   useEffect(() => {
     const checkRootFolder = async () => {
       try {
-        const rootFolder = getRootFolder();
+        const rootFolder = useFoldersStore.getState().rootFolder;
         if (!rootFolder) {
           setRootFolderSet(false);
           return;
@@ -58,7 +58,7 @@ export default function MainLayout() {
         if (response.ok) {
           const data = await response.json();
           if (!data.exists) {
-            clearRootFolder();
+            useFoldersStore.getState().clearRootFolder();
             setRootFolderSet(false);
             return;
           }

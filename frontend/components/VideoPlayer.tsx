@@ -5,7 +5,7 @@
 'use client';
 
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Play, Pause, Volume2, VolumeX, Maximize2, ZoomIn, ZoomOut, Loader2 } from 'lucide-react';
+import { Play, Pause, Volume2, VolumeX, ZoomIn, ZoomOut, Loader2 } from 'lucide-react';
 
 interface VideoPlayerProps {
   src: string;
@@ -58,11 +58,17 @@ export function VideoPlayer({
   const retryCount = useRef(0);
   const retryTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // ponytail: reels mode now renders PlyrVideo instead of this component
+  // (see MediaCard), so the isReelsMode branches below are unreachable in
+  // practice. Left in place since VideoPlayer's mode prop is still part of
+  // its public API; delete them if VideoPlayer's reels path is dropped for good.
   const isReelsMode = mode === 'reels';
   const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
   const shouldAutoPlay = autoPlay ||
-    ((shouldAutoPlayOnHover && (isHovered || isCardHovered) && !isMobile) ||
-      (shouldAutoPlayOnMobileVisible && isVisible && isMobile));
+    (isVisible && (
+      (shouldAutoPlayOnHover && (isHovered || isCardHovered) && !isMobile) ||
+      (shouldAutoPlayOnMobileVisible && isMobile)
+    ));
   const showExpandedControls = !isReelsMode && (isHovered || isSeeking);
   // ponytail: preload=none in feed (many cards, avoids parallel rclone metadata requests);
   // preload=auto in reels (single current video, start buffering immediately).
@@ -83,27 +89,16 @@ export function VideoPlayer({
     console.error('Video play failed:', err);
   };
 
-  // Set up intersection observer for mobile visibility detection
+  // Track viewport visibility — pause when scrolled out on both desktop and mobile.
   useEffect(() => {
-    if (!shouldAutoPlayOnMobileVisible || !isMobile || !containerRef.current) {
-      return;
-    }
-
+    if (!containerRef.current) return;
     observerRef.current = new IntersectionObserver(
-      ([entry]) => {
-        setIsVisible(entry.isIntersecting);
-      },
-      { threshold: 0.5 }
+      ([entry]) => setIsVisible(entry.isIntersecting),
+      { threshold: 0.1 }
     );
-
     observerRef.current.observe(containerRef.current);
-
-    return () => {
-      if (observerRef.current) {
-        observerRef.current.disconnect();
-      }
-    };
-  }, [shouldAutoPlayOnMobileVisible, isMobile]);
+    return () => observerRef.current?.disconnect();
+  }, []);
 
   // Keep the media element aligned with the desired autoplay behavior.
   // ponytail: debounce the "start playing" edge by ~200ms so a quick mouse
@@ -212,13 +207,6 @@ export function VideoPlayer({
       if (retryTimeout.current) clearTimeout(retryTimeout.current);
     };
   }, []);
-
-  const handleFullscreen = () => {
-    const video = videoRef.current;
-    if (video?.requestFullscreen) {
-      video.requestFullscreen();
-    }
-  };
 
   // Progress bar handlers
   const handleTimeUpdate = useCallback(() => {
@@ -440,17 +428,6 @@ export function VideoPlayer({
               {isMuted ? <VolumeX size={20} /> : <Volume2 size={20} />}
             </button>
           </div>
-
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              handleFullscreen();
-            }}
-            className="bg-white hover:bg-gray-200 text-black p-2 rounded-full transition-colors"
-            aria-label="Fullscreen"
-          >
-            <Maximize2 size={20} />
-          </button>
         </div>
       </div>
 
@@ -584,17 +561,6 @@ export function VideoPlayer({
                 {isMuted ? <VolumeX size={18} /> : <Volume2 size={18} />}
               </button>
             </div>
-
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                handleFullscreen();
-              }}
-              className="bg-white hover:bg-gray-200 text-black p-2 rounded-full transition-colors"
-              aria-label="Fullscreen"
-            >
-              <Maximize2 size={18} />
-            </button>
           </div>
         </div>
       )}
@@ -662,12 +628,6 @@ export function VideoPlayer({
 
         .slider-minimal:hover::-moz-range-thumb {
           opacity: 1;
-        }
-
-        video:fullscreen {
-          width: 100%;
-          height: 100%;
-          object-fit: contain;
         }
       `}</style>
     </div>

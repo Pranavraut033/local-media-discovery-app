@@ -6,6 +6,7 @@
 
 import { ImageViewer } from './ImageViewer';
 import { VideoPlayer } from './VideoPlayer';
+import { PlyrVideo } from './PlyrVideo';
 import { LikeButton, SaveButton, HideButton } from './InteractionButtons';
 import { useEffect, useRef, useState } from 'react';
 import { useLikeMutation, useSaveMutation, useViewMutation, useHideMutation, FeedItem } from '@/lib/hooks';
@@ -25,14 +26,14 @@ interface MediaCardProps {
     parentFolderPath?: string,
     parentFolderName?: string
   ) => void;
-  onVideoExpand?: (src: string, title?: string) => void;
+  onOpenInReels?: (index: number) => void;
   mode?: 'feed' | 'reels';
   className?: string;
   enableHoverAutoplay?: boolean;
   enableMobileAutoplay?: boolean;
 }
 
-export function MediaCard({ media, index, onVisible, onVisibleIndexChange, onViewSource, onVideoExpand, mode = 'feed', className = '', enableHoverAutoplay = true, enableMobileAutoplay = true }: MediaCardProps) {
+export function MediaCard({ media, index, onVisible, onVisibleIndexChange, onViewSource, onOpenInReels, mode = 'feed', className = '', enableHoverAutoplay = true, enableMobileAutoplay = true }: MediaCardProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const hasRecordedView = useRef(false);
   const [currentLiked, setCurrentLiked] = useState(media?.liked ?? false);
@@ -149,25 +150,36 @@ export function MediaCard({ media, index, onVisible, onVisibleIndexChange, onVie
             />
           </div>
         ) : isVideo ? (
-          <div className="relative w-full h-full">
-            <VideoPlayer
-              key={mediaSource}
-              src={mediaSource}
-              poster={getThumbnailUrl(media.id)}
-              mode={mode}
-              className={isReelsMode ? 'w-full h-full' : 'w-full'}
-              shouldAutoPlayOnHover={enableHoverAutoplay}
-              shouldAutoPlayOnMobileVisible={enableMobileAutoplay}
-              isCardHovered={isHovered}
-            />
-            {!isReelsMode && onVideoExpand && (
+          <div className={`relative w-full h-full ${isReelsMode ? 'pt-14 md:pt-16 pb-24' : ''}`}>
+            {isReelsMode ? (
+              // Reserve space matching the reels top/bottom chrome (see Feed/DiscoverView)
+              // so Plyr's own control bar never sits under the floating nav buttons.
+              <PlyrVideo
+                key={mediaSource}
+                src={mediaSource}
+                poster={getThumbnailUrl(media.id)}
+                className="w-full h-full"
+              />
+            ) : (
+              <VideoPlayer
+                key={mediaSource}
+                src={mediaSource}
+                poster={getThumbnailUrl(media.id)}
+                mode={mode}
+                className="w-full"
+                shouldAutoPlayOnHover={enableHoverAutoplay}
+                shouldAutoPlayOnMobileVisible={enableMobileAutoplay}
+                isCardHovered={isHovered}
+              />
+            )}
+            {!isReelsMode && onOpenInReels && index !== undefined && (
               <button
                 onClick={(e) => {
                   e.stopPropagation();
-                  onVideoExpand(mediaSource, media.displayName);
+                  onOpenInReels(index);
                 }}
                 className="absolute top-2 right-2 z-10 flex h-8 w-8 items-center justify-center rounded-full bg-black/50 text-white opacity-0 group-hover:opacity-100 transition-opacity hover:bg-black/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400"
-                aria-label="Open in video player"
+                aria-label="Open in full-screen player"
               >
                 <Maximize2 size={15} />
               </button>

@@ -6,13 +6,13 @@
 
 import { useState, useEffect, useMemo } from 'react';
 import { Settings as SettingsIcon, ArrowLeft, RotateCw, Eye, LogOut, FolderTree, Maximize, Minimize, Power, Server, Plus, Trash2 } from 'lucide-react';
-import { getPreferences, setPreferences, ViewMode, clearRecentFolders, clearRootFolder } from '@/lib/storage';
 import { getApiBase, authenticatedFetch, ensureRcloneMount } from '@/lib/api';
 import { useSources, useFolderTree, useHideFolderMutation } from '@/lib/hooks';
 import { FolderTreeView } from './FolderTreeView';
 import { AddServerModal } from './AddServerModal';
 import { useFullscreen } from '@/lib/useFullscreen';
 import { useFoldersStore } from '@/lib/stores/folders.store';
+import { useUIStore, type ViewMode } from '@/lib/stores/ui.store';
 import { isDesktopRuntime, quitDesktopApp } from '@/lib/desktop';
 
 interface AppStats {
@@ -32,7 +32,7 @@ interface SettingsProps {
 
 export function Settings({ onBack, onViewHidden, onRootFolderReset }: SettingsProps) {
   const API_URL = getApiBase();
-  const [preferences, setLocalPreferences] = useState<ReturnType<typeof getPreferences> | null>(null);
+  const [preferences, setLocalPreferences] = useState<ReturnType<typeof useUIStore.getState>['preferences'] | null>(null);
   const { isFullscreen, toggleFullscreen } = useFullscreen();
   const localRootFolder = useFoldersStore((s) => s.rootFolder);
   // const feedSourceType = useUIStore((s) => s.preferences.feedSourceType ?? 'local'); // rclone disabled
@@ -55,21 +55,9 @@ export function Settings({ onBack, onViewHidden, onRootFolderReset }: SettingsPr
       .then(setRemoteServers)
       .catch(() => setRemoteServers([]));
 
-  // Prefer root source and fall back to folder/display matches before first source.
-  const currentSource = useMemo(() => {
-    if (!sources?.length) return null;
-
-    const apiRootFolder = stats?.rootFolder && stats.rootFolder !== 'Not set' ? stats.rootFolder : null;
-
-    return (
-      sources.find((source) => source.id === 'root') ||
-      sources.find((source) => source.folderPath === apiRootFolder || source.displayName === apiRootFolder) ||
-      sources[0]
-    );
-  }, [sources, stats?.rootFolder]);
-
-  // Fetch folder tree only for the active source.
-  const activeSourceIds = currentSource ? [currentSource.id] : [];
+  // Fetch folder trees for every source — a rclone-based library can have many
+  // independent top-level sources, not just one local root folder.
+  const activeSourceIds = useMemo(() => sources?.map((source) => source.id) ?? [], [sources]);
   const { data: folderTree, isLoading: isTreeLoading } = useFolderTree(activeSourceIds);
 
   // Mutation for hiding/showing folders
@@ -83,7 +71,7 @@ export function Settings({ onBack, onViewHidden, onRootFolderReset }: SettingsPr
         setError(null);
 
         // Load local preferences
-        const prefs = getPreferences();
+        const prefs = useUIStore.getState().preferences;
         setLocalPreferences(prefs);
 
         // Load stats from API
@@ -109,10 +97,18 @@ export function Settings({ onBack, onViewHidden, onRootFolderReset }: SettingsPr
         });
 
         // Fetch rclone mount status (non-fatal)
-        const mountRes = await authenticatedFetch(`${API_URL}/api/rclone/mount/status`).catch(() => null);
-        if (mountRes?.ok) {
-          const mountData = await mountRes.json();
-          setMountStatus(mountData.mounted ? 'mounted' : 'unmounted');
+        const serversRes = await authenticatedFetch(`${API_URL}/api/servers`).catch(() => null);
+        const servers = serversRes?.ok ? await serversRes.json().catch(() => []) : [];
+        const rcloneServerId = servers.find((s: { serverType: string; id: string }) => s.serverType === 'rclone')?.id;
+
+        if (rcloneServerId) {
+          const mountRes = await authenticatedFetch(`${API_URL}/api/rclone/mount/status?serverId=${encodeURIComponent(rcloneServerId)}`).catch(() => null);
+          if (mountRes?.ok) {
+            const mountData = await mountRes.json();
+            setMountStatus(mountData.mounted ? 'mounted' : 'unmounted');
+          } else {
+            setMountStatus('unavailable');
+          }
         } else {
           setMountStatus('unavailable');
         }
@@ -134,7 +130,7 @@ export function Settings({ onBack, onViewHidden, onRootFolderReset }: SettingsPr
     setIsSaving(true);
     const updated = { ...preferences, viewMode: mode };
     setLocalPreferences(updated);
-    setPreferences({ viewMode: mode });
+    useUIStore.getState().setPreferences({ viewMode: mode });
     setTimeout(() => setIsSaving(false), 300);
   };
 
@@ -143,7 +139,7 @@ export function Settings({ onBack, onViewHidden, onRootFolderReset }: SettingsPr
     setIsSaving(true);
     const updated = { ...preferences, autoPlayVideos: !preferences.autoPlayVideos };
     setLocalPreferences(updated);
-    setPreferences({ autoPlayVideos: !preferences.autoPlayVideos });
+    useUIStore.getState().setPreferences({ autoPlayVideos: !preferences.autoPlayVideos });
     setTimeout(() => setIsSaving(false), 300);
   };
 
@@ -152,7 +148,7 @@ export function Settings({ onBack, onViewHidden, onRootFolderReset }: SettingsPr
     setIsSaving(true);
     const updated = { ...preferences, showSourceBadge: !preferences.showSourceBadge };
     setLocalPreferences(updated);
-    setPreferences({ showSourceBadge: !preferences.showSourceBadge });
+    useUIStore.getState().setPreferences({ showSourceBadge: !preferences.showSourceBadge });
     setTimeout(() => setIsSaving(false), 300);
   };
 
@@ -177,11 +173,11 @@ export function Settings({ onBack, onViewHidden, onRootFolderReset }: SettingsPr
       });
 
       if (response.ok) {
-        // Clear root folder from localStorage (where it's actually stored)
-        clearRootFolder();
+        // Clear root folder from persisted store
+        useFoldersStore.getState().clearRootFolder();
 
-        // Clear recent folders from local storage
-        clearRecentFolders();
+        // Clear recent folders from persisted store
+        useFoldersStore.getState().clearRecentFolders();
 
         // Navigate back to folder selection without a full page reload
         if (onRootFolderReset) {
@@ -378,9 +374,9 @@ export function Settings({ onBack, onViewHidden, onRootFolderReset }: SettingsPr
           <div className="p-4 bg-gray-50 dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700">
             <div className="mb-4 p-3 bg-white dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-700">
 
-              <p className="text-xs text-gray-500 dark:text-gray-400 font-medium mt-2 mb-1">Current Source</p>
-              <p className="text-sm text-gray-900 dark:text-white font-mono break-all">
-                {currentSource ? `${currentSource.displayName} (${currentSource.id})` : 'No active source'}
+              <p className="text-xs text-gray-500 dark:text-gray-400 font-medium mt-2 mb-1">Sources</p>
+              <p className="text-sm text-gray-900 dark:text-white break-all">
+                {sources?.length ? sources.map((source) => source.displayName).join(', ') : 'No active source'}
               </p>
               <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
                 Root folder path is read from indexed configuration data.
@@ -389,7 +385,7 @@ export function Settings({ onBack, onViewHidden, onRootFolderReset }: SettingsPr
 
             <button
               onClick={handleResetRootFolder}
-              disabled={isResetting || (!localRootFolder && (!stats?.rootFolder || stats.rootFolder === 'Not set'))}
+              disabled={isResetting || (!localRootFolder && !sources?.length)}
               className="w-full bg-red-600 hover:bg-red-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg transition-colors font-medium flex items-center justify-center gap-2 mb-4"
             >
               {isResetting ? (
@@ -409,11 +405,11 @@ export function Settings({ onBack, onViewHidden, onRootFolderReset }: SettingsPr
               Reset will clear all indexed media and return you to the folder selection screen.
             </p>
 
-            {currentSource ? (
+            {sources?.length ? (
               <>
                 <div className="mb-4">
                   <p className="text-sm text-gray-600 dark:text-gray-400">
-                    Manage subfolders in your root folder. Hidden subfolders will not appear in your feed.
+                    Manage subfolders across your sources. Hidden subfolders will not appear in your feed.
                   </p>
                 </div>
 

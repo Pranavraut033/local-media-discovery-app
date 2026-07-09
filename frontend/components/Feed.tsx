@@ -10,9 +10,8 @@ import { cancelPrefetch } from '@/lib/api';
 import { useQueryClient } from '@tanstack/react-query';
 import type { FeedItem } from '@/lib/hooks';
 import { MediaCard } from './MediaCard';
-import { PlyrVideoModal } from './PlyrVideoModal';
-import { Grid3x3, Layers, Heart, Bookmark, Maximize, Minimize } from 'lucide-react';
-import { getViewMode, setViewMode, getLastViewedMedia, setLastViewedMedia } from '@/lib/storage';
+import { KeyboardShortcutsGuide } from './KeyboardShortcutsGuide';
+import { Grid3x3, Layers, Heart, Bookmark, Maximize, Minimize, Keyboard } from 'lucide-react';
 import Masonry from 'react-masonry-css';
 import { useFullscreen } from '@/lib/useFullscreen';
 import {
@@ -38,12 +37,12 @@ interface FeedProps {
 }
 
 export function Feed({ initialMode, onViewSource, onModeChange }: FeedProps) {
-  const [mode, setMode] = useState<FeedMode>(() => initialMode || getViewMode());
+  const [mode, setMode] = useState<FeedMode>(() => initialMode || useUIStore.getState().viewMode);
   const [allItems, setAllItems] = useState<FeedItem[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [isResuming, setIsResuming] = useState(true);
   const [feedSeed] = useState(() => `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`);
-  const [expandedVideo, setExpandedVideo] = useState<{ src: string; title?: string } | null>(null);
+  const [showShortcuts, setShowShortcuts] = useState(false);
   const feedSourceType = useUIStore((s) => s.preferences.feedSourceType);
   const jobs = useIndexingStore((s) => s.jobs);
   const queryClient = useQueryClient();
@@ -217,7 +216,10 @@ export function Feed({ initialMode, onViewSource, onModeChange }: FeedProps) {
   // Resume position from last session
   useEffect(() => {
     if (isResuming && allItems.length > 0) {
-      const lastViewed = getLastViewedMedia();
+      const uiState = useUIStore.getState();
+      const lastViewed = uiState.lastViewedMediaId
+        ? { mediaId: uiState.lastViewedMediaId }
+        : null;
       if (lastViewed) {
         const index = allItems.findIndex(item => item.id === lastViewed.mediaId);
         if (index !== -1) {
@@ -246,7 +248,7 @@ export function Feed({ initialMode, onViewSource, onModeChange }: FeedProps) {
   // Save current position when index changes
   useEffect(() => {
     if (!isResuming && allItems[currentIndex]) {
-      setLastViewedMedia(allItems[currentIndex].id);
+      useUIStore.getState().setLastViewedMedia(allItems[currentIndex].id);
     }
   }, [currentIndex, allItems, isResuming]);
 
@@ -368,10 +370,71 @@ export function Feed({ initialMode, onViewSource, onModeChange }: FeedProps) {
   const toggleMode = useCallback(() => {
     setMode((prev) => {
       const newMode = prev === 'reels' ? 'feed' : 'reels';
-      setViewMode(newMode);
+      useUIStore.getState().setViewMode(newMode);
       return newMode;
     });
   }, []);
+
+  // Grid card's "open" button jumps straight to that item in the single-video
+  // view — same query/cache, just a mode + index switch, no refetch.
+  const handleOpenInReels = useCallback((index: number) => {
+    setCurrentIndex(index);
+    setMode('reels');
+    useUIStore.getState().setViewMode('reels');
+  }, []);
+
+  // Global keyboard shortcuts. Up/Down/Like/Save are reels-only (they act on
+  // "currentMedia", which only tracks something meaningful there); grid/fullscreen
+  // toggle and the shortcuts guide work in either view. Space/M/Left/Right (seek,
+  // play, mute) are handled inside PlyrVideo itself, which owns the player.
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
+        return;
+      }
+
+      if (e.key === '?') {
+        e.preventDefault();
+        setShowShortcuts((prev) => !prev);
+        return;
+      }
+      if (e.key === 'Escape' && showShortcuts) {
+        e.preventDefault();
+        setShowShortcuts(false);
+        return;
+      }
+      if (e.key === 'g' || e.key === 'G') {
+        e.preventDefault();
+        toggleMode();
+        return;
+      }
+      if (e.key === 'f' || e.key === 'F') {
+        e.preventDefault();
+        toggleFullscreen();
+        return;
+      }
+
+      if (mode !== 'reels') return;
+
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        handlePrevious();
+      } else if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        handleNext();
+      } else if (e.key === 'l' || e.key === 'L') {
+        e.preventDefault();
+        handleLike();
+      } else if (e.key === 's' || e.key === 'S') {
+        e.preventDefault();
+        handleSave();
+      }
+    };
+
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [mode, showShortcuts, handlePrevious, handleNext, handleLike, handleSave, toggleMode, toggleFullscreen]);
 
   if (isLoading && allItems.length === 0) {
     return (
@@ -451,6 +514,13 @@ export function Feed({ initialMode, onViewSource, onModeChange }: FeedProps) {
               aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
             >
               {isFullscreen ? <Minimize size={20} /> : <Maximize size={20} />}
+            </button>
+            <button
+              onClick={() => setShowShortcuts(true)}
+              className="h-10 w-10 rounded-lg bg-black/40 text-white/80 hover:text-white backdrop-blur-md border border-white/15 flex items-center justify-center transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300"
+              aria-label="Show keyboard shortcuts"
+            >
+              <Keyboard size={20} />
             </button>
           </div>
         </div>
@@ -541,6 +611,8 @@ export function Feed({ initialMode, onViewSource, onModeChange }: FeedProps) {
             <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
           </div>
         )}
+
+        <KeyboardShortcutsGuide isOpen={showShortcuts} onClose={() => setShowShortcuts(false)} />
       </div>
     );
   }
@@ -565,6 +637,13 @@ export function Feed({ initialMode, onViewSource, onModeChange }: FeedProps) {
             aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
           >
             {isFullscreen ? <Minimize size={20} /> : <Maximize size={20} />}
+          </button>
+          <button
+            onClick={() => setShowShortcuts(true)}
+            className="h-10 w-10 rounded-lg bg-black/40 text-white/80 hover:text-white backdrop-blur-md border border-white/15 flex items-center justify-center transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300"
+            aria-label="Show keyboard shortcuts"
+          >
+            <Keyboard size={20} />
           </button>
         </div>
       </div>
@@ -591,7 +670,7 @@ export function Feed({ initialMode, onViewSource, onModeChange }: FeedProps) {
                   onVisible={() => { }}
                   onVisibleIndexChange={handleVisibleIndexChange}
                   onViewSource={onViewSource}
-                  onVideoExpand={(src, title) => setExpandedVideo({ src, title })}
+                  onOpenInReels={handleOpenInReels}
                   mode="feed"
                   enableHoverAutoplay={true}
                   className="w-full rounded-2xl overflow-hidden"
@@ -610,12 +689,7 @@ export function Feed({ initialMode, onViewSource, onModeChange }: FeedProps) {
         </div>
       </div>
 
-      <PlyrVideoModal
-        isOpen={expandedVideo !== null}
-        src={expandedVideo?.src ?? ''}
-        title={expandedVideo?.title}
-        onClose={() => setExpandedVideo(null)}
-      />
+      <KeyboardShortcutsGuide isOpen={showShortcuts} onClose={() => setShowShortcuts(false)} />
     </div>
   );
 }

@@ -1,7 +1,7 @@
 'use client';
 
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import { useAuthStore } from '@/lib/storage';
+import { useAuthStore } from '@/lib/stores/auth.store';
 import { getApiBase } from '@/lib/api';
 import { connectSSE, disconnectSSE } from '@/lib/sse';
 import { isDesktopRuntime, getAutoPin } from '@/lib/desktop';

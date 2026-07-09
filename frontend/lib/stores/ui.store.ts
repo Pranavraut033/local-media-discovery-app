@@ -31,10 +31,6 @@ interface UIState {
   preferences: UserPreferences;
   setPreferences: (prefs: Partial<UserPreferences>) => void;
 
-  // Scroll Position
-  scrollPosition: number;
-  setScrollPosition: (position: number) => void;
-
   // Last Viewed Media
   lastViewedMediaId: string | null;
   lastViewedTimestamp: number | null;
@@ -64,10 +60,6 @@ export const useUIStore = create<UIState>()(
         set((state) => ({
           preferences: { ...state.preferences, ...prefs },
         })),
-
-      // Scroll Position
-      scrollPosition: 0,
-      setScrollPosition: (position: number) => set({ scrollPosition: position }),
 
       // Last Viewed Media
       lastViewedMediaId: null,
