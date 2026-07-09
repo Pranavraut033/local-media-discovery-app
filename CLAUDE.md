@@ -12,7 +12,10 @@ CodeGraph is set up for this project (MCP server in `.mcp.json`, index in `.code
 # Install all dependencies
 npm run install:all
 
-# Development (run each in its own terminal)
+# Development (all three at once)
+npm run server                  # spawns backend/media-server/frontend dev, LAN-reachable
+
+# Or run each in its own terminal
 cd backend && npm run dev       # Fastify on :3001 with tsx watch
 cd frontend && npm run dev      # Next.js on :3000
 cd media-server && npm run dev  # Media server on :3002 (optional for local files)
@@ -62,7 +65,7 @@ Three independent processes, spawned and supervised by the Electron main process
 
 ### Indexing Pipeline
 
-Two paths, both via BullMQ worker (`backend/src/workers/indexer.worker.ts`):
+Two paths, both processed by an in-process queue worker (`backend/src/workers/indexer.worker.ts`, `backend/src/queue/index.ts`):
 - **Local**: chokidar scan → Phase 1 discovery (create `pending` filePaths) → Phase 2 finalization (hash files, dedup via `files` table, mark `ready`)
 - **Rclone**: single-phase streaming via rclone RPC fast-list, written in batches as `ready`
 - Progress streams to frontend via SSE (`/api/events`)
@@ -113,6 +116,6 @@ Images: `.jpg`, `.jpeg`, `.png`, `.webp`, `.gif` | Videos: `.mp4`, `.webm`, `.mo
 - `PRD.md` — product requirements and design decisions
 - `plan.md` — phased implementation roadmap (phases A–F)
 - `AUTH_SETUP.md` — authentication setup and troubleshooting
-- `MIGRATION_ZUSTAND.md` — state management refactor notes and store patterns
+- `MIGRATION_ZUSTAND.md` — Zustand store patterns and usage guide
 - `agents.md` — agent workflow constraints and task boundaries
 - `REMOTE_SERVERS.md` — canonical YAML schema and worked examples for rclone/WebDAV remote servers

@@ -38,7 +38,7 @@ connection:
   domain: WORKGROUP    # optional; omit for home NAS / macOS shares
 ```
 
-> **Requires rclone ≥ 1.61.** No FUSE mount, no extra system packages — rclone's SMB client is pure Go.
+> **Requires rclone ≥ 1.61.** rclone's SMB client is pure Go — no extra system SMB packages needed. FUSE (macFUSE / WinFsp / fuse) is still required, since the app mounts every rclone remote locally regardless of backend.
 
 ### sftp (NAS / Linux server)
 
@@ -154,10 +154,11 @@ connection:
 
 ## How it works
 
-1. **Listing** — rclone sources use `rclone rcd --rc-serve` (one sidecar process); WebDAV sources use PROPFIND.
-2. **Streaming** — the media-server fetches bytes directly from the rcd HTTP server or the WebDAV URL with range support. No FUSE mount needed.
-3. **Cache** — the media-server's AES-256-CTR encrypted disk cache is used for prefetched items, identical to local files.
-4. **Credentials** — connection details are AES-256-GCM encrypted at rest (keyed per user). The browser never sees raw credentials.
+1. **Listing** — rclone sources use `rclone rcd --rc-serve` (one sidecar process) for directory browsing, indexing, and thumbnails; WebDAV sources use PROPFIND.
+2. **Mounting** — every configured rclone remote is auto-mounted via FUSE (`rclone mount`) on backend startup, one mountpoint per server under `~/.rclone-mounts/<serverId>`.
+3. **Streaming** — rclone-type remotes are read straight from their local FUSE mount, the same code path as local files. WebDAV-only remotes stream via a ranged GET through the media-server's fetcher.
+4. **Cache** — the media-server's AES-256-CTR encrypted disk cache is used for prefetched items, identical to local files.
+5. **Credentials** — connection details are AES-256-GCM encrypted at rest (keyed per user). The browser never sees raw credentials.
 
 ## Adding a new server type
 

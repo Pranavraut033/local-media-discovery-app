@@ -22,7 +22,7 @@ No cloud. No accounts. No telemetry. Your files stay on your machine.
 - **Algorithmic ranking** — unseen priority, source diversity, interaction bias, entropy
 - **Like / Save / Hide** — interactions that refine your feed; accessible from any LAN device
 - **Source identities** — deterministic pseudo-handles (e.g. `@quiet_river`) derived from folder structure
-- **Remote sources** — Android Termux rclone daemon integration for phone libraries
+- **Remote sources** — SMB, SFTP, S3-compatible, WebDAV, Dropbox/Drive/OneDrive, or an Android phone via Termux rclone
 - **Multi-user** — per-user folders, interactions, and preferences; isolated by 6-digit PIN
 - **PWA-ready** — installable, works over LAN from any phone or tablet
 
@@ -36,7 +36,7 @@ Three independent processes, spawned and supervised by the Electron desktop app 
 
 | Process | Port | Responsibility |
 |---|---|---|
-| `backend/` | 3001 | Auth, indexing, feed ranking, SQLite (Drizzle ORM), BullMQ workers |
+| `backend/` | 3001 | Auth, indexing, feed ranking, SQLite (raw SQL), in-process queue |
 | `frontend/` | 3000 | Next.js static export, TanStack Query, Zustand |
 | `media-server/` | 3002 | HMAC-gated streaming, thumbnail cache *(optional for local files)* |
 
@@ -75,6 +75,12 @@ cd backend && npm run create-user 123456
 ```
 
 ### 4. Start development servers
+
+```bash
+npm run server   # starts backend, media-server, and frontend together
+```
+
+Or run each in its own terminal:
 
 ```bash
 # Terminal 1
@@ -144,7 +150,11 @@ NODE_ENV=production
 
 ---
 
-## Remote Sources (Android Termux)
+## Remote Sources
+
+Add SMB, SFTP, S3-compatible, WebDAV, Dropbox/Drive/OneDrive, or other rclone-backed remotes in **Settings → Remote Servers** by pasting a YAML definition — see [REMOTE_SERVERS.md](REMOTE_SERVERS.md) for the full schema and worked examples.
+
+### Quick path: Android phone via Termux
 
 Install rclone in Termux and start the daemon:
 
@@ -173,7 +183,7 @@ cd frontend && npm run lint
 cd backend && npm run db:migrate
 ```
 
-Schema lives in `backend/src/db/schema.ts`. Run migrations after any schema change.
+Schema changes go in a new `backend/migrations/*.sql` file; run `npm run db:migrate` to apply.
 
 ---
 
@@ -181,11 +191,12 @@ Schema lives in `backend/src/db/schema.ts`. Run migrations after any schema chan
 
 ```
 local-media-discovery-app/
-├── backend/          # Fastify API, SQLite, BullMQ indexing workers
+├── backend/          # Fastify API, SQLite, in-process indexing queue
 ├── frontend/         # Next.js static export, Zustand stores, TanStack Query
 ├── media-server/     # HMAC-gated media streaming and thumbnail cache
 ├── landing/          # Standalone showcase page (open index.html in browser)
-└── PRD.md            # Product requirements and design decisions
+├── PRD.md            # Product requirements and design decisions
+└── REMOTE_SERVERS.md # Remote server YAML schema and examples
 ```
 
 ---
