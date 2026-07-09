@@ -27,7 +27,7 @@ import {
   deleteServer,
 } from '../services/remote/servers-db.js';
 import { getProvider } from '../services/remote/registry.js';
-import { getRcdClient, RC_URL } from '../services/rclone-rcd.js';
+import { getRcdClient, rcPost } from '../services/rclone-rcd.js';
 import { rcloneMountManager } from '../services/rclone-mount.js';
 
 /** The rclone remote to mount for a server's connection (crypt wraps the base remote when present). */
@@ -37,15 +37,6 @@ export function mountRemoteFor(connection: Record<string, string>): string {
 
 const MEDIA_SERVER_SECRET =
   process.env.MEDIA_SERVER_SECRET || 'media-server-default-secret-change-me';
-
-function getRcAuth() {
-  return {
-    auth: {
-      username: process.env.RCLONE_RC_USER || 'local-media',
-      password: process.env.RCLONE_RC_PASS || 'local-media-rcd-pass',
-    },
-  };
-}
 
 /** Parse a server definition from YAML text or a plain JSON body. */
 function parseServerDef(raw: unknown): {
@@ -90,8 +81,6 @@ async function provisionRemotes(
   def: ReturnType<typeof parseServerDef>,
   log: FastifyBaseLogger
 ): Promise<Record<string, string>> {
-  const RC_AUTH = getRcAuth();
-  const axios = (await import('axios')).default;
   let connection = { ...def.connection };
   let createdRcloneRemote: string | null = null;
 
@@ -104,14 +93,14 @@ async function provisionRemotes(
     const remoteType = def.rcloneRemoteType;
 
     try {
-      await axios.post(`${RC_URL}/config/create`, { name: remoteName, type: remoteType, parameters: rcloneParams }, RC_AUTH);
+      await rcPost('/config/create', { name: remoteName, type: remoteType, parameters: rcloneParams });
       createdRcloneRemote = remoteName;
       log.info({ remoteName, type: remoteType }, '[servers] created rclone config entry');
     } catch (err: any) {
       const rcdMsg = err?.response?.data?.error ?? err?.message;
       if (typeof rcdMsg === 'string' && rcdMsg.toLowerCase().includes('already')) {
         try {
-          await axios.post(`${RC_URL}/config/update`, { name: remoteName, type: remoteType, parameters: rcloneParams }, RC_AUTH);
+          await rcPost('/config/update', { name: remoteName, type: remoteType, parameters: rcloneParams });
           log.info({ remoteName }, '[servers] updated existing rclone config entry');
         } catch (uerr: any) {
           log.error({ err: uerr, remoteName }, '[servers] failed to update rclone config entry');
@@ -129,7 +118,7 @@ async function provisionRemotes(
     await getProvider(def.type).validate(def.connection);
   } catch (err: any) {
     if (createdRcloneRemote) {
-      await axios.post(`${RC_URL}/config/delete`, { name: createdRcloneRemote }, RC_AUTH).catch(() => {});
+      await rcPost('/config/delete', { name: createdRcloneRemote }).catch(() => {});
     }
     log.error({ err, type: def.type, connection: def.connection }, '[servers] validation failed');
     throw new Error(`Connection validation failed: ${err.message}`);
@@ -153,7 +142,7 @@ async function provisionRemotes(
     const cryptParams: Record<string, string> = { remote: cryptRemote, password: def.crypt.password };
     if (def.crypt.password2) cryptParams.password2 = def.crypt.password2;
     try {
-      await axios.post(`${RC_URL}/config/create`, { name: cryptName, type: 'crypt', parameters: cryptParams }, RC_AUTH);
+      await rcPost('/config/create', { name: cryptName, type: 'crypt', parameters: cryptParams });
       // Store crypt metadata so edit can reconstruct YAML
       connection = {
         ...connection,
@@ -174,15 +163,13 @@ async function provisionRemotes(
 
 /** Delete rclone config entries for a server (best-effort, no throw). */
 async function cleanupRcloneRemotes(connection: Record<string, string>, log: FastifyBaseLogger) {
-  const RC_AUTH = getRcAuth();
-  const axios = (await import('axios')).default;
   if (connection.cryptRemoteName) {
-    await axios.post(`${RC_URL}/config/delete`, { name: connection.cryptRemoteName }, RC_AUTH).catch((e: any) => {
+    await rcPost('/config/delete', { name: connection.cryptRemoteName }).catch((e: any) => {
       log.warn({ err: e, name: connection.cryptRemoteName }, '[servers] cleanup: delete crypt remote failed');
     });
   }
   if (connection.remoteName) {
-    await axios.post(`${RC_URL}/config/delete`, { name: connection.remoteName }, RC_AUTH).catch((e: any) => {
+    await rcPost('/config/delete', { name: connection.remoteName }).catch((e: any) => {
       log.warn({ err: e, name: connection.remoteName }, '[servers] cleanup: delete base remote failed');
     });
   }

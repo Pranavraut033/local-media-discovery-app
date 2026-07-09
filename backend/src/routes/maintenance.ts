@@ -132,7 +132,7 @@ export default async function maintenanceRoutes(fastify: FastifyInstance): Promi
   /**
    * Get database statistics and info
    */
-  fastify.get('/api/admin/stats', async (request: FastifyRequest, reply: FastifyReply) => {
+  fastify.get('/api/admin/stats', { onRequest: [fastify.authenticate] }, async (request: FastifyRequest, reply: FastifyReply) => {
     try {
       const mediaStats = getV2MediaStats(db);
 

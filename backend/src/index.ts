@@ -113,7 +113,7 @@ await fastify.register(eventsRoutes);
 await fastify.register(discoverRoutes);
 await fastify.register(serversRoutes);
 
-// Start BullMQ indexing worker (in-process)
+// Start in-process indexing worker
 startIndexingWorker();
 
 // Start rcd sidecar — control plane for remote_servers (listing, thumbnails,

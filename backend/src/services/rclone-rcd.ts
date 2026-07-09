@@ -12,7 +12,6 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { fileURLToPath } from 'url';
-import axios, { type AxiosInstance } from 'axios';
 import { execSync } from 'child_process';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -68,41 +67,50 @@ export interface RcdListItem {
   isDir: boolean;
 }
 
-class RcdClient {
-  private ax: AxiosInstance;
+const RC_BASIC_AUTH = `Basic ${Buffer.from(`${RC_USER}:${RC_PASS}`).toString('base64')}`;
 
-  constructor() {
-    this.ax = axios.create({
-      baseURL: RC_URL,
-      auth: { username: RC_USER, password: RC_PASS },
-      timeout: 60_000,
-    });
+/** POST to the rcd control-plane API. Throws with `.response.data` set (axios-shaped) on non-2xx. */
+export async function rcPost(pathStr: string, body: unknown): Promise<any> {
+  const res = await fetch(`${RC_URL}${pathStr}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: RC_BASIC_AUTH },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(60_000),
+  });
+  const data: any = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const err: any = new Error(data?.error ?? `rclone rc ${pathStr} failed with status ${res.status}`);
+    err.response = { data };
+    throw err;
   }
+  return data;
+}
 
+class RcdClient {
   async ping(): Promise<boolean> {
-    try { await this.ax.post('/core/version', {}); return true; }
+    try { await rcPost('/core/version', {}); return true; }
     catch { return false; }
   }
 
   /** True if this rcd's active config file matches the given path. */
   async usesConfig(configPath: string): Promise<boolean> {
     try {
-      const res = await this.ax.post('/config/paths', {});
-      return path.resolve(res.data?.config ?? '') === path.resolve(configPath);
+      const data = await rcPost('/config/paths', {});
+      return path.resolve(data?.config ?? '') === path.resolve(configPath);
     } catch { return false; }
   }
 
   async quit(): Promise<void> {
-    await this.ax.post('/core/quit', {});
+    await rcPost('/core/quit', {});
   }
 
   /** List one directory level. fsStr = "remote:", remote = "sub/path" */
   async listDir(fsStr: string, remote: string): Promise<RcdListItem[]> {
-    const res = await this.ax.post('/operations/list', { fs: fsStr, remote });
+    const data = await rcPost('/operations/list', { fs: fsStr, remote });
     // i.Path is already the full path relative to fsStr (rclone computes it,
     // not us) — use it directly rather than rebuilding from remote+i.Name,
     // which silently drops intermediate subfolders once recurse is involved.
-    return (res.data?.list ?? []).map((i: any) => ({
+    return (data?.list ?? []).map((i: any) => ({
       path: i.Path,
       name: i.Name,
       size: i.Size ?? 0,
@@ -113,7 +121,7 @@ class RcdClient {
   /** Recursive listing via fast-list opt. Falls back to iterative if rejected. */
   async listRecursive(fsStr: string, remote: string): Promise<RcdListItem[]> {
     try {
-      const res = await this.ax.post('/operations/list', {
+      const data = await rcPost('/operations/list', {
         fs: fsStr,
         remote,
         opt: { recurse: true, filesOnly: true, noMimeType: true },
@@ -121,7 +129,7 @@ class RcdClient {
       // i.Path is the full path relative to fsStr for every nesting level —
       // rebuilding it from remote+i.Name (as listDir used to) collapses nested
       // files to "remote/filename", dropping every subfolder in between.
-      return (res.data?.list ?? []).map((i: any) => ({
+      return (data?.list ?? []).map((i: any) => ({
         path: i.Path,
         name: i.Name,
         size: i.Size ?? 0,

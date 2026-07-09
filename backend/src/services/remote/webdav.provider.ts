@@ -1,9 +1,8 @@
 /**
  * WebDAV remote provider.
- * Direct client via axios PROPFIND — no rclone involved.
+ * Direct client via fetch + PROPFIND — no rclone involved.
  * Range-capable fetching is handled by the media-server RemoteFetcher.
  */
-import axios, { type AxiosInstance } from 'axios';
 import mime from 'mime-types';
 import type { RemoteProvider, RemoteServer, RemoteListing, RemoteFileInfo } from './types.js';
 
@@ -16,17 +15,39 @@ function mediaKind(ext: string): 'image' | 'video' | null {
   return null;
 }
 
-export function makeClient(connection: Record<string, string>): AxiosInstance {
-  const cfg: any = { baseURL: connection.url, timeout: 30_000 };
-  if (connection.user) cfg.auth = { username: connection.user, password: connection.pass || '' };
-  return axios.create(cfg);
+interface WebdavClient {
+  baseUrl: string;
+  authHeader?: string;
+}
+
+function makeClient(connection: Record<string, string>): WebdavClient {
+  return {
+    baseUrl: connection.url,
+    authHeader: connection.user
+      ? `Basic ${Buffer.from(`${connection.user}:${connection.pass || ''}`).toString('base64')}`
+      : undefined,
+  };
+}
+
+/** Mirrors axios's baseURL + relative-url join (single slash, no double slashes). */
+function joinUrl(baseUrl: string, urlPath: string): string {
+  if (!urlPath) return baseUrl;
+  return baseUrl.replace(/\/+$/, '') + '/' + urlPath.replace(/^\/+/, '');
+}
+
+function authHeaders(client: WebdavClient, extra?: Record<string, string>): Record<string, string> {
+  return { ...(client.authHeader ? { Authorization: client.authHeader } : {}), ...extra };
 }
 
 /** Fetch a whole file's bytes. Used by the backend's own thumbnail generator. */
 export async function fetchWebdavFile(connection: Record<string, string>, remotePath: string): Promise<Buffer> {
   const client = makeClient(connection);
-  const res = await client.get(remotePath, { responseType: 'arraybuffer' });
-  return Buffer.from(res.data as ArrayBuffer);
+  const res = await fetch(joinUrl(client.baseUrl, remotePath), {
+    headers: authHeaders(client),
+    signal: AbortSignal.timeout(30_000),
+  });
+  if (!res.ok) throw new Error(`WebDAV fetch failed with status ${res.status}`);
+  return Buffer.from(await res.arrayBuffer());
 }
 
 interface DavEntry {
@@ -64,15 +85,15 @@ const PROPFIND_BODY = `<?xml version="1.0" encoding="utf-8"?>
   </D:prop>
 </D:propfind>`;
 
-async function propfind(client: AxiosInstance, urlPath: string, depth: '0' | '1' | 'infinity'): Promise<DavEntry[]> {
-  const response = await client.request({
+async function propfind(client: WebdavClient, urlPath: string, depth: '0' | '1' | 'infinity'): Promise<DavEntry[]> {
+  const res = await fetch(joinUrl(client.baseUrl, urlPath || '/'), {
     method: 'PROPFIND',
-    url: urlPath || '/',
-    headers: { Depth: depth, 'Content-Type': 'application/xml' },
-    data: PROPFIND_BODY,
-    responseType: 'text',
+    headers: authHeaders(client, { Depth: depth, 'Content-Type': 'application/xml' }),
+    body: PROPFIND_BODY,
+    signal: AbortSignal.timeout(30_000),
   });
-  return parsePropfind(response.data as string, urlPath);
+  if (!res.ok) throw new Error(`PROPFIND failed with status ${res.status}`);
+  return parsePropfind(await res.text(), urlPath);
 }
 
 export const webdavProvider: RemoteProvider = {
@@ -80,8 +101,12 @@ export const webdavProvider: RemoteProvider = {
     if (!connection.url) throw new Error('connection.url is required');
     const client = makeClient(connection);
     // OPTIONS to check server is up and supports WebDAV
-    const resp = await client.options(connection.url);
-    if (!resp.headers.dav && !resp.headers.DAV) {
+    const resp = await fetch(connection.url, {
+      method: 'OPTIONS',
+      headers: authHeaders(client),
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (!resp.headers.get('dav')) {
       throw new Error('Server does not expose DAV header — is this a WebDAV server?');
     }
   },
@@ -142,7 +167,7 @@ export const webdavProvider: RemoteProvider = {
   },
 };
 
-async function walkRecursive(client: AxiosInstance, dir: string): Promise<DavEntry[]> {
+async function walkRecursive(client: WebdavClient, dir: string): Promise<DavEntry[]> {
   const entries = await propfind(client, dir, '1');
   const result: DavEntry[] = [];
   for (const e of entries) {

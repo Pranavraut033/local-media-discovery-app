@@ -4,8 +4,6 @@
  * using the HTTP RPC interface instead of subprocess
  */
 
-import axios, { AxiosInstance } from 'axios';
-
 export interface RemoteRcloneConfig {
   host: string; // e.g., 'localhost' or '192.168.x.x'
   port: number; // default 5572
@@ -27,26 +25,43 @@ export interface RcloneFileInfo {
 }
 
 export class RemoteRcloneClient {
-  private client: AxiosInstance;
   private baseUrl: string;
+  private authHeader?: string;
 
   constructor(config: RemoteRcloneConfig) {
     this.baseUrl = `http://${config.host}:${config.port}`;
-
-    const clientConfig: any = {
-      baseURL: this.baseUrl,
-      timeout: 30000,
-    };
-
-    // Add auth if provided
     if (config.user && config.password) {
-      clientConfig.auth = {
-        username: config.user,
-        password: config.password,
-      };
+      this.authHeader = `Basic ${Buffer.from(`${config.user}:${config.password}`).toString('base64')}`;
     }
+  }
 
-    this.client = axios.create(clientConfig);
+  /** POST helper. Throws with `.response.data` set (axios-shaped) on non-2xx. */
+  private async post(path: string, body: unknown): Promise<any> {
+    const res = await fetch(`${this.baseUrl}${path}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(this.authHeader ? { Authorization: this.authHeader } : {}),
+      },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(30_000),
+    });
+    const data: any = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const err: any = new Error(data?.error || `rclone remote request failed with status ${res.status}`);
+      err.response = { data };
+      throw err;
+    }
+    return data;
+  }
+
+  private async get(path: string): Promise<any> {
+    const res = await fetch(`${this.baseUrl}${path}`, {
+      headers: this.authHeader ? { Authorization: this.authHeader } : undefined,
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (!res.ok) throw new Error(`rclone remote request failed with status ${res.status}`);
+    return res.json();
   }
 
   /**
@@ -54,7 +69,7 @@ export class RemoteRcloneClient {
    */
   async isAvailable(): Promise<boolean> {
     try {
-      await this.client.get('/core/version');
+      await this.get('/core/version');
       return true;
     } catch {
       return false;
@@ -66,8 +81,8 @@ export class RemoteRcloneClient {
    */
   async listRemotes(): Promise<RcloneRemote[]> {
     try {
-      const response = await this.client.post('/config/listremotes', {});
-      const remotesList = response.data?.remotes || [];
+      const data = await this.post('/config/listremotes', {});
+      const remotesList = data?.remotes || [];
 
       return remotesList.map((name: string) => ({
         name: name.replace(':', ''),
@@ -84,7 +99,7 @@ export class RemoteRcloneClient {
    */
   async validateRemote(remotePath: string): Promise<{ success: boolean; error?: string }> {
     try {
-      const response = await this.client.post('/operations/list', {
+      await this.post('/operations/list', {
         fs: remotePath,
         maxItems: 1,
       });
@@ -103,11 +118,11 @@ export class RemoteRcloneClient {
    */
   async listFiles(remotePath: string): Promise<RcloneFileInfo[]> {
     try {
-      const response = await this.client.post('/operations/list', {
+      const data = await this.post('/operations/list', {
         fs: remotePath,
       });
 
-      const items = response.data?.list || [];
+      const items = data?.list || [];
 
       return items.map((item: any) => ({
         path: item.Name,
@@ -184,11 +199,13 @@ export class RemoteRcloneClient {
     try {
       // Try using rclone's HTTP server endpoint if available
       const encodedPath = encodeURIComponent(remotePath);
-      const response = await this.client.get(`/file/${encodedPath}`, {
-        responseType: 'arraybuffer',
+      const res = await fetch(`${this.baseUrl}/file/${encodedPath}`, {
+        headers: this.authHeader ? { Authorization: this.authHeader } : undefined,
+        signal: AbortSignal.timeout(30_000),
       });
+      if (!res.ok) throw new Error(`rclone remote request failed with status ${res.status}`);
 
-      return Buffer.from(response.data);
+      return Buffer.from(await res.arrayBuffer());
     } catch (error) {
       // Fallback: RPC doesn't support direct file streaming
       console.error(`Cannot read file ${remotePath} via RPC. Requires RPC 'file' endpoint or HTTP mount.`);
@@ -201,8 +218,8 @@ export class RemoteRcloneClient {
    */
   async getVersion(): Promise<string> {
     try {
-      const response = await this.client.get('/core/version');
-      return response.data?.version || 'unknown';
+      const data = await this.get('/core/version');
+      return data?.version || 'unknown';
     } catch {
       return 'unavailable';
     }
