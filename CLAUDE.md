@@ -29,7 +29,7 @@ cd backend && npm run type-check
 cd frontend && npm run lint
 
 # Database
-cd backend && npm run db:migrate  # Run Drizzle migrations
+cd backend && npm run db:migrate  # Run SQL migrations (backend/migrations/*.sql)
 
 # First-time setup
 cd backend && npm run dev         # Initializes DB on first run, then Ctrl+C
@@ -70,7 +70,7 @@ Two paths, both via BullMQ worker (`backend/src/workers/indexer.worker.ts`):
 
 ### Database
 
-SQLite via Drizzle ORM at `backend/media-discovery.db`. Schema in `backend/src/db/schema.ts`. WAL mode, foreign keys enabled, 64MB cache.
+SQLite via better-sqlite3 (raw SQL) at `backend/media-discovery.db`. Migrations in `backend/migrations/*.sql`, applied by `backend/src/db/migrate.ts`. WAL mode, foreign keys enabled, 64MB cache.
 
 Key table relationships: `users` → `folders` → `filePaths` ↔ `files` (deduped by content hash). Interactions (`userLikedFiles`, `userSavedFiles`, `userHiddenFiles`) and `userPreferences` are all scoped per `userId`.
 

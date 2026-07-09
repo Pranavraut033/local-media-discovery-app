@@ -263,6 +263,54 @@ async function loadOrCreateSecrets(runtimeDir) {
   return secrets;
 }
 
+/**
+ * Spawn a service, wait for it to report healthy, and retry on a fresh port if
+ * it lost a race for its preferred one (EADDRINUSE). Shared by startBackend and
+ * startMediaServer — they differ only in spawn args, port, and health URL.
+ */
+async function startManagedService({ label, getPort, setPort, healthUrl, spawnFn }) {
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const port = getPort();
+    let combinedOutput = '';
+    console.log(`Attempt ${attempt + 1}: starting ${label} on port ${port}`);
+
+    const child = spawnFn(port);
+    child.on('error', (err) => {
+      console.error(`${label} spawn error:`, err);
+    });
+    child.stdout?.on('data', (chunk) => {
+      combinedOutput += chunk.toString();
+    });
+    child.stderr?.on('data', (chunk) => {
+      combinedOutput += chunk.toString();
+    });
+    pipeChildLogs(label, child);
+
+    const exitPromise = watchProcessExit(child).then((exitInfo) => ({ ok: false, exitInfo }));
+    const healthPromise = waitForHealth(healthUrl(port), 45000).then(() => ({ ok: true }));
+    const result = await Promise.race([healthPromise, exitPromise]);
+
+    if (result.ok) {
+      child.on('exit', (code, signal) => {
+        if (!isQuitting) {
+          dialog.showErrorBox(`${label} stopped`, `${label} exited unexpectedly (code=${code}, signal=${signal || 'none'}).`);
+          app.quit();
+        }
+      });
+      return child;
+    }
+
+    if (combinedOutput.includes('EADDRINUSE')) {
+      setPort(await findAvailablePort(0));
+      continue;
+    }
+
+    throw new Error(formatExitMessage(label, result.exitInfo));
+  }
+
+  throw new Error(`${label} failed to acquire an available port after multiple attempts.`);
+}
+
 async function startBackend() {
   const cfg = runtimeState.startupConfig;
   const backendDir = getAppCodePath('backend');
@@ -271,17 +319,17 @@ async function startBackend() {
     ? [path.join(backendDir, 'node_modules', '.bin', 'tsx'), ['watch', 'src/index.ts'], backendDir]
     : [nodeRuntime.command, [getAppCodePath('backend', 'dist', 'index.js')], getAppCodePath('backend', 'dist')];
 
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    const backendPort = runtimeState.ports.backend;
-    let combinedOutput = '';
-    console.log(`Attempt ${attempt + 1}: starting backend on port ${backendPort}`);
-
-    backendProcess = spawn(spawnCmd, spawnArgs, {
+  backendProcess = await startManagedService({
+    label: 'Backend',
+    getPort: () => runtimeState.ports.backend,
+    setPort: (port) => { runtimeState.ports.backend = port; },
+    healthUrl: (port) => `http://127.0.0.1:${port}/api/health`,
+    spawnFn: (port) => spawn(spawnCmd, spawnArgs, {
       env: {
         ...process.env,
         ...nodeRuntime.env,
         NODE_ENV: IS_DEV ? 'development' : 'production',
-        PORT: String(backendPort),
+        PORT: String(port),
         JWT_SECRET: cfg.jwtSecret,
         MEDIA_SERVER_SECRET: cfg.mediaServerSecret,
         DB_PATH: cfg.dbPath,
@@ -289,43 +337,8 @@ async function startBackend() {
       },
       cwd: spawnCwd,
       stdio: ['ignore', 'pipe', 'pipe'],
-    });
-
-    backendProcess.on('error', (err) => {
-      console.error('Backend spawn error:', err);
-    });
-    
-    backendProcess.stdout?.on('data', (chunk) => {
-      combinedOutput += chunk.toString();
-    });
-    backendProcess.stderr?.on('data', (chunk) => {
-      combinedOutput += chunk.toString();
-    });
-    pipeChildLogs('backend', backendProcess);
-
-    const exitPromise = watchProcessExit(backendProcess).then((exitInfo) => ({ ok: false, exitInfo }));
-    const healthPromise = waitForHealth(`http://127.0.0.1:${backendPort}/api/health`, 45000).then(() => ({ ok: true }));
-    const result = await Promise.race([healthPromise, exitPromise]);
-
-    if (result.ok) {
-      backendProcess.on('exit', (code, signal) => {
-        if (!isQuitting) {
-          dialog.showErrorBox('Backend stopped', `Backend exited unexpectedly (code=${code}, signal=${signal || 'none'}).`);
-          app.quit();
-        }
-      });
-      return;
-    }
-
-    if (combinedOutput.includes('EADDRINUSE')) {
-      runtimeState.ports.backend = await findAvailablePort(0);
-      continue;
-    }
-
-    throw new Error(formatExitMessage('Backend', result.exitInfo));
-  }
-
-  throw new Error('Backend failed to acquire an available port after multiple attempts.');
+    }),
+  });
 }
 
 async function startMediaServer() {
@@ -336,17 +349,17 @@ async function startMediaServer() {
     ? [path.join(mediaDir, 'node_modules', '.bin', 'tsx'), ['watch', 'src/index.ts'], mediaDir]
     : [nodeRuntime.command, [getAppCodePath('media-server', 'dist', 'index.js')], getAppCodePath('media-server', 'dist')];
 
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    const mediaServerPort = runtimeState.ports.mediaServer;
-    let combinedOutput = '';
-    console.log(`Attempt ${attempt + 1}: starting media-server on port ${mediaServerPort}`);
-
-    mediaServerProcess = spawn(spawnCmd, spawnArgs, {
+  mediaServerProcess = await startManagedService({
+    label: 'Media service',
+    getPort: () => runtimeState.ports.mediaServer,
+    setPort: (port) => { runtimeState.ports.mediaServer = port; },
+    healthUrl: (port) => `http://127.0.0.1:${port}/health`,
+    spawnFn: (port) => spawn(spawnCmd, spawnArgs, {
       env: {
         ...process.env,
         ...nodeRuntime.env,
         NODE_ENV: IS_DEV ? 'development' : 'production',
-        PORT: String(mediaServerPort),
+        PORT: String(port),
         MEDIA_SERVER_SECRET: cfg.mediaServerSecret,
         CACHE_DIR: path.join(cfg.runtimeDir, 'media-cache'),
         KEYFILE_PATH: path.join(cfg.runtimeDir, '.media-server-key'),
@@ -357,39 +370,8 @@ async function startMediaServer() {
       },
       cwd: spawnCwd,
       stdio: ['ignore', 'pipe', 'pipe'],
-    });
-
-    mediaServerProcess.stdout?.on('data', (chunk) => {
-      combinedOutput += chunk.toString();
-    });
-    mediaServerProcess.stderr?.on('data', (chunk) => {
-      combinedOutput += chunk.toString();
-    });
-    pipeChildLogs('media-server', mediaServerProcess);
-
-    const exitPromise = watchProcessExit(mediaServerProcess).then((exitInfo) => ({ ok: false, exitInfo }));
-    const healthPromise = waitForHealth(`http://127.0.0.1:${mediaServerPort}/health`, 45000).then(() => ({ ok: true }));
-    const result = await Promise.race([healthPromise, exitPromise]);
-
-    if (result.ok) {
-      mediaServerProcess.on('exit', (code, signal) => {
-        if (!isQuitting) {
-          dialog.showErrorBox('Media service stopped', `Media service exited unexpectedly (code=${code}, signal=${signal || 'none'}).`);
-          app.quit();
-        }
-      });
-      return;
-    }
-
-    if (combinedOutput.includes('EADDRINUSE')) {
-      runtimeState.ports.mediaServer = await findAvailablePort(0);
-      continue;
-    }
-
-    throw new Error(formatExitMessage('Media service', result.exitInfo));
-  }
-
-  throw new Error('Media service failed to acquire an available port after multiple attempts.');
+    }),
+  });
 }
 
 async function startFrontendServer() {
