@@ -81,7 +81,7 @@ Key table relationships: `users` → `folders` → `filePaths` ↔ `files` (dedu
 
 Three persisted Zustand stores in `frontend/lib/stores/`:
 - `auth.store.ts` — token, userId, isAuthenticated
-- `ui.store.ts` — viewMode (`reels`|`feed`), preferences, scroll position (v2 with migrations)
+- `ui.store.ts` — viewMode (`reels`|`feed`), preferences (incl. default landing page), current tab, scroll position (v4 with migrations)
 - `folders.store.ts` — recent folder history
 
 One in-memory store:
@@ -119,3 +119,5 @@ Images: `.jpg`, `.jpeg`, `.png`, `.webp`, `.gif` | Videos: `.mp4`, `.webm`, `.mo
 - `MIGRATION_ZUSTAND.md` — Zustand store patterns and usage guide
 - `agents.md` — agent workflow constraints and task boundaries
 - `REMOTE_SERVERS.md` — canonical YAML schema and worked examples for rclone/WebDAV remote servers
+
+<!-- last-sync-docs: 087467b056a3ce72c0312ea0e7aec7b65e99261c -->

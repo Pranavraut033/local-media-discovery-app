@@ -13,7 +13,8 @@ The application uses **Zustand** for client-side state management with automatic
 ### 1. **UI Store** (`lib/stores/ui.store.ts`)
 Manages UI state including:
 - View mode (reels/feed)
-- User preferences (autoplay, badges)
+- User preferences (autoplay, badges, default landing page)
+- Current tab (persisted so a refresh reopens the same screen)
 - Scroll position
 - Last viewed media tracking
 
