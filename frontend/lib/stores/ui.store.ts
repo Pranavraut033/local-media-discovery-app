@@ -7,6 +7,10 @@ import { persist } from 'zustand/middleware';
 
 export type ViewMode = 'reels' | 'feed';
 export type FeedSourceType = 'local' | 'remote' | 'all';
+/** The top-level tab a user can land on; excludes drill-down views like 'source'. */
+export type DefaultPage = 'feed' | 'discover' | 'saved' | 'liked';
+/** Every screen MainLayout can show, including transient drill-down views. */
+export type AppView = 'feed' | 'discover' | 'saved' | 'liked' | 'hidden' | 'source' | 'settings';
 
 export interface RecentRcloneConfig {
   remoteName: string;
@@ -20,6 +24,8 @@ interface UserPreferences {
   lastRcloneRemote?: string;
   feedSourceType: FeedSourceType;
   recentRcloneConfigs: RecentRcloneConfig[];
+  /** Which tab MainLayout opens on when there is no persisted currentView yet. */
+  defaultPage: DefaultPage;
 }
 
 interface UIState {
@@ -37,6 +43,10 @@ interface UIState {
   lastViewedScrollPosition: number | undefined;
   setLastViewedMedia: (mediaId: string, scrollPosition?: number) => void;
   clearLastViewedMedia: () => void;
+
+  // Current tab/view — persisted so a refresh reopens the same screen.
+  currentView: AppView | null;
+  setCurrentView: (view: AppView) => void;
 }
 
 const DEFAULT_PREFERENCES: UserPreferences = {
@@ -45,6 +55,7 @@ const DEFAULT_PREFERENCES: UserPreferences = {
   showSourceBadge: true,
   feedSourceType: 'local',
   recentRcloneConfigs: [],
+  defaultPage: 'feed',
 };
 
 export const useUIStore = create<UIState>()(
@@ -77,10 +88,14 @@ export const useUIStore = create<UIState>()(
           lastViewedTimestamp: null,
           lastViewedScrollPosition: undefined,
         }),
+
+      // Current tab/view
+      currentView: null,
+      setCurrentView: (view: AppView) => set({ currentView: view }),
     }),
     {
       name: 'app-ui-store',
-      version: 3,
+      version: 4,
       migrate: (persistedState: unknown, version: number) => {
         const state = persistedState as Partial<UIState>;
         if (version < 2) {
@@ -103,6 +118,18 @@ export const useUIStore = create<UIState>()(
               ...(state.preferences ?? {}),
               // Remote source picker is disabled; keep feed scoped to local items.
               feedSourceType: 'local',
+            },
+          };
+        }
+
+        if (version < 4) {
+          return {
+            ...state,
+            currentView: null,
+            preferences: {
+              ...DEFAULT_PREFERENCES,
+              ...(state.preferences ?? {}),
+              defaultPage: 'feed',
             },
           };
         }

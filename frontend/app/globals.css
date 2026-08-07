@@ -38,6 +38,13 @@
   --font-mono: var(--font-manrope);
 }
 
+html,
+body {
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
 body {
   min-height: 100vh;
   background:
@@ -118,6 +125,29 @@ h6,
   border-radius: 0 0 1rem 1rem;
   padding: 8px 12px 12px;
   background: linear-gradient(to top, rgba(0,0,0,0.75) 0%, transparent 100%);
+}
+
+/* On narrow (mobile/Android) viewports, Plyr's controls are one flex row —
+   play, time, seek bar, duration, mute+volume slider, settings, fullscreen —
+   which squeezes the seek bar into a sliver next to the ~90px volume slider.
+   Give the seek bar its own full-width row above the rest, and drop the
+   volume slider (mute toggle stays) since it's rarely usable at that width
+   and the device's own volume buttons cover it. */
+@media (max-width: 640px) {
+  .plyr-video-host .plyr__controls {
+    flex-wrap: wrap !important;
+    row-gap: 6px;
+  }
+
+  .plyr-video-host .plyr__progress__container {
+    order: -1 !important;
+    flex: 1 1 100% !important;
+    padding-left: 0 !important;
+  }
+
+  .plyr-video-host .plyr__volume input[type="range"] {
+    display: none !important;
+  }
 }
 
 /* Prevent Plyr from overflowing the modal on portrait/tall videos */

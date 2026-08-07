@@ -15,12 +15,10 @@ import { SourceView } from '@/components/SourceView';
 import { DiscoverView } from '@/components/DiscoverView';
 import { NavigationBar, type NavTab } from '@/components/NavigationBar';
 import type { FeedMode } from '@/components/Feed';
-import { useUIStore } from '@/lib/stores/ui.store';
+import { useUIStore, type AppView } from '@/lib/stores/ui.store';
 import { useFoldersStore } from '@/lib/stores/folders.store';
 import ScanningProgressDialog from '@/components/ScanningProgressDialog';
 import { getApiBase, authenticatedFetch } from '@/lib/api';
-
-type AppView = 'feed' | 'discover' | 'saved' | 'liked' | 'hidden' | 'source' | 'settings';
 
 interface SourceViewState {
   sourceId: string;
@@ -33,11 +31,23 @@ interface SourceViewState {
 export default function MainLayout() {
   const [rootFolderSet, setRootFolderSet] = useState(false);
   const [isChecking, setIsChecking] = useState(true);
-  const [currentView, setCurrentView] = useState<AppView>('feed');
+  // Resume the tab the user was last on; fall back to their configured default page.
+  const [currentView, setCurrentView] = useState<AppView>(() => {
+    const state = useUIStore.getState();
+    return state.currentView ?? state.preferences.defaultPage;
+  });
   const [sourceViewState, setSourceViewState] = useState<SourceViewState | null>(null);
   const [feedMode, setFeedMode] = useState<FeedMode>('feed');
 
   const feedSourceType = useUIStore((s) => s.preferences.feedSourceType);
+
+  // Persist every tab change so a refresh reopens the same screen. 'source' is a
+  // transient drill-down view whose extra state (sourceViewState) isn't persisted,
+  // so it's excluded — a refresh there falls back to the last real tab instead.
+  useEffect(() => {
+    if (currentView === 'source') return;
+    useUIStore.getState().setCurrentView(currentView);
+  }, [currentView]);
 
   // Check if root folder is already set (in localStorage for privacy) and
   // still exists on disk — if it was moved/deleted, fall back to folder selection.

@@ -18,13 +18,22 @@ export function PlyrVideo({ src, poster, className = '' }: PlyrVideoProps) {
   const playerRef = useRef<Plyr | null>(null);
 
   useEffect(() => {
-    if (!videoRef.current) return;
+    const videoEl = videoRef.current;
+    if (!videoEl) return;
 
-    let player: Plyr | null = null;
+    // React (dev) Strict Mode double-invokes this effect against the *same*
+    // DOM node (mount → simulated cleanup → remount) before either import()
+    // resolves. Bail before constructing Plyr for a stale run instead of
+    // constructing-then-destroying — destroy() blanks the shared node's src
+    // via Plyr's cancelRequests(), which would wipe out the real (second)
+    // run's video too, leaving only the poster visible. React already
+    // removes the node from the DOM on a genuine unmount, which is enough
+    // for the browser to drop the in-flight request without us touching it.
+    let cancelled = false;
 
     import('plyr').then(({ default: PlyrClass }) => {
-      if (!videoRef.current) return;
-      player = new PlyrClass(videoRef.current, {
+      if (cancelled) return;
+      const player = new PlyrClass(videoEl, {
         controls: [
           'play-large',
           'play',
@@ -42,6 +51,7 @@ export function PlyrVideo({ src, poster, className = '' }: PlyrVideoProps) {
         ],
         settings: ['captions', 'speed', 'loop'],
         keyboard: { focused: true, global: false },
+        clickToPlay: true,
         speed: { selected: 1, options: [0.5, 0.75, 1, 1.25, 1.5, 2] },
         autoplay: true,
         loop: { active: true },
@@ -54,6 +64,7 @@ export function PlyrVideo({ src, poster, className = '' }: PlyrVideoProps) {
     });
 
     return () => {
+      cancelled = true;
       playerRef.current?.destroy();
       playerRef.current = null;
     };

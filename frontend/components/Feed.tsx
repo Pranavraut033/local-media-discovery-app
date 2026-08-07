@@ -11,6 +11,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import type { FeedItem } from '@/lib/hooks';
 import { MediaCard } from './MediaCard';
 import { KeyboardShortcutsGuide } from './KeyboardShortcutsGuide';
+import { ShutdownButton } from './ShutdownButton';
 import { Grid3x3, Layers, Heart, Bookmark, Maximize, Minimize, Keyboard } from 'lucide-react';
 import Masonry from 'react-masonry-css';
 import { useFullscreen } from '@/lib/useFullscreen';
@@ -18,6 +19,7 @@ import {
   MEDIA_MASONRY_BREAKPOINTS,
   MEDIA_MASONRY_CLASS,
   MEDIA_MASONRY_COLUMN_CLASS,
+  SAFE_TOP_INSET_CLASS,
 } from '@/lib/layout';
 import { useIndexingStore } from '@/lib/stores/indexing.store';
 import { useUIStore } from '@/lib/stores/ui.store';
@@ -438,7 +440,7 @@ export function Feed({ initialMode, onViewSource, onModeChange }: FeedProps) {
 
   if (isLoading && allItems.length === 0) {
     return (
-      <div className="w-full h-screen flex items-center justify-center bg-neutral-950">
+      <div className="w-full h-dvh flex items-center justify-center bg-neutral-950">
         <div className="text-center space-y-6">
           <div className="w-14 h-14 border-4 border-white/20 border-t-white rounded-full animate-spin mx-auto"></div>
           <div className="space-y-2">
@@ -460,7 +462,7 @@ export function Feed({ initialMode, onViewSource, onModeChange }: FeedProps) {
           ? `Hashing ${activeJob.done} / ${activeJob.total}`
           : 'Queued…';
       return (
-        <div className="w-full h-screen flex items-center justify-center px-4 bg-neutral-950">
+        <div className="w-full h-dvh flex items-center justify-center px-4 bg-neutral-950">
           <div className="text-center space-y-6 max-w-md w-full">
             <div className="w-14 h-14 border-4 border-white/20 border-t-white rounded-full animate-spin mx-auto" />
             <div className="space-y-2">
@@ -482,7 +484,7 @@ export function Feed({ initialMode, onViewSource, onModeChange }: FeedProps) {
     }
 
     return (
-      <div className="w-full h-screen flex items-center justify-center px-4 bg-neutral-950">
+      <div className="w-full h-dvh flex items-center justify-center px-4 bg-neutral-950">
         <div className="text-center space-y-4 max-w-md">
           <h1 className="font-serif text-3xl tracking-tight text-neutral-100">No media yet</h1>
           <p className="text-neutral-400">No media found. Please index your media first.</p>
@@ -494,9 +496,9 @@ export function Feed({ initialMode, onViewSource, onModeChange }: FeedProps) {
   // Reels Mode (Cinematic, immersive vertical pager)
   if (mode === 'reels') {
     return (
-      <div className="relative h-screen w-full overflow-hidden bg-neutral-950">
+      <div className="relative h-dvh w-full overflow-hidden bg-neutral-950">
         {/* Top Chrome - Gradient fade with controls */}
-        <div className="fixed top-0 inset-x-0 z-40 h-16 bg-linear-to-b from-black/70 to-transparent flex items-start justify-between px-4 pt-2">
+        <div className={`fixed inset-x-0 z-40 h-16 bg-linear-to-b from-black/70 to-transparent flex items-start justify-between px-4 pt-2 ${SAFE_TOP_INSET_CLASS}`}>
           <span className="text-neutral-100 text-xs font-medium pt-2">
             {currentIndex + 1} / {allItems.length}
           </span>
@@ -522,6 +524,7 @@ export function Feed({ initialMode, onViewSource, onModeChange }: FeedProps) {
             >
               <Keyboard size={20} />
             </button>
+            <ShutdownButton />
           </div>
         </div>
 
@@ -531,7 +534,7 @@ export function Feed({ initialMode, onViewSource, onModeChange }: FeedProps) {
           onTouchStart={handleTouchStart}
           onTouchEnd={handleTouchEnd}
           onWheel={handleWheel}
-          className="absolute inset-0 h-full w-full overflow-hidden"
+          className="absolute inset-0 h-full w-full overflow-hidden overscroll-contain touch-none"
         >
           {/* Single Media Item (Full Height) */}
           <div className="relative h-full w-full flex items-center justify-center">
@@ -551,7 +554,7 @@ export function Feed({ initialMode, onViewSource, onModeChange }: FeedProps) {
             <button
               onClick={handlePrevious}
               disabled={currentIndex === 0}
-              className="text-white/60 hover:text-white disabled:opacity-30 transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300 rounded px-2 shrink-0"
+              className="text-white/60 hover:text-white disabled:opacity-30 transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300 rounded px-3 py-2 shrink-0"
               aria-label="Previous"
             >
               ← Prev
@@ -560,7 +563,7 @@ export function Feed({ initialMode, onViewSource, onModeChange }: FeedProps) {
             <button
               onClick={handleLike}
               disabled={likeMutation.isPending}
-              className={`h-9 w-9 rounded-full backdrop-blur-md border transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300 flex items-center justify-center shrink-0 ${currentMedia?.liked
+              className={`h-11 w-11 rounded-full backdrop-blur-md border transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300 flex items-center justify-center shrink-0 ${currentMedia?.liked
                 ? 'bg-red-500/80 text-white border-red-400'
                 : 'bg-black/35 text-white/80 border-white/20 hover:text-white'
                 } disabled:opacity-50`}
@@ -575,7 +578,7 @@ export function Feed({ initialMode, onViewSource, onModeChange }: FeedProps) {
             <button
               onClick={handleSave}
               disabled={saveMutation.isPending}
-              className={`h-9 w-9 rounded-full backdrop-blur-md border transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300 flex items-center justify-center shrink-0 ${currentMedia?.saved
+              className={`h-11 w-11 rounded-full backdrop-blur-md border transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300 flex items-center justify-center shrink-0 ${currentMedia?.saved
                 ? 'bg-amber-400/80 text-neutral-950 border-amber-300'
                 : 'bg-black/35 text-white/80 border-white/20 hover:text-white'
                 } disabled:opacity-50`}
@@ -597,7 +600,7 @@ export function Feed({ initialMode, onViewSource, onModeChange }: FeedProps) {
             <button
               onClick={handleNext}
               disabled={currentIndex === allItems.length - 1}
-              className="text-white/60 hover:text-white disabled:opacity-30 transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300 rounded px-2 shrink-0"
+              className="text-white/60 hover:text-white disabled:opacity-30 transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300 rounded px-3 py-2 shrink-0"
               aria-label="Next"
             >
               Next →
@@ -619,9 +622,9 @@ export function Feed({ initialMode, onViewSource, onModeChange }: FeedProps) {
 
   // Feed Mode (Masonry grid with Ethos Narrative chrome)
   return (
-    <div className="w-full h-screen flex flex-col bg-neutral-950 overflow-hidden">
+    <div className="w-full h-dvh flex flex-col bg-neutral-950 overflow-hidden">
       {/* Top Chrome - Gradient chrome with title and controls */}
-      <div className="fixed top-0 inset-x-0 z-40 h-14 md:h-16 bg-linear-to-b from-black/70 to-transparent flex items-start justify-between px-4 md:px-8 pt-3">
+      <div className={`fixed inset-x-0 z-40 h-14 md:h-16 bg-linear-to-b from-black/70 to-transparent flex items-start justify-between px-4 md:px-8 pt-3 ${SAFE_TOP_INSET_CLASS}`}>
         <h1 className="font-serif text-xl md:text-2xl tracking-tight text-neutral-100">Feed</h1>
         <div className="flex items-center gap-2">
           <button
@@ -645,6 +648,7 @@ export function Feed({ initialMode, onViewSource, onModeChange }: FeedProps) {
           >
             <Keyboard size={20} />
           </button>
+          <ShutdownButton />
         </div>
       </div>
 

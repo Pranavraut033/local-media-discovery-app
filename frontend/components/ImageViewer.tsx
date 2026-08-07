@@ -102,8 +102,8 @@ export function ImageViewer({ src, alt, mode = 'feed', className = '', onLoad }:
 
   if (hasError) {
     return (
-      <div className={`w-full ${isReelsMode ? 'h-full' : 'min-h-50'} bg-gray-200 dark:bg-gray-800 flex items-center justify-center ${className}`}>
-        <span className="text-gray-500 dark:text-gray-400">Image failed to load</span>
+      <div className={`w-full ${isReelsMode ? 'h-full' : 'min-h-50'} bg-gray-800 flex items-center justify-center ${className}`}>
+        <span className="text-gray-400">Image failed to load</span>
       </div>
     );
   }
@@ -111,7 +111,7 @@ export function ImageViewer({ src, alt, mode = 'feed', className = '', onLoad }:
   return (
     <div
       ref={imageRef}
-      className={`relative ${isReelsMode ? 'w-full h-full flex items-center justify-center' : 'w-full'} overflow-hidden bg-gray-100 dark:bg-gray-900 ${className}`}
+      className={`relative ${isReelsMode ? 'w-full h-full flex items-center justify-center' : 'w-full'} overflow-hidden bg-gray-900 ${className}`}
       onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
@@ -121,8 +121,8 @@ export function ImageViewer({ src, alt, mode = 'feed', className = '', onLoad }:
       style={{ cursor: isDragging ? 'grabbing' : scale > 1 ? 'grab' : 'default' }}
     >
       {isLoading && (
-        <div className="absolute inset-0 flex items-center justify-center bg-gray-200 dark:bg-gray-800 z-10" style={{ minHeight: '200px' }}>
-          <div className="w-8 h-8 border-4 border-gray-300 dark:border-gray-600 border-t-gray-900 dark:border-t-gray-200 rounded-full animate-spin"></div>
+        <div className="absolute inset-0 flex items-center justify-center bg-gray-800 z-10" style={{ minHeight: '200px' }}>
+          <div className="w-8 h-8 border-4 border-gray-600 border-t-gray-200 rounded-full animate-spin"></div>
         </div>
       )}
       <img
@@ -147,7 +147,7 @@ export function ImageViewer({ src, alt, mode = 'feed', className = '', onLoad }:
               e.stopPropagation();
               handleZoomIn();
             }}
-            className="bg-white/90 hover:bg-white text-black p-2 rounded-full shadow-lg transition-colors"
+            className="bg-white/90 hover:bg-white text-black p-3 rounded-full shadow-lg transition-colors"
             aria-label="Zoom in"
           >
             <ZoomIn size={20} />
@@ -157,7 +157,7 @@ export function ImageViewer({ src, alt, mode = 'feed', className = '', onLoad }:
               e.stopPropagation();
               handleZoomOut();
             }}
-            className="bg-white/90 hover:bg-white text-black p-2 rounded-full shadow-lg transition-colors"
+            className="bg-white/90 hover:bg-white text-black p-3 rounded-full shadow-lg transition-colors"
             aria-label="Zoom out"
           >
             <ZoomOut size={20} />

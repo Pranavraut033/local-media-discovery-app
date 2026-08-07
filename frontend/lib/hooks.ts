@@ -4,7 +4,7 @@
  */
 import { useQuery, useMutation, useQueryClient, useInfiniteQuery } from '@tanstack/react-query';
 import React, { useEffect, useRef, useCallback } from 'react';
-import { getApiBase, authenticatedFetch, prefetchMediaFiles } from '@/lib/api';
+import { getApiBase, authenticatedFetch, prefetchMediaFiles, cancelPrefetch } from '@/lib/api';
 
 const API_BASE = getApiBase();
 
@@ -822,6 +822,16 @@ export const useMediaPreload = (mediaIds: string[], config: PreloadConfig = {}) 
       }
     }
     if (tokens.length > 0) {
+      // The media-server's download queue has a single lane (concurrency 1)
+      // and no per-item cancellation — as the reels index advances, each new
+      // window shift enqueues another batch on top of whatever's still
+      // pending from earlier (now-stale) windows, and that backlog grows
+      // over a session of 15-20+ swipes. Cancel prior pending/in-flight
+      // background fills before enqueuing the next window so only the
+      // current window's work sits in the queue. Already-cached items are
+      // unaffected — clearQueue() only drops pending/in-flight jobs, not
+      // completed cache entries.
+      cancelPrefetch();
       prefetchMediaFiles(tokens);
     }
   }, [mediaIds, prefetchDistance, queryClient]);

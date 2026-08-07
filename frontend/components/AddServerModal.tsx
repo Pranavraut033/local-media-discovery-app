@@ -125,7 +125,7 @@ export function AddServerModal({ onClose, onAdded, initialYaml, serverId }: AddS
 
   return (
     <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
-      <div className="bg-(--surface) rounded-2xl w-full max-w-lg max-h-[90vh] flex flex-col shadow-xl">
+      <div className="bg-(--surface) rounded-2xl w-full max-w-lg max-h-[90dvh] flex flex-col shadow-xl">
         {/* Header */}
         <div className="flex items-center justify-between p-5 border-b border-[var(--outline-variant)]/30">
           <div className="flex items-center gap-2">

@@ -43,6 +43,11 @@ const children = services.map(({ label, dir, port }) => {
   child.stderr.on('data', (chunk) => process.stderr.write(`${prefix} ${chunk}`));
   child.on('exit', (code, signal) => {
     console.error(`${prefix} exited (code=${code}, signal=${signal || 'none'})`);
+    // The Settings "Stop All Services" / header shutdown button only calls the
+    // backend's /api/admin/shutdown, which exits just the backend process. Treat
+    // that (or any other service dying) as a signal to tear down the whole stack
+    // instead of leaving the rest running as orphans.
+    shutdown();
   });
 
   return child;
@@ -53,7 +58,7 @@ function shutdown() {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log('\nShutting down...');
-  for (const child of children) child.kill('SIGTERM');
+  for (const child of children) if (!child.killed) child.kill('SIGTERM');
   setTimeout(() => {
     for (const child of children) if (!child.killed) child.kill('SIGKILL');
     process.exit(0);

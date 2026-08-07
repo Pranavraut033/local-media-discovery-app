@@ -6,6 +6,7 @@
 
 import { useHiddenItems } from '@/lib/hooks';
 import { MediaCard } from './MediaCard';
+import { ShutdownButton } from './ShutdownButton';
 import { ArrowLeft, Eye, Maximize, Minimize } from 'lucide-react';
 import Masonry from 'react-masonry-css';
 import { useFullscreen } from '@/lib/useFullscreen';
@@ -27,7 +28,7 @@ export function HiddenView({ onBack }: HiddenViewProps) {
 
   if (isLoading) {
     return (
-      <div className="w-full h-screen flex flex-col bg-white dark:bg-gray-900">
+      <div className="w-full h-dvh flex flex-col bg-white dark:bg-gray-900">
         {/* Header */}
         <div className="border-b border-gray-200 dark:border-gray-700 p-4 flex items-center gap-4">
           <button
@@ -56,7 +57,7 @@ export function HiddenView({ onBack }: HiddenViewProps) {
 
   if (error) {
     return (
-      <div className="w-full h-screen flex flex-col bg-white dark:bg-gray-900">
+      <div className="w-full h-dvh flex flex-col bg-white dark:bg-gray-900">
         {/* Header */}
         <div className="border-b border-gray-200 dark:border-gray-700 p-4 flex items-center gap-4">
           <button
@@ -87,7 +88,7 @@ export function HiddenView({ onBack }: HiddenViewProps) {
   const hiddenItems = hiddenData?.hiddenMedia || [];
 
   return (
-    <div className="w-full h-screen flex flex-col bg-white dark:bg-gray-900 overflow-hidden">
+    <div className="w-full h-dvh flex flex-col bg-white dark:bg-gray-900 overflow-hidden">
       {/* Header */}
       <div className="border-b border-gray-200 dark:border-gray-700 p-4 flex items-center justify-between">
         <div className="flex items-center gap-4">
@@ -106,13 +107,16 @@ export function HiddenView({ onBack }: HiddenViewProps) {
             ({hiddenItems.length} {hiddenItems.length === 1 ? 'item' : 'items'})
           </span>
         </div>
-        <button
-          onClick={toggleFullscreen}
-          className="bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-900 dark:text-white p-2 rounded-lg transition-colors"
-          aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
-        >
-          {isFullscreen ? <Minimize size={24} /> : <Maximize size={24} />}
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={toggleFullscreen}
+            className="bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-900 dark:text-white p-2 rounded-lg transition-colors"
+            aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
+          >
+            {isFullscreen ? <Minimize size={24} /> : <Maximize size={24} />}
+          </button>
+          <ShutdownButton className="h-9 w-9 bg-gray-100 hover:bg-red-100 dark:bg-gray-800 dark:hover:bg-red-900/40 border-transparent text-gray-900 dark:text-white" />
+        </div>
       </div>
 
       {/* Empty State */}

@@ -178,10 +178,10 @@ export function MediaCard({ media, index, onVisible, onVisibleIndexChange, onVie
                   e.stopPropagation();
                   onOpenInReels(index);
                 }}
-                className="absolute top-2 right-2 z-10 flex h-8 w-8 items-center justify-center rounded-full bg-black/50 text-white opacity-0 group-hover:opacity-100 transition-opacity hover:bg-black/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400"
+                className="absolute top-2 right-2 z-10 flex h-10 w-10 items-center justify-center rounded-full bg-black/50 text-white opacity-0 pointer-coarse:opacity-70 group-hover:opacity-100 transition-opacity hover:bg-black/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400"
                 aria-label="Open in full-screen player"
               >
-                <Maximize2 size={15} />
+                <Maximize2 size={17} />
               </button>
             )}
           </div>
@@ -228,19 +228,19 @@ export function MediaCard({ media, index, onVisible, onVisibleIndexChange, onVie
               liked={likedValue}
               onToggle={handleLike}
               isLoading={likeMutation.isPending}
-              className="flex-1 h-9"
+              className="flex-1 h-11"
             />
             <SaveButton
               saved={savedValue}
               onToggle={handleSave}
               isLoading={saveMutation.isPending}
-              className="flex-1 h-9"
+              className="flex-1 h-11"
             />
             <HideButton
               hidden={hiddenValue}
               onToggle={handleHide}
               isLoading={hideMutation.isPending}
-              className="flex-1 h-9"
+              className="flex-1 h-11"
             />
           </div>
         </div>
@@ -248,14 +248,14 @@ export function MediaCard({ media, index, onVisible, onVisibleIndexChange, onVie
 
       {/* Info Bar - Reels Mode Only (Bottom with gradient veil) */}
       {isReelsMode && (
-        <div className="absolute bottom-0 inset-x-0 bg-linear-to-t from-black/90 via-black/40 to-transparent pt-12 px-4 pb-6 z-20">
+        <div className="pointer-events-none absolute bottom-0 inset-x-0 bg-linear-to-t from-black/90 via-black/40 to-transparent pt-8 px-4 pb-4 z-20">
           {/* Source Badge */}
-          <div className="mb-4">
+          <div className="mb-3">
             <div className="flex items-center gap-2">
               <button
                 type="button"
                 onClick={canOpenSource ? () => onViewSource?.(media.sourceId, sourceLabel, media.avatarSeed) : undefined}
-                className={`text-sm font-medium text-neutral-100 ${canOpenSource ? 'cursor-pointer hover:text-white transition-colors' : 'cursor-default'}`}
+                className={`pointer-events-auto text-sm font-medium text-neutral-100 ${canOpenSource ? 'cursor-pointer hover:text-white transition-colors' : 'cursor-default'}`}
               >
                 {sourceLabel}
               </button>
@@ -270,7 +270,7 @@ export function MediaCard({ media, index, onVisible, onVisibleIndexChange, onVie
                   <button
                     type="button"
                     onClick={canOpenFolder ? () => onViewSource?.(media.sourceId, sourceLabel, media.avatarSeed, media.parentFolderPath, parentFolderName) : undefined}
-                    className={`text-sm font-medium text-neutral-100 ${canOpenFolder ? 'cursor-pointer hover:text-white transition-colors' : 'cursor-default'}`}
+                    className={`pointer-events-auto text-sm font-medium text-neutral-100 ${canOpenFolder ? 'cursor-pointer hover:text-white transition-colors' : 'cursor-default'}`}
                   >
                     {parentFolderName}
                   </button>
@@ -280,7 +280,7 @@ export function MediaCard({ media, index, onVisible, onVisibleIndexChange, onVie
           </div>
 
           {/* File Info - Minimal */}
-          <details className="text-xs text-neutral-300">
+          <details className="pointer-events-auto text-xs text-neutral-300">
             <summary className="cursor-pointer text-neutral-400 hover:text-neutral-100 transition-colors">
               Details
             </summary>

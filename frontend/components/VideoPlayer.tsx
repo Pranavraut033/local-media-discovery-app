@@ -53,6 +53,11 @@ export function VideoPlayer({
   const dragStart = useRef({ x: 0, y: 0 });
   const lastTap = useRef(0);
   const [isHovered, setIsHovered] = useState(false);
+  // Touch devices have no hover state, so tapping the video needs to reveal the
+  // expanded controls (play/pause/mute/seek) the same way hover does on desktop.
+  // Auto-hides after a few seconds so it behaves like a typical touch video player.
+  const [isTapped, setIsTapped] = useState(false);
+  const tapHideTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [isVisible, setIsVisible] = useState(false);
   const observerRef = useRef<IntersectionObserver | null>(null);
   const retryCount = useRef(0);
@@ -69,7 +74,7 @@ export function VideoPlayer({
       (shouldAutoPlayOnHover && (isHovered || isCardHovered) && !isMobile) ||
       (shouldAutoPlayOnMobileVisible && isMobile)
     ));
-  const showExpandedControls = !isReelsMode && (isHovered || isSeeking);
+  const showExpandedControls = !isReelsMode && (isHovered || isSeeking || isTapped);
   // ponytail: preload=none in feed (many cards, avoids parallel rclone metadata requests);
   // preload=auto in reels (single current video, start buffering immediately).
   const preloadValue = isReelsMode ? 'auto' : 'none';
@@ -265,7 +270,8 @@ export function VideoPlayer({
     setPosition({ x: 0, y: 0 });
   }, []);
 
-  // Double tap to zoom
+  // Double tap to zoom; every tap (single or double) also reveals the expanded
+  // controls on touch devices for a few seconds, since there's no hover there.
   const handleDoubleTap = useCallback(() => {
     const now = Date.now();
     if (now - lastTap.current < 300) {
@@ -276,7 +282,20 @@ export function VideoPlayer({
       }
     }
     lastTap.current = now;
-  }, [scale, handleReset]);
+
+    if (!isReelsMode) {
+      setIsTapped(true);
+      if (tapHideTimeout.current) clearTimeout(tapHideTimeout.current);
+      tapHideTimeout.current = setTimeout(() => setIsTapped(false), 3000);
+    }
+  }, [scale, handleReset, isReelsMode]);
+
+  // Clear the auto-hide timer on unmount.
+  useEffect(() => {
+    return () => {
+      if (tapHideTimeout.current) clearTimeout(tapHideTimeout.current);
+    };
+  }, []);
 
   // Mouse drag for panning
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
@@ -304,7 +323,7 @@ export function VideoPlayer({
 
   if (hasError) {
     return (
-      <div className={`relative w-full ${isReelsMode ? 'h-full' : 'min-h-50'} bg-gray-200 dark:bg-gray-800 ${className}`}>
+      <div className={`relative w-full ${isReelsMode ? 'h-full' : 'min-h-50'} bg-gray-800 ${className}`}>
         {poster && (
           // eslint-disable-next-line @next/next/no-img-element
           <img src={poster} alt="" className="absolute inset-0 w-full h-full object-cover" />
@@ -411,7 +430,7 @@ export function VideoPlayer({
                 e.stopPropagation();
                 handlePlayPause();
               }}
-              className="bg-white hover:bg-gray-200 text-black p-2 rounded-full transition-colors"
+              className="bg-white hover:bg-gray-200 text-black p-3 rounded-full transition-colors"
               aria-label={isPlaying ? 'Pause' : 'Play'}
             >
               {isPlaying ? <Pause size={20} /> : <Play size={20} />}
@@ -422,7 +441,7 @@ export function VideoPlayer({
                 e.stopPropagation();
                 handleMuteToggle();
               }}
-              className="bg-white hover:bg-gray-200 text-black p-2 rounded-full transition-colors"
+              className="bg-white hover:bg-gray-200 text-black p-3 rounded-full transition-colors"
               aria-label={isMuted ? 'Unmute' : 'Mute'}
             >
               {isMuted ? <VolumeX size={20} /> : <Volume2 size={20} />}
@@ -471,7 +490,7 @@ export function VideoPlayer({
               e.stopPropagation();
               handleZoomIn();
             }}
-            className="bg-white/90 hover:bg-white text-black p-2 rounded-full shadow-lg transition-colors"
+            className="bg-white/90 hover:bg-white text-black p-3 rounded-full shadow-lg transition-colors"
             aria-label="Zoom in"
           >
             <ZoomIn size={20} />
@@ -481,7 +500,7 @@ export function VideoPlayer({
               e.stopPropagation();
               handleZoomOut();
             }}
-            className="bg-white/90 hover:bg-white text-black p-2 rounded-full shadow-lg transition-colors"
+            className="bg-white/90 hover:bg-white text-black p-3 rounded-full shadow-lg transition-colors"
             aria-label="Zoom out"
           >
             <ZoomOut size={20} />
@@ -544,7 +563,7 @@ export function VideoPlayer({
                   e.stopPropagation();
                   handlePlayPause();
                 }}
-                className="bg-white hover:bg-gray-200 text-black p-2 rounded-full transition-colors"
+                className="bg-white hover:bg-gray-200 text-black p-3 rounded-full transition-colors"
                 aria-label={isPlaying ? 'Pause' : 'Play'}
               >
                 {isPlaying ? <Pause size={18} /> : <Play size={18} />}
@@ -555,7 +574,7 @@ export function VideoPlayer({
                   e.stopPropagation();
                   handleMuteToggle();
                 }}
-                className="bg-white hover:bg-gray-200 text-black p-2 rounded-full transition-colors"
+                className="bg-white hover:bg-gray-200 text-black p-3 rounded-full transition-colors"
                 aria-label={isMuted ? 'Unmute' : 'Mute'}
               >
                 {isMuted ? <VolumeX size={18} /> : <Volume2 size={18} />}
@@ -628,6 +647,20 @@ export function VideoPlayer({
 
         .slider-minimal:hover::-moz-range-thumb {
           opacity: 1;
+        }
+
+        /* Coarse pointers (touch) have no hover — show seek thumbs by default
+           so they're reachable without first needing a hover event. */
+        @media (pointer: coarse) {
+          .slider::-webkit-slider-thumb,
+          .slider-minimal::-webkit-slider-thumb {
+            opacity: 1;
+          }
+
+          .slider::-moz-range-thumb,
+          .slider-minimal::-moz-range-thumb {
+            opacity: 1;
+          }
         }
       `}</style>
     </div>
