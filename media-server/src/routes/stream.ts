@@ -130,6 +130,12 @@ export default async function streamRoute(fastify: FastifyInstance): Promise<voi
           const { start, end } = range;
           const chunkSize = end - start + 1;
           const stream = createDecryptRangeStream(cached, start, end);
+          // Proactively tear down the decrypt stream when the client (Plyr)
+          // disconnects early — otherwise it keeps reading/decrypting from the
+          // cache file with nobody consuming it, across many swipes.
+          request.raw.on('close', () => {
+            if (!stream.destroyed) stream.destroy();
+          });
 
           return reply
             .code(206)
@@ -143,6 +149,9 @@ export default async function streamRoute(fastify: FastifyInstance): Promise<voi
 
         // Full file from cache.
         const stream = createDecryptRangeStream(cached, 0, plaintextSize - 1);
+        request.raw.on('close', () => {
+          if (!stream.destroyed) stream.destroy();
+        });
         return reply
           .code(200)
           .header('Content-Length', String(plaintextSize))
@@ -226,9 +235,23 @@ export default async function streamRoute(fastify: FastifyInstance): Promise<voi
       const fileSize = fileStat.size;
       const rangeHeader = request.headers.range;
 
+      // A live read from the mount (local disk, or the rclone FUSE mount also
+      // used by background /prefetch cache-fills) must always win over a
+      // queued background download — hold the live lane for the duration of
+      // the stream so queued work pauses/aborts immediately instead of
+      // contending for I/O on the shared mount (mirrors the webdav branch).
+      acquireLiveLane();
+      let liveLaneReleased = false;
+      const releaseLiveLaneOnce = () => {
+        if (liveLaneReleased) return;
+        liveLaneReleased = true;
+        releaseLiveLane();
+      };
+
       if (rangeHeader) {
         const range = parseRange(rangeHeader, fileSize);
         if (!range) {
+          releaseLiveLaneOnce();
           return reply
             .code(416)
             .header('Content-Range', `bytes */${fileSize}`)
@@ -238,6 +261,14 @@ export default async function streamRoute(fastify: FastifyInstance): Promise<voi
         const { start, end } = range;
         const chunkSize = end - start + 1;
         const stream = readStreamOrFail(fastify, mountPath, { start, end });
+        stream.once('close', releaseLiveLaneOnce);
+        stream.once('error', releaseLiveLaneOnce);
+        // Proactively abort the read when the client (Plyr) disconnects early
+        // — otherwise the ReadStream/fd lingers server-side with nobody
+        // consuming it, across many swipes.
+        request.raw.on('close', () => {
+          if (!stream.destroyed) stream.destroy();
+        });
 
         return reply
           .code(206)
@@ -250,6 +281,11 @@ export default async function streamRoute(fastify: FastifyInstance): Promise<voi
       }
 
       const stream = readStreamOrFail(fastify, mountPath);
+      stream.once('close', releaseLiveLaneOnce);
+      stream.once('error', releaseLiveLaneOnce);
+      request.raw.on('close', () => {
+        if (!stream.destroyed) stream.destroy();
+      });
       return reply
         .code(200)
         .header('Content-Length', String(fileSize))
