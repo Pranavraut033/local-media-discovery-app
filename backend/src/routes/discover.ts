@@ -142,6 +142,7 @@ export default async function discoverRoutes(fastify: FastifyInstance) {
           type: row.type,
           sourceId: row.source_id,
           storageMode: row.storage_mode,
+          serverId: row.server_id,
           rootChildFolder,
           parentFolderName,
           parentFolderPath,
