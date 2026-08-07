@@ -109,7 +109,7 @@ Images: `.jpg`, `.jpeg`, `.png`, `.webp`, `.gif` | Videos: `.mp4`, `.webm`, `.mo
 - DB must be initialized before running `create-user`; run `npm run dev` once to trigger auto-init
 - If auth seems broken in dev, check token state in localStorage/Zustand and follow `AUTH_SETUP.md`
 - Media server needs `MEDIA_SERVER_SECRET` env var that matches the backend's — if streaming fails, verify both processes share the same secret
-- Rclone FUSE mounts (`backend/src/services/rclone-mount.ts`) are self-managed, not PM2-managed — ownership lock file plus an inactivity timeout (10 min) that auto-unmounts
+- Rclone FUSE mounts (`backend/src/services/rclone-mount.ts`) are self-managed, not PM2-managed — ownership lock file plus an inactivity timeout (30 min) that auto-unmounts
 
 ## Documentation Map
 

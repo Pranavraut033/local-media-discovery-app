@@ -11,7 +11,7 @@
  *    (~/.rclone-mounts/<serverId>_<epoch>) is used as fallback.
  *    Old stale sibling dirs are cleaned up when stop() runs.
  *  - Activity is tracked via recordActivity(); any rclone API call should invoke it.
- *  - An inactivity watcher fires every 60 s and calls stop() after 10 min of silence.
+ *  - An inactivity watcher fires every 60 s and calls stop() after 30 min of silence.
  *  - stop() uses `umount -f` (macOS) / `fusermount -u` (Linux) which causes the daemon to exit.
  *  - rcloneMountManager (bottom of file) is the public surface — it owns one instance per
  *    serverId and is what the rest of the backend should import.
@@ -98,7 +98,7 @@ function getRclonePath(): string | null {
 const MOUNTS_DIR = path.join(os.homedir(), '.rclone-mounts');
 const RCLONE_CACHE_BASE = process.env.RCLONE_CACHE_DIR ?? path.join(os.homedir(), 'rclone-cache');
 
-const INACTIVITY_MS = 10 * 60 * 1000; // 10 minutes
+const INACTIVITY_MS = 30 * 60 * 1000; // 30 minutes
 const CHECK_INTERVAL_MS = 60 * 1000; // check every 60 s
 const MOUNT_CHECK_TIMEOUT_MS = 2000; // max time to wait for `mount` command
 const MOUNT_CACHE_TTL_MS = 5000; // cache positive/negative result for 5 s
