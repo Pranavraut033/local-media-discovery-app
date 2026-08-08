@@ -835,8 +835,6 @@ export const useMediaPreload = (mediaIds: string[], config: PreloadConfig = {}) 
       prefetchMediaFiles(tokens);
     }
   }, [mediaIds, prefetchDistance, queryClient]);
-
-  return { preloadedIds: preloadedRef.current };
 };
 
 // ============================================================================
@@ -877,7 +875,7 @@ export const useHideFolderMutation = () => {
       console.log('Folder hide toggled:', data, 'for', variables.folderPath);
 
       // Update the cache directly with server response
-      queryClient.setQueriesData({ queryKey: ['folderTree'] }, (old: any) => {
+      queryClient.setQueriesData({ queryKey: ['folderTree'] }, (old: FolderNode | undefined) => {
         if (!old) return old;
 
         const updateNodeHidden = (node: FolderNode): FolderNode => {

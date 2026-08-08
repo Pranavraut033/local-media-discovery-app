@@ -110,6 +110,7 @@ export function DiscoverView({ onViewSource }: DiscoverViewProps) {
   // Load items when feed data arrives
   useEffect(() => {
     if (feedData?.feed) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing query data into local state
       setItems(feedData.feed);
       setCurrentBatchIds(feedData.feed.map((i) => i.id));
       setCurrentIndex(0);
@@ -137,6 +138,7 @@ export function DiscoverView({ onViewSource }: DiscoverViewProps) {
   // Detect end of reels
   useEffect(() => {
     if (mode === 'reels' && items.length > 0 && currentIndex >= items.length - 1) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- derived end-of-list flag
       setIsAtEnd(true);
     }
   }, [mode, currentIndex, items.length]);

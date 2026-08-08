@@ -127,9 +127,6 @@ export default function FolderSelection({ onFolderSelected }: FolderSelectionPro
   const jobs = useIndexingStore((s) => s.jobs);
   const activeJob = activeJobId ? jobs[activeJobId] : null;
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { loadRoots(); }, []);
-
   const loadRoots = async () => {
     try {
       setIsLoading(true);
@@ -156,6 +153,9 @@ export default function FolderSelection({ onFolderSelected }: FolderSelectionPro
       setIsLoading(false);
     }
   };
+
+  // eslint-disable-next-line react-hooks/exhaustive-deps, react-hooks/set-state-in-effect
+  useEffect(() => { loadRoots(); }, []);
 
   const loadDirectory = async (path: string, serverId?: string | null) => {
     try {

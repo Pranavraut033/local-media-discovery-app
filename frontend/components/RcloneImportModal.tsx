@@ -38,6 +38,7 @@ export function RcloneImportModal({ isOpen, onClose, onSuccess, onShowMedia, ini
   useEffect(() => {
     if (!isOpen) return;
 
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- resetting modal state on open
     setActiveJobId(null);
     setIsValidated(false);
     setIsAdded(false);

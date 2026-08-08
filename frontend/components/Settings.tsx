@@ -4,8 +4,8 @@
  */
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
-import { Settings as SettingsIcon, ArrowLeft, RotateCw, Eye, LogOut, FolderTree, Maximize, Minimize, Server, Plus, Trash2 } from 'lucide-react';
+import { useState, useEffect, useMemo, useRef } from 'react';
+import { Settings as SettingsIcon, ArrowLeft, RotateCw, Eye, LogOut, FolderTree, Maximize, Minimize, Server, Plus, Trash2, Download, Upload } from 'lucide-react';
 import { getApiBase, authenticatedFetch, ensureRcloneMount } from '@/lib/api';
 import { useSources, useFolderTree, useHideFolderMutation } from '@/lib/hooks';
 import { FolderTreeView } from './FolderTreeView';
@@ -46,6 +46,10 @@ export function Settings({ onBack, onViewHidden, onRootFolderReset }: SettingsPr
   const [isMounting, setIsMounting] = useState(false);
   const [remoteServers, setRemoteServers] = useState<Array<{ id: string; displayName: string; serverType: string }>>([]);
   const [showAddServer, setShowAddServer] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
+  const [isImporting, setIsImporting] = useState(false);
+  const [backupMessage, setBackupMessage] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   // Fetch user sources
   const { data: sources } = useSources();
 
@@ -216,6 +220,125 @@ export function Settings({ onBack, onViewHidden, onRootFolderReset }: SettingsPr
       setMountStatus('error');
     } finally {
       setIsMounting(false);
+    }
+  };
+
+  const handleExport = async () => {
+    setIsExporting(true);
+    setError(null);
+    try {
+      const res = await authenticatedFetch(`${API_URL}/api/admin/export`);
+      if (!res.ok) {
+        throw new Error('Failed to export data');
+      }
+      const server = await res.json();
+
+      const backup = {
+        version: 1,
+        exportedAt: Date.now(),
+        server,
+        client: {
+          ui: {
+            preferences: useUIStore.getState().preferences,
+          },
+          folders: {
+            rootFolder: useFoldersStore.getState().rootFolder,
+            recentFolders: useFoldersStore.getState().recentFolders,
+          },
+        },
+      };
+
+      const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `media-backup-${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+
+      setBackupMessage('Backup exported');
+      setTimeout(() => setBackupMessage(null), 2000);
+    } catch (err) {
+      console.error('Failed to export data:', err);
+      setError('Failed to export data');
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
+  const handleImportClick = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleImportFileSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsImporting(true);
+    setError(null);
+    try {
+      let parsed: {
+        version?: number;
+        server?: unknown;
+        client?: {
+          ui?: { preferences?: Partial<ReturnType<typeof useUIStore.getState>['preferences']> };
+          folders?: { rootFolder?: string | null; recentFolders?: { path: string; name: string; timestamp: number }[] };
+        };
+      };
+      try {
+        const text = await file.text();
+        parsed = JSON.parse(text);
+      } catch {
+        throw new Error('Invalid backup file');
+      }
+
+      if (parsed.version !== 1 || !parsed.server) {
+        throw new Error('Invalid backup file');
+      }
+
+      const res = await authenticatedFetch(`${API_URL}/api/admin/import`, {
+        method: 'POST',
+        body: JSON.stringify(parsed.server),
+      });
+
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error((errorData as { error?: string }).error || 'Failed to import data');
+      }
+
+      // Restore client-side stores; a malformed client block shouldn't block
+      // the server-side restore that already succeeded above.
+      try {
+        if (parsed.client?.ui?.preferences) {
+          useUIStore.getState().setPreferences(parsed.client.ui.preferences);
+        }
+        if (parsed.client?.folders?.rootFolder) {
+          useFoldersStore.getState().setRootFolder(parsed.client.folders.rootFolder);
+        }
+        if (Array.isArray(parsed.client?.folders?.recentFolders)) {
+          for (const folder of parsed.client.folders.recentFolders) {
+            useFoldersStore.getState().addRecentFolder(folder.path, folder.name);
+          }
+        }
+      } catch (clientErr) {
+        console.error('Failed to restore client state from backup:', clientErr);
+      }
+
+      setBackupMessage('Backup imported');
+      setTimeout(() => {
+        // ponytail: reload instead of invalidating each query key; swap to queryClient.invalidateQueries if a full reload feels heavy
+        window.location.reload();
+      }, 800);
+    } catch (err) {
+      console.error('Failed to import data:', err);
+      setError(err instanceof Error ? err.message : 'Failed to import data');
+    } finally {
+      setIsImporting(false);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
     }
   };
 
@@ -594,6 +717,64 @@ export function Settings({ onBack, onViewHidden, onRootFolderReset }: SettingsPr
           </div>
         </div>
 
+        {/* Backup & Restore */}
+        <div className="mb-8">
+          <h2 className="text-lg font-semibold text-white mb-4">Backup & Restore</h2>
+
+          <div className="mb-4 p-4 bg-gray-800 rounded-lg border border-gray-700">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <Download size={20} className="text-gray-400" />
+                <div>
+                  <p className="font-medium text-white">Export Data</p>
+                  <p className="text-sm text-gray-400">Download your likes, saves, hidden items, and preferences</p>
+                </div>
+              </div>
+              <button
+                onClick={handleExport}
+                disabled={isExporting}
+                className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg transition-colors font-medium"
+              >
+                {isExporting ? 'Exporting...' : 'Export'}
+              </button>
+            </div>
+          </div>
+
+          <div className="p-4 bg-gray-800 rounded-lg border border-gray-700">
+            <div className="flex items-center gap-3 mb-4">
+              <Upload size={20} className="text-gray-400" />
+              <div>
+                <p className="font-medium text-white">Import Data</p>
+                <p className="text-sm text-gray-400">Restore likes, saves, hidden items, and preferences from a backup file</p>
+              </div>
+            </div>
+            <input
+              type="file"
+              accept="application/json"
+              className="hidden"
+              ref={fileInputRef}
+              onChange={handleImportFileSelected}
+            />
+            <button
+              onClick={handleImportClick}
+              disabled={isImporting}
+              className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg transition-colors font-medium flex items-center justify-center gap-2"
+            >
+              {isImporting ? (
+                <>
+                  <RotateCw size={16} className="animate-spin" />
+                  Importing...
+                </>
+              ) : (
+                <>
+                  <Upload size={16} />
+                  Import Backup
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+
         {/* System Control */}
         <div className="mb-8">
           <h2 className="text-lg font-semibold text-white mb-4">System Control</h2>
@@ -691,6 +872,13 @@ export function Settings({ onBack, onViewHidden, onRootFolderReset }: SettingsPr
         <div className="fixed bottom-6 left-1/2 transform -translate-x-1/2 bg-green-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 text-sm">
           <RotateCw size={16} className="animate-spin" />
           Saving...
+        </div>
+      )}
+
+      {/* Backup indicator */}
+      {backupMessage && (
+        <div className="fixed bottom-6 left-1/2 transform -translate-x-1/2 bg-green-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 text-sm">
+          {backupMessage}
         </div>
       )}
     </div>

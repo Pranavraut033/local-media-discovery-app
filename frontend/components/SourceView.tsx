@@ -95,7 +95,7 @@ export function SourceView({ sourceId, displayName, avatarSeed, parentFolderPath
     );
   }
 
-  const mediaItems = (data as any)?.media || [];
+  const mediaItems = data?.media || [];
 
   return (
     <div className="w-full h-dvh flex flex-col bg-gray-900 overflow-hidden">
@@ -147,7 +147,7 @@ export function SourceView({ sourceId, displayName, avatarSeed, parentFolderPath
             className={MEDIA_MASONRY_CLASS}
             columnClassName={MEDIA_MASONRY_COLUMN_CLASS}
           >
-            {mediaItems.map((item: any) => (
+            {mediaItems.map((item) => (
               <div
                 key={item.id}
                 className={MEDIA_GRID_CARD_CLASS}

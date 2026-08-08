@@ -57,6 +57,7 @@ export function RcloneManualForm({ isOpen, onClose, onSuccess }: RcloneManualFor
 
   useEffect(() => {
     if (!isOpen) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- resetting form state on open
     setAddProgress(0);
     setAddStatus('');
     setError(null);

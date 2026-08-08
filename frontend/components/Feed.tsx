@@ -163,6 +163,7 @@ export function Feed({ initialMode, onViewSource, onModeChange }: FeedProps) {
   // Reconcile temp IDs → final IDs when hashing completes (Phase 9)
   useEffect(() => {
     if (Object.keys(reconciliationMap).length === 0) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing external store into local state
     setAllItems((prev) => {
       let changed = false;
       const next = prev.map((item) => {
@@ -180,6 +181,7 @@ export function Feed({ initialMode, onViewSource, onModeChange }: FeedProps) {
   // Load more when reaching near the end and sync updates from cache
   useEffect(() => {
     if (mergedFeedItems.length > 0) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing query cache into local state
       setAllItems((prev) => {
         const merged = [...prev];
         let hasNewItems = false;
@@ -225,6 +227,7 @@ export function Feed({ initialMode, onViewSource, onModeChange }: FeedProps) {
       if (lastViewed) {
         const index = allItems.findIndex(item => item.id === lastViewed.mediaId);
         if (index !== -1) {
+          // eslint-disable-next-line react-hooks/set-state-in-effect -- one-time resume of persisted position
           setCurrentIndex(index);
         }
       }

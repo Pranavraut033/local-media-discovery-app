@@ -23,6 +23,7 @@ import maintenanceRoutes from './routes/maintenance.js';
 import folderRoutes from './routes/folders.js';
 import eventsRoutes from './routes/events.js';
 import discoverRoutes from './routes/discover.js';
+import backupRoutes from './routes/backup.js';
 import { initThumbnailService } from './services/thumbnails.js';
 import { startIndexingWorker } from './workers/indexer.worker.js';
 import { rcloneMountManager } from './services/rclone-mount.js';
@@ -112,6 +113,7 @@ await fastify.register(remoteRcloneConfigRoutes);
 await fastify.register(eventsRoutes);
 await fastify.register(discoverRoutes);
 await fastify.register(serversRoutes);
+await fastify.register(backupRoutes);
 
 // Start in-process indexing worker
 startIndexingWorker();
