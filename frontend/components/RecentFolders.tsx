@@ -5,18 +5,20 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { FolderOpen, Clock } from 'lucide-react';
+import { FolderOpen, Clock, Server } from 'lucide-react';
 import { getApiBase, authenticatedFetch } from '@/lib/api';
-import { setRootFolder } from '@/lib/storage';
+import { useFoldersStore } from '@/lib/stores/folders.store';
 
 interface RecentFoldersProps {
-  onFolderSelect?: (path: string, name: string) => void;
+  onFolderSelect?: (source?: 'local' | 'remote') => void;
 }
 
 interface RecentFolder {
   path: string;
   name: string;
   lastIndexedAt: number;
+  serverId: string | null;
+  serverType: string | null;
 }
 
 export function RecentFolders({ onFolderSelect }: RecentFoldersProps) {
@@ -46,18 +48,29 @@ export function RecentFolders({ onFolderSelect }: RecentFoldersProps) {
     loadRecentFolders();
   }, [API_URL]);
 
-  const handleSelectFolder = async (path: string, name: string) => {
+  const handleSelectFolder = async (folder: RecentFolder) => {
     try {
       setIsLoading(true);
+
+      if (folder.serverId) {
+        const response = await authenticatedFetch(`${API_URL}/api/servers/${folder.serverId}/add-source`, {
+          method: 'POST',
+          body: JSON.stringify({ path: folder.path }),
+        });
+        if (!response.ok) throw new Error('Failed to start remote indexing');
+        onFolderSelect?.('remote');
+        return;
+      }
+
       const response = await authenticatedFetch(`${API_URL}/api/config/root-folder`, {
         method: 'POST',
-        body: JSON.stringify({ path }),
+        body: JSON.stringify({ path: folder.path }),
       });
 
       if (!response.ok) throw new Error('Failed to set root folder');
 
-      setRootFolder(path);
-      onFolderSelect?.(path, name);
+      useFoldersStore.getState().setRootFolder(folder.path);
+      onFolderSelect?.('local');
     } catch (error) {
       console.error('Failed to select folder:', error);
     } finally {
@@ -100,12 +113,16 @@ export function RecentFolders({ onFolderSelect }: RecentFoldersProps) {
             className="group relative bg-(--surface-lowest) rounded-2xl p-4 hover:bg-(--surface-low) transition-colors cursor-pointer overflow-hidden"
           >
             <button
-              onClick={() => handleSelectFolder(folder.path, folder.name)}
+              onClick={() => handleSelectFolder(folder)}
               disabled={isLoading}
               className="w-full text-left flex items-start gap-3 disabled:opacity-50"
             >
               <div className="shrink-0 mt-1">
-                <FolderOpen size={20} className="text-(--secondary)" />
+                {folder.serverId ? (
+                  <Server size={20} className="text-(--secondary)" />
+                ) : (
+                  <FolderOpen size={20} className="text-(--secondary)" />
+                )}
               </div>
               <div className="flex-1 min-w-0">
                 <p className="font-medium text-(--surface-ink) truncate">

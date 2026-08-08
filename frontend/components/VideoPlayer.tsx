@@ -5,13 +5,13 @@
 'use client';
 
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Play, Pause, Volume2, VolumeX, Maximize2, ZoomIn, ZoomOut } from 'lucide-react';
+import { Play, Pause, Volume2, VolumeX, ZoomIn, ZoomOut, Loader2 } from 'lucide-react';
 
 interface VideoPlayerProps {
   src: string;
+  poster?: string;
   mode?: 'feed' | 'reels';
   className?: string;
-  onLoad?: () => void;
   autoPlay?: boolean;
   muted?: boolean;
   shouldAutoPlayOnHover?: boolean;
@@ -19,11 +19,20 @@ interface VideoPlayerProps {
   isCardHovered?: boolean;
 }
 
+// ponytail: remote-backed videos share one rclone connection to the backend
+// server — playing several at once causes contention (one streams, the rest
+// stall buffering forever, see session notes on rcd concurrency). Track the
+// single active element module-wide and fully cancel the loser's in-flight
+// fetch (pause alone leaves the browser still downloading buffered-ahead
+// bytes). Upgrade path if this proves too aggressive: a small allowlist of
+// N concurrent slots instead of 1.
+let activeRemoteVideo: HTMLVideoElement | null = null;
+
 export function VideoPlayer({
   src,
+  poster,
   mode = 'feed',
   className = '',
-  onLoad,
   autoPlay = false,
   muted = true,
   shouldAutoPlayOnHover = true,
@@ -35,7 +44,6 @@ export function VideoPlayer({
   const [isPlaying, setIsPlaying] = useState(false);
   const [isMuted, setIsMuted] = useState(muted);
   const [hasError, setHasError] = useState(false);
-  const [isLoading, setIsLoading] = useState(true);
   const [scale, setScale] = useState(1);
   const [position, setPosition] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
@@ -45,15 +53,31 @@ export function VideoPlayer({
   const dragStart = useRef({ x: 0, y: 0 });
   const lastTap = useRef(0);
   const [isHovered, setIsHovered] = useState(false);
+  // Touch devices have no hover state, so tapping the video needs to reveal the
+  // expanded controls (play/pause/mute/seek) the same way hover does on desktop.
+  // Auto-hides after a few seconds so it behaves like a typical touch video player.
+  const [isTapped, setIsTapped] = useState(false);
+  const tapHideTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [isVisible, setIsVisible] = useState(false);
   const observerRef = useRef<IntersectionObserver | null>(null);
+  const retryCount = useRef(0);
+  const retryTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // ponytail: reels mode now renders PlyrVideo instead of this component
+  // (see MediaCard), so the isReelsMode branches below are unreachable in
+  // practice. Left in place since VideoPlayer's mode prop is still part of
+  // its public API; delete them if VideoPlayer's reels path is dropped for good.
   const isReelsMode = mode === 'reels';
   const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
   const shouldAutoPlay = autoPlay ||
-    ((shouldAutoPlayOnHover && (isHovered || isCardHovered) && !isMobile) ||
-      (shouldAutoPlayOnMobileVisible && isVisible && isMobile));
-  const showExpandedControls = !isReelsMode && (isHovered || isSeeking);
+    (isVisible && (
+      (shouldAutoPlayOnHover && (isHovered || isCardHovered) && !isMobile) ||
+      (shouldAutoPlayOnMobileVisible && isMobile)
+    ));
+  const showExpandedControls = !isReelsMode && (isHovered || isSeeking || isTapped);
+  // ponytail: preload=none in feed (many cards, avoids parallel rclone metadata requests);
+  // preload=auto in reels (single current video, start buffering immediately).
+  const preloadValue = isReelsMode ? 'auto' : 'none';
   const showProgressInExpandedControls = !hasError && duration > 0 && showExpandedControls;
   const showBottomPlayingProgress = !isReelsMode && !hasError && duration > 0 && isPlaying && !showExpandedControls;
   const showStaticReelsControls = isReelsMode && !hasError;
@@ -63,41 +87,61 @@ export function VideoPlayer({
     e.stopPropagation();
   };
 
-  // Set up intersection observer for mobile visibility detection
+  // AbortError fires whenever pause() interrupts a play() promise before it
+  // settles (e.g. a quick hover-in/hover-out) — expected, not a real failure.
+  const logPlayError = (err: unknown) => {
+    if (err instanceof DOMException && err.name === 'AbortError') return;
+    console.error('Video play failed:', err);
+  };
+
+  // Track viewport visibility — pause when scrolled out on both desktop and mobile.
   useEffect(() => {
-    if (!shouldAutoPlayOnMobileVisible || !isMobile || !containerRef.current) {
-      return;
-    }
-
+    if (!containerRef.current) return;
     observerRef.current = new IntersectionObserver(
-      ([entry]) => {
-        setIsVisible(entry.isIntersecting);
-      },
-      { threshold: 0.5 }
+      ([entry]) => setIsVisible(entry.isIntersecting),
+      { threshold: 0.1 }
     );
-
     observerRef.current.observe(containerRef.current);
-
-    return () => {
-      if (observerRef.current) {
-        observerRef.current.disconnect();
-      }
-    };
-  }, [shouldAutoPlayOnMobileVisible, isMobile]);
+    return () => observerRef.current?.disconnect();
+  }, []);
 
   // Keep the media element aligned with the desired autoplay behavior.
+  // ponytail: debounce the "start playing" edge by ~200ms so a quick mouse
+  // sweep across many cards doesn't fire a live remote request per card — only
+  // the one the user settles on. Stopping (hover-out) stays immediate so the
+  // remote lane frees up right away.
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
 
-    if (shouldAutoPlay) {
-      video.play().catch((err) => {
-        console.error('Video play failed:', err);
-      });
-    } else {
+    if (!shouldAutoPlay) {
+      if (activeRemoteVideo === video) activeRemoteVideo = null;
       video.pause();
+      return;
     }
+
+    const timer = setTimeout(() => {
+      if (activeRemoteVideo && activeRemoteVideo !== video) {
+        activeRemoteVideo.pause();
+        // load() (without touching the src attribute, which React owns) aborts
+        // the in-flight network request per spec; preload="none" in feed mode
+        // means it won't immediately re-fetch.
+        activeRemoteVideo.load();
+      }
+      activeRemoteVideo = video;
+      video.play().catch(logPlayError);
+    }, 200);
+
+    return () => clearTimeout(timer);
   }, [shouldAutoPlay]);
+
+  // Clear the slot on unmount so a removed card doesn't permanently block playback.
+  useEffect(() => {
+    const video = videoRef.current;
+    return () => {
+      if (activeRemoteVideo === video) activeRemoteVideo = null;
+    };
+  }, []);
 
   // Sync mute state with React state
   useEffect(() => {
@@ -112,9 +156,7 @@ export function VideoPlayer({
     if (!video) return;
 
     if (video.paused) {
-      video.play().catch((err) => {
-        console.error('Video play failed:', err);
-      });
+      video.play().catch(logPlayError);
       return;
     }
 
@@ -123,11 +165,6 @@ export function VideoPlayer({
 
   const handleMuteToggle = () => {
     setIsMuted(!isMuted);
-  };
-
-  const handleLoadedData = () => {
-    setIsLoading(false);
-    onLoad?.();
   };
 
   const handleError = (e: React.SyntheticEvent<HTMLVideoElement, Event>) => {
@@ -150,17 +187,31 @@ export function VideoPlayer({
       : { currentSrc: video?.currentSrc };
 
     console.error('Video error:', details);
-    setHasError(true);
-    setIsLoading(false);
     setIsPlaying(false);
-  };
+    setHasError(true);
 
-  const handleFullscreen = () => {
-    const video = videoRef.current;
-    if (video?.requestFullscreen) {
-      video.requestFullscreen();
+    // ponytail: remote streams can hiccup (rcd crash/restart, ~8s worst case) —
+    // retry a few times before giving up, instead of a permanent error on first hit.
+    const MAX_RETRIES = 3;
+    if (retryCount.current < MAX_RETRIES) {
+      retryCount.current += 1;
+      retryTimeout.current = setTimeout(() => {
+        const video = videoRef.current;
+        if (video) {
+          video.load();
+          setHasError(false);
+        }
+      }, 3000);
     }
   };
+
+  // MediaCard keys VideoPlayer by mediaSource, so a new src always remounts
+  // this component fresh — no manual reset-on-src-change needed here.
+  useEffect(() => {
+    return () => {
+      if (retryTimeout.current) clearTimeout(retryTimeout.current);
+    };
+  }, []);
 
   // Progress bar handlers
   const handleTimeUpdate = useCallback(() => {
@@ -219,7 +270,8 @@ export function VideoPlayer({
     setPosition({ x: 0, y: 0 });
   }, []);
 
-  // Double tap to zoom
+  // Double tap to zoom; every tap (single or double) also reveals the expanded
+  // controls on touch devices for a few seconds, since there's no hover there.
   const handleDoubleTap = useCallback(() => {
     const now = Date.now();
     if (now - lastTap.current < 300) {
@@ -230,7 +282,20 @@ export function VideoPlayer({
       }
     }
     lastTap.current = now;
-  }, [scale, handleReset]);
+
+    if (!isReelsMode) {
+      setIsTapped(true);
+      if (tapHideTimeout.current) clearTimeout(tapHideTimeout.current);
+      tapHideTimeout.current = setTimeout(() => setIsTapped(false), 3000);
+    }
+  }, [scale, handleReset, isReelsMode]);
+
+  // Clear the auto-hide timer on unmount.
+  useEffect(() => {
+    return () => {
+      if (tapHideTimeout.current) clearTimeout(tapHideTimeout.current);
+    };
+  }, []);
 
   // Mouse drag for panning
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
@@ -258,8 +323,14 @@ export function VideoPlayer({
 
   if (hasError) {
     return (
-      <div className={`w-full ${isReelsMode ? 'h-full' : 'min-h-50'} bg-gray-200 dark:bg-gray-800 flex items-center justify-center ${className}`}>
-        <span className="text-gray-500 dark:text-gray-400">Video failed to load</span>
+      <div className={`relative w-full ${isReelsMode ? 'h-full' : 'min-h-50'} bg-gray-800 ${className}`}>
+        {poster && (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={poster} alt="" className="absolute inset-0 w-full h-full object-cover" />
+        )}
+        <div className="absolute inset-0 flex items-center justify-center bg-black/20">
+          <Loader2 className="w-8 h-8 text-white animate-spin" />
+        </div>
       </div>
     );
   }
@@ -285,22 +356,16 @@ export function VideoPlayer({
         onTouchEnd={handleDoubleTap}
         style={{ cursor: isDragging ? 'grabbing' : scale > 1 ? 'grab' : 'default' }}
       >
-      {isLoading && (
-        <div className="absolute inset-0 flex items-center justify-center bg-gray-900 z-10">
-          <div className="w-8 h-8 border-4 border-gray-600 border-t-white rounded-full animate-spin"></div>
-        </div>
-      )}
-
       <video
         ref={videoRef}
         src={src}
+        poster={poster}
         className={isReelsMode ? 'max-w-full max-h-full object-contain' : 'w-full h-auto object-contain'}
         style={{
           transform: `scale(${scale}) translate(${position.x / scale}px, ${position.y / scale}px)`,
           transition: isDragging ? 'none' : 'transform 0.2s ease-out',
         }}
         loop
-        onLoadedData={handleLoadedData}
         onLoadedMetadata={handleLoadedMetadata}
         onTimeUpdate={handleTimeUpdate}
         onPlay={() => setIsPlaying(true)}
@@ -309,7 +374,7 @@ export function VideoPlayer({
         muted={isMuted}
         playsInline
         controls={false}
-        preload="metadata"
+        preload={preloadValue}
       />
 
       {/* Expanded controls - visible while hovering/seeking */}
@@ -365,7 +430,7 @@ export function VideoPlayer({
                 e.stopPropagation();
                 handlePlayPause();
               }}
-              className="bg-white hover:bg-gray-200 text-black p-2 rounded-full transition-colors"
+              className="bg-white hover:bg-gray-200 text-black p-3 rounded-full transition-colors"
               aria-label={isPlaying ? 'Pause' : 'Play'}
             >
               {isPlaying ? <Pause size={20} /> : <Play size={20} />}
@@ -376,23 +441,12 @@ export function VideoPlayer({
                 e.stopPropagation();
                 handleMuteToggle();
               }}
-              className="bg-white hover:bg-gray-200 text-black p-2 rounded-full transition-colors"
+              className="bg-white hover:bg-gray-200 text-black p-3 rounded-full transition-colors"
               aria-label={isMuted ? 'Unmute' : 'Mute'}
             >
               {isMuted ? <VolumeX size={20} /> : <Volume2 size={20} />}
             </button>
           </div>
-
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              handleFullscreen();
-            }}
-            className="bg-white hover:bg-gray-200 text-black p-2 rounded-full transition-colors"
-            aria-label="Fullscreen"
-          >
-            <Maximize2 size={20} />
-          </button>
         </div>
       </div>
 
@@ -429,14 +483,14 @@ export function VideoPlayer({
       )}
 
       {/* Zoom Controls - Only in reels mode */}
-      {isReelsMode && !isLoading && !hasError && (
+      {isReelsMode && !hasError && (
         <div className="absolute bottom-20 right-4 flex flex-col gap-2 z-20 pointer-events-auto">
           <button
             onClick={(e) => {
               e.stopPropagation();
               handleZoomIn();
             }}
-            className="bg-white/90 hover:bg-white text-black p-2 rounded-full shadow-lg transition-colors"
+            className="bg-white/90 hover:bg-white text-black p-3 rounded-full shadow-lg transition-colors"
             aria-label="Zoom in"
           >
             <ZoomIn size={20} />
@@ -446,7 +500,7 @@ export function VideoPlayer({
               e.stopPropagation();
               handleZoomOut();
             }}
-            className="bg-white/90 hover:bg-white text-black p-2 rounded-full shadow-lg transition-colors"
+            className="bg-white/90 hover:bg-white text-black p-3 rounded-full shadow-lg transition-colors"
             aria-label="Zoom out"
           >
             <ZoomOut size={20} />
@@ -509,7 +563,7 @@ export function VideoPlayer({
                   e.stopPropagation();
                   handlePlayPause();
                 }}
-                className="bg-white hover:bg-gray-200 text-black p-2 rounded-full transition-colors"
+                className="bg-white hover:bg-gray-200 text-black p-3 rounded-full transition-colors"
                 aria-label={isPlaying ? 'Pause' : 'Play'}
               >
                 {isPlaying ? <Pause size={18} /> : <Play size={18} />}
@@ -520,23 +574,12 @@ export function VideoPlayer({
                   e.stopPropagation();
                   handleMuteToggle();
                 }}
-                className="bg-white hover:bg-gray-200 text-black p-2 rounded-full transition-colors"
+                className="bg-white hover:bg-gray-200 text-black p-3 rounded-full transition-colors"
                 aria-label={isMuted ? 'Unmute' : 'Mute'}
               >
                 {isMuted ? <VolumeX size={18} /> : <Volume2 size={18} />}
               </button>
             </div>
-
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                handleFullscreen();
-              }}
-              className="bg-white hover:bg-gray-200 text-black p-2 rounded-full transition-colors"
-              aria-label="Fullscreen"
-            >
-              <Maximize2 size={18} />
-            </button>
           </div>
         </div>
       )}
@@ -606,10 +649,18 @@ export function VideoPlayer({
           opacity: 1;
         }
 
-        video:fullscreen {
-          width: 100%;
-          height: 100%;
-          object-fit: contain;
+        /* Coarse pointers (touch) have no hover — show seek thumbs by default
+           so they're reachable without first needing a hover event. */
+        @media (pointer: coarse) {
+          .slider::-webkit-slider-thumb,
+          .slider-minimal::-webkit-slider-thumb {
+            opacity: 1;
+          }
+
+          .slider::-moz-range-thumb,
+          .slider-minimal::-moz-range-thumb {
+            opacity: 1;
+          }
         }
       `}</style>
     </div>

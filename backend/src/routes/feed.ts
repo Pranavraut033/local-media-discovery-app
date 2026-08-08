@@ -9,26 +9,38 @@ import path from 'path';
 import { getDatabase } from '../db/index.js';
 import { generatePaginatedFeed } from '../services/feed.js';
 import type { FeedSourceType } from '../services/feed.js';
-import { readRemoteFile } from '../services/rclone.js';
 import { signStreamToken } from '../tokens.js';
+import { rcloneMountManager } from '../services/rclone-mount.js';
 
 const MEDIA_SERVER_SECRET =
   process.env.MEDIA_SERVER_SECRET || 'media-server-default-secret-change-me';
 
-/** Derive extension and type then attach a stream token to any object with a path + type.
- * Rclone items are skipped — the media-server can only serve local filesystem paths;
- * rclone files are handled by the backend's own /api/media/file/:id rclone handler.
- */
-function withStreamToken<T extends { id: string; path: string; type: string; storageMode?: string }>(item: T): T & { streamToken?: string } {
-  if (item.storageMode === 'rclone') return item;
-  const ext = path.extname(item.path).toLowerCase();
+/** Derive extension and type then attach a stream token to any object with a path + type. */
+function withStreamToken<T extends { id: string; path: string; type: string; storageMode?: string; serverId?: string | null }>(item: T): T & { streamToken?: string } {
+  const ext = path.extname(item.path || '').toLowerCase() || (item.storageMode !== 'local' ? path.extname(item.id || '').toLowerCase() : '');
   if (!ext) return item;
   const kind = item.type === 'video' || item.type.startsWith('video/') ? 'video' as const : 'image' as const;
+
+  const isRemote = item.storageMode === 'rclone' || item.storageMode === 'webdav';
+  if (isRemote && !item.serverId) return item; // legacy rclone without serverId — skip
+
   try {
-    const streamToken = signStreamToken(
-      { mediaId: item.id, path: item.path, ext, type: kind },
-      MEDIA_SERVER_SECRET
-    );
+    // rclone-mode files are served straight from the FUSE mount, same as local files —
+    // resolve the mount path here so media-server's local-file branch can read it directly,
+    // with no live rcd-serve fetch involved.
+    const payload = isRemote
+      ? {
+          mediaId: item.id,
+          path: item.storageMode === 'rclone' ? rcloneMountManager.resolveLocalPath(item.serverId!, item.path) : '',
+          ext,
+          type: kind,
+          storageMode: item.storageMode as 'rclone' | 'webdav',
+          serverId: item.serverId!,
+          remotePath: item.path,
+        }
+      : { mediaId: item.id, path: item.path, ext, type: kind, storageMode: 'local' as const };
+
+    const streamToken = signStreamToken(payload, MEDIA_SERVER_SECRET);
     return { ...item, streamToken };
   } catch {
     return item;
@@ -66,6 +78,7 @@ interface MediaRow {
   viewCount: number;
   lastViewed: number | null;
   storageMode?: string;
+  serverId?: string | null;
 }
 
 const latestPathsCte = `
@@ -604,7 +617,7 @@ export default async function feedRoutes(fastify: FastifyInstance): Promise<void
           .prepare(
             `
             ${latestPathsCte}
-            SELECT lp.absolute_path AS path, f.media_kind AS type, lp.storage_mode AS storageMode
+            SELECT lp.absolute_path AS path, f.media_kind AS type, lp.storage_mode AS storageMode, lp.server_id AS serverId
             FROM files f
             JOIN latest_paths lp ON lp.file_id = f.id
             WHERE f.id = ?
@@ -615,6 +628,7 @@ export default async function feedRoutes(fastify: FastifyInstance): Promise<void
             path: string;
             type: string;
             storageMode: string;
+            serverId: string | null;
           } | undefined;
 
         if (!media) {
@@ -636,24 +650,38 @@ export default async function feedRoutes(fastify: FastifyInstance): Promise<void
 
         const contentType = mimeTypes[ext] || 'application/octet-stream';
 
-        // Remote (rclone) files are served via rclone cat piped to the response.
-        if (media.storageMode === 'rclone') {
-          const { rcloneStream } = await import('../services/rclone.js');
-          const stream = rcloneStream(media.path);
-
-          reply
-            .header('Content-Type', contentType)
-            .header('Cache-Control', 'public, max-age=300')
-            .header('Accept-Ranges', 'none');
-
-          const range = request.headers.range;
-          if (range) {
-            // rclone cat does not support range natively; send 200 with full stream.
-            // Browser players handle this gracefully on first request.
-            reply.code(200);
+        // Remote (rclone/webdav) files. This route is only hit when media-server is
+        // unavailable, so a full-buffer fallback (no Range support) is acceptable;
+        // media-server's stream route handles ranged remote reads normally.
+        // rclone-mode reads straight from the FUSE mount (same FS the backend already
+        // mounted) instead of round-tripping through rcd's HTTP serve route.
+        if (media.storageMode === 'rclone' || media.storageMode === 'webdav') {
+          let buffer: Buffer;
+          if (media.storageMode === 'rclone') {
+            if (!media.serverId) {
+              return reply.code(404).send({ error: 'Remote server not found for file' });
+            }
+            const mountPath = rcloneMountManager.resolveLocalPath(media.serverId, media.path);
+            buffer = await fs.readFile(mountPath);
+          } else {
+            if (!media.serverId) {
+              return reply.code(404).send({ error: 'Remote server not found for file' });
+            }
+            const { getServerById } = await import('../services/remote/servers-db.js');
+            const { fetchWebdavFile } = await import('../services/remote/webdav.provider.js');
+            const server = getServerById(db, media.serverId);
+            if (!server) {
+              return reply.code(404).send({ error: 'Remote server not found for file' });
+            }
+            buffer = await fetchWebdavFile(server.connection, media.path);
           }
 
-          return reply.send(stream);
+          return reply
+            .type(contentType)
+            .header('Content-Length', buffer.length.toString())
+            .header('Accept-Ranges', 'none')
+            .header('Cache-Control', 'public, max-age=300')
+            .send(buffer);
         }
 
         const fileStats = await fs.stat(media.path);

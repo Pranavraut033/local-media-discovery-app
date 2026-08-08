@@ -412,20 +412,16 @@ export async function indexRcloneFilesStreaming(
       updated_at = excluded.updated_at
   `);
 
-  // Looks up an existing locally-indexed file that matches by name + size + kind.
-  // If found, the rclone path record reuses that file_id so the same content
-  // is never surfaced twice in the feed (dedup: local + rclone → single item).
-  const findLocalDuplicate = db.prepare<[string, string, number, string], { file_id: string }>(`
-    SELECT fp.file_id
-    FROM file_paths fp
-    JOIN files f ON f.id = fp.file_id
-    WHERE fp.user_id = ?
-      AND fp.storage_mode = 'local'
-      AND fp.file_name = ?
-      AND f.size_bytes = ?
-      AND f.media_kind = ?
-    LIMIT 1
-  `);
+  // ponytail: preload local file fingerprints into a Map — was one DB query per file
+  const localDedupMap = new Map<string, string>(); // `${fileName}:${sizeBytes}:${kind}` → file_id
+  const localRows = db.prepare<[string], { file_name: string; size_bytes: number; media_kind: string; file_id: string }>(
+    `SELECT fp.file_name, f.size_bytes, f.media_kind, fp.file_id
+     FROM file_paths fp JOIN files f ON f.id = fp.file_id
+     WHERE fp.user_id = ? AND fp.storage_mode = 'local'`
+  ).all(userId);
+  for (const row of localRows) {
+    localDedupMap.set(`${row.file_name}:${row.size_bytes}:${row.media_kind}`, row.file_id);
+  }
 
   const total = fileDescs.length;
   let done = 0;
@@ -437,9 +433,8 @@ export async function indexRcloneFilesStreaming(
 
     db.transaction(() => {
       for (const file of batch) {
-        // Reuse existing local file_id to avoid showing same content twice
-        const localMatch = findLocalDuplicate.get(userId, file.fileName, file.sizeBytes, file.mediaKind);
-        const fileId = localMatch ? localMatch.file_id : file.contentHash;
+        const localMatch = localDedupMap.get(`${file.fileName}:${file.sizeBytes}:${file.mediaKind}`);
+        const fileId = localMatch ?? file.contentHash;
 
         if (!localMatch) {
           upsertFile.run(file.contentHash, file.fileKey, file.contentHash, file.sizeBytes, file.mimeType, file.extension, file.mediaKind, batchNow, batchNow);

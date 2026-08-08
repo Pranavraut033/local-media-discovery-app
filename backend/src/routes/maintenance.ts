@@ -9,7 +9,6 @@ import { getThumbnailService } from '../services/thumbnails.js';
 import { clearAllIndexedDataV2, getV2MediaStats } from '../services/v2-data-maintenance.js';
 import { getAllSourcesV2 } from '../services/v2-sources.js';
 import fs from 'fs/promises';
-import { exec } from 'child_process';
 
 export default async function maintenanceRoutes(fastify: FastifyInstance): Promise<void> {
   const db = getDatabase();
@@ -133,26 +132,15 @@ export default async function maintenanceRoutes(fastify: FastifyInstance): Promi
   /**
    * Get database statistics and info
    */
-  fastify.get('/api/admin/stats', async (request: FastifyRequest, reply: FastifyReply) => {
+  fastify.get('/api/admin/stats', { onRequest: [fastify.authenticate] }, async (request: FastifyRequest, reply: FastifyReply) => {
     try {
       const mediaStats = getV2MediaStats(db);
 
       const userId = request.user?.userId;
 
       if (userId) {
-        const rootFolderRow = db
-          .prepare(
-            `
-              SELECT absolute_path AS rootFolder
-              FROM folders
-              WHERE user_id = ?
-                AND storage_mode = 'local'
-                AND relative_path_from_root = ''
-              ORDER BY updated_at DESC
-              LIMIT 1
-            `
-          )
-          .get(userId) as { rootFolder: string } | undefined;
+        const sources = getAllSourcesV2(db, userId);
+        const rootSource = sources.find((s) => s.id === 'root') ?? sources[0];
 
         const userMedia = db
           .prepare(
@@ -185,7 +173,7 @@ export default async function maintenanceRoutes(fastify: FastifyInstance): Promi
           .prepare('SELECT COUNT(*) as count FROM user_hidden_files WHERE user_id = ?')
           .get(userId) as { count: number };
 
-        const sourcesCount = getAllSourcesV2(db, userId).length;
+        const sourcesCount = sources.length;
 
         return {
           success: true,
@@ -194,7 +182,7 @@ export default async function maintenanceRoutes(fastify: FastifyInstance): Promi
           liked_count: liked.count,
           saved_count: saved.count,
           hidden_count: hidden.count,
-          root_folder: rootFolderRow?.rootFolder ?? null,
+          root_folder: rootSource?.folderPath ?? null,
           media: {
             total: userMedia.total ?? 0,
             images: userMedia.images ?? 0,
@@ -254,19 +242,13 @@ export default async function maintenanceRoutes(fastify: FastifyInstance): Promi
   });
 
   /**
-   * Stop all PM2-managed services
+   * Shut down this process; the desktop app's exit handler stops media-server too
    */
   fastify.post('/api/admin/shutdown', async (request: FastifyRequest, reply: FastifyReply) => {
     reply.send({ success: true, message: 'Stopping all services...' });
 
-    // Defer so the response is flushed before the process is stopped
-    setTimeout(() => {
-      exec('pm2 stop ecosystem.config.cjs', { cwd: process.cwd().replace(/\/backend$/, '') }, (error) => {
-        if (error) {
-          console.error('pm2 stop all failed:', error.message);
-        }
-      });
-    }, 200);
+    // Defer so the response is flushed before the process exits
+    setTimeout(() => process.exit(0), 200);
   });
 
   /**

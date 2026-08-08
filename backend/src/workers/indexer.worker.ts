@@ -1,10 +1,9 @@
 /**
  * Indexing Worker
- * Processes BullMQ indexing jobs for both local and rclone sources.
+ * Processes indexing jobs for both local and rclone sources.
  * Implements pending-first + hash-finalization pipeline.
  */
-import { Worker } from 'bullmq';
-import { type IndexingJobData, redisConnection, INDEXING_QUEUE } from '../queue/index.js';
+import { type IndexingJobData, registerIndexingProcessor } from '../queue/index.js';
 import { sseEventBus } from '../queue/events.js';
 import { getDatabase } from '../db/index.js';
 import {
@@ -16,10 +15,12 @@ import {
   finalizeRclonePendingFiles,
   indexRcloneFilesStreaming,
 } from '../services/rclone-indexer.js';
+import { indexRemoteFilesStreaming } from '../services/remote/indexer.js';
+import { getServerById } from '../services/remote/servers-db.js';
 import { invalidateFeedCache } from '../services/feed.js';
 
-async function processJob(job: { data: IndexingJobData }): Promise<void> {
-  const { jobId, userId, type } = job.data;
+async function processJob(data: IndexingJobData): Promise<void> {
+  const { jobId, userId, type } = data;
   const db = getDatabase();
   const now = Math.floor(Date.now() / 1000);
 
@@ -32,7 +33,7 @@ async function processJob(job: { data: IndexingJobData }): Promise<void> {
 
   try {
     if (type === 'local') {
-      const { rootFolder } = job.data;
+      const { rootFolder } = data;
       if (!rootFolder) throw new Error('rootFolder required for local job');
 
       // Phase 1: fast discovery – creates pending records per directory as they are scanned
@@ -54,49 +55,62 @@ async function processJob(job: { data: IndexingJobData }): Promise<void> {
         payload: { stage: 'discovery', filesFound: pending.length },
       });
 
-      // Phase 2: hash each pending file and finalize
+      // Phase 2: hash each pending file and finalize.
+      // The SSE event fires per file (the frontend needs each temp→final ID to
+      // reconcile its feed), but the indexing_jobs row is only written every
+      // PROGRESS_PERSIST_EVERY files (and once at the end) to avoid a DB write
+      // per file during fast parallel hashing.
+      const PROGRESS_PERSIST_EVERY = 25;
       await finalizeLocalPendingFiles(db, pending, userId, jobId, (done, total, fileId, finalId) => {
         sseEventBus.emit(userId, {
           type: 'file_hashed',
           jobId,
           payload: { done, total, tempId: fileId, finalId },
         });
-        db.prepare(
-          `UPDATE indexing_jobs SET processed_files = ?, updated_at = ? WHERE id = ?`
-        ).run(done, Math.floor(Date.now() / 1000), jobId);
+        if (done % PROGRESS_PERSIST_EVERY === 0 || done === total) {
+          db.prepare(
+            `UPDATE indexing_jobs SET processed_files = ?, updated_at = ? WHERE id = ?`
+          ).run(done, Math.floor(Date.now() / 1000), jobId);
+        }
       });
-    } else {
-      const { remoteName, basePath, remoteType } = job.data;
-      if (!remoteName || basePath === undefined) throw new Error('remoteName and basePath required for rclone job');
+    } else if (type === 'remote') {
+      // Generic remote provider path (rclone via rcd, webdav, …)
+      const { serverId, remotePath } = data;
+      if (!serverId || remotePath === undefined) throw new Error('serverId and remotePath required for remote job');
 
-      // Streaming single-phase indexer: discover via fast-list then write ready in batches
-      const indexedCount = await indexRcloneFilesStreaming(
-        db,
-        remoteName,
-        basePath,
-        remoteType || 'unknown',
-        userId,
-        jobId,
-        // onDiscovery – fires once with total count after fast-list completes
+      const server = getServerById(db, serverId);
+      if (!server) throw new Error(`Remote server not found: ${serverId}`);
+
+      const indexedCount = await indexRemoteFilesStreaming(
+        db, server, remotePath, userId, jobId,
         (count) => {
           db.prepare(`UPDATE indexing_jobs SET total_files = ?, updated_at = ? WHERE id = ?`).run(count, Math.floor(Date.now() / 1000), jobId);
-          sseEventBus.emit(userId, {
-            type: 'job_progress',
-            jobId,
-            payload: { stage: 'discovery', filesFound: count },
-          });
+          sseEventBus.emit(userId, { type: 'job_progress', jobId, payload: { stage: 'discovery', filesFound: count } });
         },
-        // onBatchReady – fires after each batch of 50 is written as ready
-        (done, total, _batchIds) => {
+        (done, total) => {
           db.prepare(`UPDATE indexing_jobs SET processed_files = ?, updated_at = ? WHERE id = ?`).run(done, Math.floor(Date.now() / 1000), jobId);
-          sseEventBus.emit(userId, {
-            type: 'file_hashed',
-            jobId,
-            payload: { done, total },
-          });
+          sseEventBus.emit(userId, { type: 'file_hashed', jobId, payload: { done, total } });
         }
       );
+      db.prepare(`UPDATE indexing_jobs SET total_files = ?, processed_files = ?, updated_at = ? WHERE id = ?`)
+        .run(indexedCount, indexedCount, Math.floor(Date.now() / 1000), jobId);
 
+    } else {
+      // Legacy rclone via FUSE mount subprocess (type === 'rclone')
+      const { remoteName, basePath, remoteType } = data;
+      if (!remoteName || basePath === undefined) throw new Error('remoteName and basePath required for rclone job');
+
+      const indexedCount = await indexRcloneFilesStreaming(
+        db, remoteName, basePath, remoteType || 'unknown', userId, jobId,
+        (count) => {
+          db.prepare(`UPDATE indexing_jobs SET total_files = ?, updated_at = ? WHERE id = ?`).run(count, Math.floor(Date.now() / 1000), jobId);
+          sseEventBus.emit(userId, { type: 'job_progress', jobId, payload: { stage: 'discovery', filesFound: count } });
+        },
+        (done, total, _batchIds) => {
+          db.prepare(`UPDATE indexing_jobs SET processed_files = ?, updated_at = ? WHERE id = ?`).run(done, Math.floor(Date.now() / 1000), jobId);
+          sseEventBus.emit(userId, { type: 'file_hashed', jobId, payload: { done, total } });
+        }
+      );
       db.prepare(`UPDATE indexing_jobs SET total_files = ?, processed_files = ?, updated_at = ? WHERE id = ?`)
         .run(indexedCount, indexedCount, Math.floor(Date.now() / 1000), jobId);
     }
@@ -116,29 +130,14 @@ async function processJob(job: { data: IndexingJobData }): Promise<void> {
     ).run(msg, Math.floor(Date.now() / 1000), jobId);
 
     sseEventBus.emit(userId, { type: 'job_failed', jobId, payload: { error: msg } });
-    throw err; // Let BullMQ handle retries
+    throw err; // let the queue's retry/backoff handle re-attempts
   }
 }
 
-let _worker: Worker | null = null;
+let started = false;
 
-export function startIndexingWorker(): Worker {
-  if (_worker) return _worker;
-
-  _worker = new Worker<IndexingJobData>(INDEXING_QUEUE, processJob, {
-    connection: redisConnection,
-    concurrency: 2,
-    lockDuration: 5 * 60 * 1000,   // 5 minutes – renewed every 2.5 min
-    lockRenewTime: 2.5 * 60 * 1000, // explicit to match half of lockDuration
-  });
-
-  _worker.on('failed', (job, err) => {
-    console.error(`[worker] job ${job?.id} failed:`, err.message);
-  });
-
-  _worker.on('completed', (job) => {
-    console.log(`[worker] job ${job.id} completed`);
-  });
-
-  return _worker;
+export function startIndexingWorker(): void {
+  if (started) return;
+  started = true;
+  registerIndexingProcessor(processJob);
 }

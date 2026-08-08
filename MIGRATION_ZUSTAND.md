@@ -1,30 +1,26 @@
-# State Management Migration Guide
+# State Management Store Guide
 
-This document outlines the migration from raw localStorage utilities to Zustand stores for state management with persistent storage.
-
-## Overview
-
-The application now uses **Zustand** for client-side state management with automatic localStorage persistence. This provides:
+The application uses **Zustand** for client-side state management with automatic localStorage persistence. The migration off raw `lib/storage.ts` utilities is complete — that file has been removed; import stores directly from `lib/stores/`.
 
 - ✅ Centralized state management
 - ✅ Type-safe state access
 - ✅ Automatic localStorage persistence
 - ✅ React hooks for state consumption
 - ✅ Devtools support
-- ✅ Backward compatibility with existing localStorage API
 
 ## New Store Architecture
 
 ### 1. **UI Store** (`lib/stores/ui.store.ts`)
 Manages UI state including:
 - View mode (reels/feed)
-- User preferences (autoplay, badges)
+- User preferences (autoplay, badges, default landing page)
+- Current tab (persisted so a refresh reopens the same screen)
 - Scroll position
 - Last viewed media tracking
 
 **Usage:**
 ```tsx
-import { useUIStore } from '@/lib/storage';
+import { useUIStore } from '@/lib/stores/ui.store';
 
 function MyComponent() {
   const viewMode = useUIStore((state) => state.viewMode);
@@ -45,7 +41,7 @@ Manages folder state including:
 
 **Usage:**
 ```tsx
-import { useFoldersStore } from '@/lib/storage';
+import { useFoldersStore } from '@/lib/stores/folders.store';
 
 function RecentFolders() {
   const recentFolders = useFoldersStore((state) => state.recentFolders);
@@ -67,7 +63,7 @@ Manages authentication state including:
 
 **Usage:**
 ```tsx
-import { useAuthStore } from '@/lib/storage';
+import { useAuthStore } from '@/lib/stores/auth.store';
 
 function AuthStatus() {
   const token = useAuthStore((state) => state.token);
@@ -76,34 +72,6 @@ function AuthStatus() {
   return <div>{userId && <p>Logged in as {userId}</p>}</div>;
 }
 ```
-
-## Migration Path
-
-### Phase 1: Backward Compatibility (Current)
-All existing code continues to work via the compatibility layer in `lib/storage.ts`:
-```tsx
-// Old API still works
-import { getViewMode, setViewMode, getRootFolder } from '@/lib/storage';
-```
-
-### Phase 2: Gradual Migration
-Update components one at a time to use the new stores:
-```tsx
-// New API - prefer this going forward
-import { useUIStore, useFoldersStore } from '@/lib/storage';
-```
-
-### Phase 3: Deprecation
-After all components are migrated, we can remove the compatibility layer functions.
-
-## Migration Checklist
-
-- [ ] `Feed.tsx` - Use `useUIStore` for view mode
-- [ ] `Settings.tsx` - Use `useUIStore` for preferences
-- [ ] `FolderSelection.tsx` - Use `useFoldersStore` for recent folders
-- [ ] `LoginScreen.tsx` - Use `useAuthStore` for token management
-- [ ] `api.ts` - Use `useAuthStore` for JWT token retrieval
-- [ ] `hooks.ts` - Use `useAuthStore` in mutations
 
 ## Benefits of This Approach
 

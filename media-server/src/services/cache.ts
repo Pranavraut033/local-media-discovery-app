@@ -24,6 +24,10 @@ export interface CachedFileInfo {
   iv: Buffer;
 }
 
+// ponytail: in-memory IV cache — eliminates 4 syscalls (stat+open+read+close) per cached stream hit.
+// Populated on first disk read and on writeToCache; entries removed by evictIfNeeded.
+const fileInfoCache = new Map<string, CachedFileInfo>();
+
 export function getCachePath(mediaId: string): string {
   return path.join(config.cacheDir, `${mediaId}.enc`);
 }
@@ -63,8 +67,12 @@ export async function getEffectiveCacheLimitBytes(): Promise<number> {
 /**
  * Read the IV and derive the plaintext size from a cached file's stat.
  * Returns null if the file doesn't exist or is corrupted (< 16 bytes).
+ * Hot path: returns from in-memory cache after first read.
  */
 export async function getCachedFileInfo(mediaId: string): Promise<CachedFileInfo | null> {
+  const hit = fileInfoCache.get(mediaId);
+  if (hit) return hit;
+
   const cachePath = getCachePath(mediaId);
   let stat: fs.Stats;
   try {
@@ -78,7 +86,9 @@ export async function getCachedFileInfo(mediaId: string): Promise<CachedFileInfo
   try {
     const ivBuf = Buffer.allocUnsafe(16);
     await fd.read(ivBuf, 0, 16, 0);
-    return { cachePath, plaintextSize: stat.size - 16, iv: ivBuf };
+    const info: CachedFileInfo = { cachePath, plaintextSize: stat.size - 16, iv: ivBuf };
+    fileInfoCache.set(mediaId, info);
+    return info;
   } finally {
     await fd.close();
   }
@@ -154,6 +164,9 @@ export function createDecryptRangeStream(info: CachedFileInfo, start: number, en
   const fileEnd = 16 + end; // inclusive
 
   const fileStream = fs.createReadStream(info.cachePath, { start: fileStart, end: fileEnd });
+  // ponytail: .pipe() doesn't forward 'error' to its destination — without this,
+  // a read failure on the cache file crashes the whole process (unhandled 'error').
+  fileStream.on('error', (err) => decipher.destroy(err));
 
   if (alignOffset === 0) {
     fileStream.pipe(decipher);
@@ -166,13 +179,18 @@ export function createDecryptRangeStream(info: CachedFileInfo, start: number, en
 }
 
 /**
- * Download `sourcePath` from the rclone VFS mount, encrypt it with AES-256-CTR,
- * and store it atomically in the cache.
+ * Encrypt and cache a file. `openSource` returns a Readable of the plaintext bytes.
+ * - Local: `localSource(path)` — wraps fs.createReadStream
+ * - Remote: `() => openRemoteRange(serverId, remotePath).then(r => r.stream)`
  *
  * Atomic: written to `.tmp` first, then renamed. A crash mid-write leaves
  * only a `.tmp` file which is never served.
  */
-export async function writeToCache(sourcePath: string, mediaId: string): Promise<void> {
+export async function writeToCache(
+  openSource: () => Promise<Readable> | Readable,
+  mediaId: string,
+  signal?: AbortSignal
+): Promise<void> {
   const key = getEncryptionKey();
   const iv = randomBytes(16);
   const cachePath = getCachePath(mediaId);
@@ -180,7 +198,7 @@ export async function writeToCache(sourcePath: string, mediaId: string): Promise
 
   ensureCacheDir();
 
-  const src = fs.createReadStream(sourcePath);
+  const src = await openSource();
   const cipher = createCipheriv('aes-256-ctr', key, iv);
   const dest = fs.createWriteStream(tmpPath);
 
@@ -189,14 +207,33 @@ export async function writeToCache(sourcePath: string, mediaId: string): Promise
     dest.write(iv, (err) => (err ? reject(err) : resolve()));
   });
 
+  let plaintextSize = 0;
+  const countBytes = new Transform({
+    transform(chunk: Buffer, _enc, cb) { plaintextSize += chunk.length; this.push(chunk); cb(); },
+  });
+
   try {
-    await pipeline(src, cipher, dest);
+    await pipeline(src, countBytes, cipher, dest, ...(signal ? [{ signal }] : []));
     await fsp.rename(tmpPath, cachePath);
+    fileInfoCache.set(mediaId, { cachePath, plaintextSize, iv });
   } catch (err) {
     // Clean up the partial temp file on failure.
     await fsp.unlink(tmpPath).catch(() => undefined);
     throw err;
   }
+}
+
+/** Convenience opener for local filesystem sources. */
+export function localSource(sourcePath: string): () => Readable {
+  return () => {
+    const stream = fs.createReadStream(sourcePath);
+    // ponytail: rclone's VFS can list a file via stat() but fail to open it (stale
+    // listing). A no-op listener here just prevents the unhandled-'error' process
+    // crash if that fires before writeToCache's pipeline() attaches its own —
+    // pipeline still sees the error and propagates/cleans up normally.
+    stream.on('error', () => undefined);
+    return stream;
+  };
 }
 
 /**
@@ -235,6 +272,8 @@ export async function evictIfNeeded(): Promise<void> {
   for (const entry of entries) {
     if (freed >= toFree) break;
     await fsp.unlink(entry.file).catch(() => undefined);
+    const mediaId = path.basename(entry.file, '.enc');
+    fileInfoCache.delete(mediaId);
     freed += entry.size;
   }
 }

@@ -16,7 +16,7 @@
   - Frontend: `cd frontend && npm run dev`
 - Production build:
   - Root: `npm run build`
-  - Run stack with PM2: `npm start`
+  - Run the desktop app (spawns backend/media-server/frontend): `npm start`
 - Quality checks currently available:
   - Backend type-check: `cd backend && npm run type-check`
   - Frontend lint: `cd frontend && npm run lint`

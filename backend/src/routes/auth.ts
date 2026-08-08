@@ -3,6 +3,7 @@
  */
 import type { FastifyInstance } from 'fastify';
 import bcrypt from 'bcrypt';
+import { randomUUID } from 'crypto';
 import { getDatabase } from '../db/index.js';
 
 interface LoginBody {
@@ -11,6 +12,11 @@ interface LoginBody {
 
 interface VerifyBody {
   token: string;
+}
+
+interface SetupBody {
+  pin: string;
+  name?: string;
 }
 
 export default async function authRoutes(fastify: FastifyInstance): Promise<void> {
@@ -107,6 +113,44 @@ export default async function authRoutes(fastify: FastifyInstance): Promise<void
     } catch (error) {
       fastify.log.error({ err: error }, 'Check setup error');
       return reply.code(500).send({ error: 'Failed to check setup status' });
+    }
+  });
+
+  /**
+   * POST /api/auth/setup
+   * Create the first user with a chosen PIN. Only allowed while no users exist.
+   */
+  fastify.post<{ Body: SetupBody }>('/api/auth/setup', async (request, reply) => {
+    const { pin, name } = request.body;
+
+    if (!pin || !/^\d{6}$/.test(pin)) {
+      return reply.code(400).send({ error: 'PIN must be exactly 6 digits' });
+    }
+
+    try {
+      const existing = db.prepare('SELECT COUNT(*) as count FROM users').get() as { count: number };
+      if (existing.count > 0) {
+        return reply.code(409).send({ error: 'Setup has already been completed' });
+      }
+
+      const now = Math.floor(Date.now() / 1000);
+      const userId = randomUUID();
+      const pinHash = await bcrypt.hash(pin, 10);
+
+      db.prepare(
+        'INSERT INTO users (id, pin_hash, name, created_at, updated_at) VALUES (?, ?, ?, ?, ?)'
+      ).run(userId, pinHash, name || 'Desktop User', now, now);
+
+      const token = fastify.jwt.sign({ userId }, { expiresIn: '30d' });
+
+      return reply.send({
+        success: true,
+        token,
+        userId,
+      });
+    } catch (error) {
+      fastify.log.error({ err: error }, 'Setup error');
+      return reply.code(500).send({ error: 'Setup failed' });
     }
   });
 }

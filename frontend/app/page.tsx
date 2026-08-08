@@ -3,51 +3,86 @@
 import { useEffect, useRef, useState } from 'react';
 import MainLayout from '@/components/MainLayout';
 import LoginScreen from '@/components/LoginScreen';
+import SetupScreen from '@/components/SetupScreen';
 import { useAuth } from '@/lib/auth';
 import { authenticatedFetch, ensureRcloneMount, getApiBase } from '@/lib/api';
-import { getRootFolder, setRootFolder } from '@/lib/storage';
+import { useFoldersStore } from '@/lib/stores/folders.store';
+import { RotateCw, X } from 'lucide-react';
 
 export default function Home() {
-  const { isAuthenticated, isLoading } = useAuth();
-  const [isPreparingMount, setIsPreparingMount] = useState(true);
-  const [mountError, setMountError] = useState<string | null>(null);
-  const [mountedDir, setMountedDir] = useState<string | null>(null);
+  const { isAuthenticated, isLoading, requiresSetup } = useAuth();
   const autoIndexBootstrapDoneRef = useRef(false);
+  const [showRemountPrompt, setShowRemountPrompt] = useState(false);
+  const [isRemounting, setIsRemounting] = useState(false);
+
+  // Re-check the rclone mount whenever the app window comes back into view
+  // (e.g. minimized/closed and reopened) — the mount can have been torn down
+  // by the backend's inactivity timeout while the window was hidden.
+  useEffect(() => {
+    if (!isAuthenticated) return;
+
+    const checkMount = async () => {
+      try {
+        const result = await ensureRcloneMount();
+        setShowRemountPrompt(!(result.mounted || result.status === 'mounted'));
+      } catch {
+        setShowRemountPrompt(true);
+      }
+    };
+
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') checkMount();
+    };
+
+    window.addEventListener('focus', checkMount);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      window.removeEventListener('focus', checkMount);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [isAuthenticated]);
+
+  const handleRemountClick = async () => {
+    setIsRemounting(true);
+    try {
+      const result = await ensureRcloneMount();
+      setShowRemountPrompt(!(result.mounted || result.status === 'mounted'));
+    } finally {
+      setIsRemounting(false);
+    }
+  };
 
   useEffect(() => {
+    if (!isAuthenticated) return;
     let cancelled = false;
 
     const bootstrapMount = async () => {
-      setMountError(null);
-
-      for (let attempt = 0; attempt < 20; attempt += 1) {
-        const result = await ensureRcloneMount();
-        if (cancelled) {
-          return;
-        }
-
-        if (result.mounted || result.status === 'mounted') {
-          if (result.mountDir) {
-            setMountedDir(result.mountDir);
+      try {
+        for (let attempt = 0; attempt < 20; attempt += 1) {
+          const result = await ensureRcloneMount();
+          if (cancelled) {
+            return;
           }
-          setIsPreparingMount(false);
-          return;
+
+          if (result.mounted || result.status === 'mounted') {
+            return;
+          }
+
+          if (result.status === 'error') {
+            console.warn('Rclone mount failed:', result.message);
+            return;
+          }
+
+          await new Promise((resolve) => {
+            setTimeout(resolve, 1500);
+          });
         }
 
-        if (result.status === 'error') {
-          setMountError(result.message || 'Failed to start remote mount');
-          setIsPreparingMount(false);
-          return;
+        if (!cancelled) {
+          console.warn('Rclone mount is still starting after 20 attempts.');
         }
-
-        await new Promise((resolve) => {
-          setTimeout(resolve, 1500);
-        });
-      }
-
-      if (!cancelled) {
-        setMountError('Remote mount is still starting. Please retry in a few seconds.');
-        setIsPreparingMount(false);
+      } catch (error) {
+        console.warn('Rclone mount check failed:', error);
       }
     };
 
@@ -56,10 +91,10 @@ export default function Home() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [isAuthenticated]);
 
   useEffect(() => {
-    if (!isAuthenticated || !mountedDir || autoIndexBootstrapDoneRef.current) {
+    if (!isAuthenticated || autoIndexBootstrapDoneRef.current) {
       return;
     }
 
@@ -74,20 +109,21 @@ export default function Home() {
           return;
         }
 
-        const statusData = await statusResponse.json().catch(() => null) as { status?: { mediaCount?: number } } | null;
+        const statusData = (await statusResponse.json().catch(() => null)) as { status?: { mediaCount?: number } } | null;
         const mediaCount = statusData?.status?.mediaCount ?? 0;
         if (mediaCount > 0) {
           return;
         }
 
-        const currentRoot = getRootFolder();
-        if (currentRoot !== mountedDir) {
-          setRootFolder(mountedDir);
+        // Only re-trigger indexing for a folder the user has explicitly selected.
+        const targetRootFolder = useFoldersStore.getState().rootFolder;
+        if (!targetRootFolder) {
+          return;
         }
 
         await authenticatedFetch(`${apiBase}/api/config/root-folder`, {
           method: 'POST',
-          body: JSON.stringify({ path: mountedDir, autoIndex: true }),
+          body: JSON.stringify({ path: targetRootFolder, autoIndex: true }),
         });
       } catch (error) {
         console.error('Auto-index bootstrap failed:', error);
@@ -99,43 +135,7 @@ export default function Home() {
     return () => {
       cancelled = true;
     };
-  }, [isAuthenticated, mountedDir]);
-
-  if (isPreparingMount) {
-    return (
-      <div className="min-h-screen flex items-center justify-center px-4 py-10">
-        <div className="surface-panel px-8 py-10 text-center w-full max-w-sm">
-          <svg className="animate-spin h-12 w-12 mx-auto mb-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-            <circle className="opacity-25 text-[var(--secondary)]" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-            <path className="opacity-75 text-[var(--primary)]" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-          </svg>
-          <h1 className="editorial-title text-3xl mb-1">Connecting storage</h1>
-          <p className="text-[var(--surface-muted)]">Mounting rclone remote before loading the app...</p>
-        </div>
-      </div>
-    );
-  }
-
-  if (mountError) {
-    return (
-      <div className="min-h-screen flex items-center justify-center px-4 py-10">
-        <div className="surface-panel px-8 py-10 text-center w-full max-w-md">
-          <h1 className="editorial-title text-3xl mb-2">Storage Not Ready</h1>
-          <p className="text-[var(--surface-muted)] mb-6">{mountError}</p>
-          <button
-            type="button"
-            onClick={() => {
-              setIsPreparingMount(true);
-              setMountError(null);
-            }}
-            className="focus-ring px-6 py-3 bg-linear-to-r from-[var(--primary)] to-[var(--primary-container)] text-[var(--on-primary)] font-semibold rounded-full"
-          >
-            Retry Mount
-          </button>
-        </div>
-      </div>
-    );
-  }
+  }, [isAuthenticated]);
 
   if (isLoading) {
     return (
@@ -152,9 +152,33 @@ export default function Home() {
     );
   }
 
+  if (requiresSetup) {
+    return <SetupScreen />;
+  }
+
   if (!isAuthenticated) {
     return <LoginScreen />;
   }
 
-  return <MainLayout />;
+  return (
+    <>
+      <MainLayout />
+      {showRemountPrompt && (
+        <div className="fixed bottom-4 right-4 z-50 surface-panel px-4 py-3 flex items-center gap-3 shadow-lg max-w-sm">
+          <span className="text-sm text-[var(--surface-muted)]">Remote source isn&apos;t mounted.</span>
+          <button
+            onClick={handleRemountClick}
+            disabled={isRemounting}
+            className="flex items-center gap-1 text-sm font-medium text-[var(--primary)] disabled:opacity-50"
+          >
+            <RotateCw size={14} className={isRemounting ? 'animate-spin' : ''} />
+            {isRemounting ? 'Remounting…' : 'Remount'}
+          </button>
+          <button onClick={() => setShowRemountPrompt(false)} aria-label="Dismiss" className="text-[var(--surface-muted)]">
+            <X size={14} />
+          </button>
+        </div>
+      )}
+    </>
+  );
 }

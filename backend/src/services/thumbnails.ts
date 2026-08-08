@@ -4,23 +4,27 @@
  */
 import sharp from 'sharp';
 import ffmpeg from 'fluent-ffmpeg';
-import ffmpegStatic from 'ffmpeg-static';
-// @ts-ignore — ffprobe-static has no bundled types
-import ffprobeStatic from 'ffprobe-static';
+import ffmpegStatic from '@ffmpeg-installer/ffmpeg';
+import ffprobeStatic from '@ffprobe-installer/ffprobe';
 import { config } from '../config.js';
 import fs from 'fs/promises';
 import path from 'path';
+import os from 'os';
 import crypto from 'crypto';
-import { Readable } from 'stream';
-import { readRemoteFile } from './rclone.js';
+import { getDatabase } from '../db/index.js';
+import { getServerById } from './remote/servers-db.js';
+import { rcloneMountManager } from './rclone-mount.js';
+import { fetchWebdavFile } from './remote/webdav.provider.js';
+
+export type StorageMode = 'local' | 'rclone' | 'webdav';
 
 // Set ffmpeg/ffprobe paths so fluent-ffmpeg uses the bundled binaries
 // rather than requiring system-level installations.
 if (ffmpegStatic) {
-  ffmpeg.setFfmpegPath(ffmpegStatic);
+  ffmpeg.setFfmpegPath((ffmpegStatic as any).path || ffmpegStatic);
 }
-if (ffprobeStatic?.path) {
-  ffmpeg.setFfprobePath(ffprobeStatic.path);
+if (ffprobeStatic) {
+  ffmpeg.setFfprobePath((ffprobeStatic as any).path || ffprobeStatic);
 }
 
 interface ThumbnailCache {
@@ -83,37 +87,45 @@ class ThumbnailService {
   }
 
   /**
-   * Check if a path is a rclone path
+   * Fetch file bytes — local filesystem read (also used for rclone-mode files,
+   * which read straight from their FUSE mount), or authenticated GET for webdav,
+   * keyed by the file's stored storage_mode.
    */
-  private isRclonePath(mediaPath: string): boolean {
-    return mediaPath.startsWith('rclone:');
-  }
-
-  /**
-   * Fetch file from rclone or local filesystem
-   */
-  private async getFileBuffer(mediaPath: string): Promise<Buffer> {
-    if (this.isRclonePath(mediaPath)) {
-      return await readRemoteFile(mediaPath);
-    } else {
+  private async getFileBuffer(
+    mediaPath: string,
+    storageMode: StorageMode,
+    serverId: string | null
+  ): Promise<Buffer> {
+    if (storageMode === 'local') {
       return await fs.readFile(mediaPath);
     }
+
+    if (storageMode === 'rclone') {
+      if (!serverId) throw new Error(`rclone file ${mediaPath} is missing serverId`);
+      const mountPath = rcloneMountManager.resolveLocalPath(serverId, mediaPath);
+      return await fs.readFile(mountPath);
+    }
+
+    // webdav
+    if (!serverId) throw new Error(`webdav file ${mediaPath} is missing serverId`);
+    const server = getServerById(getDatabase(), serverId);
+    if (!server) throw new Error(`Remote server ${serverId} not found`);
+    return await fetchWebdavFile(server.connection, mediaPath);
   }
 
   /**
-   * Generate MD5 hash of file for cache validation (handles both local and rclone)
+   * Generate MD5 hash of file for cache validation (handles both local and remote)
    */
-  private async getFileHash(filePath: string): Promise<string> {
+  private async getFileHash(filePath: string, storageMode: StorageMode): Promise<string> {
     try {
-      if (this.isRclonePath(filePath)) {
-        // For rclone files, use file path as hash (since we can't easily get mtime)
-        // In production, consider using rclone's lsjson to get ModTime
+      if (storageMode !== 'local') {
+        // Remote files: use the path as the hash (no cheap mtime available
+        // without an extra round-trip) — cache invalidates only if the path changes.
         return crypto.createHash('md5').update(filePath).digest('hex').substring(0, 16);
-      } else {
-        const stats = await fs.stat(filePath);
-        // Use file size + modification time as quick hash
-        return `${stats.size}-${stats.mtimeMs}`;
       }
+      const stats = await fs.stat(filePath);
+      // Use file size + modification time as quick hash
+      return `${stats.size}-${stats.mtimeMs}`;
     } catch (error) {
       console.error(`Failed to hash file ${filePath}:`, error);
       throw error;
@@ -132,13 +144,14 @@ class ThumbnailService {
    */
   private async generateImageThumbnail(
     mediaPath: string,
-    thumbnailPath: string
+    thumbnailPath: string,
+    storageMode: StorageMode,
+    serverId: string | null
   ): Promise<void> {
     try {
-      if (this.isRclonePath(mediaPath)) {
-        // For rclone paths, read buffer and pass to sharp
-        const buffer = await this.getFileBuffer(mediaPath);
-        await sharp(buffer)
+      if (storageMode === 'local') {
+        // For local paths, use direct path
+        await sharp(mediaPath)
           .resize(config.thumbnails.width, config.thumbnails.height, {
             fit: 'cover',
             position: 'center',
@@ -146,8 +159,9 @@ class ThumbnailService {
           .webp({ quality: config.thumbnails.quality })
           .toFile(thumbnailPath);
       } else {
-        // For local paths, use direct path
-        await sharp(mediaPath)
+        // For remote paths, read buffer and pass to sharp
+        const buffer = await this.getFileBuffer(mediaPath, storageMode, serverId);
+        await sharp(buffer)
           .resize(config.thumbnails.width, config.thumbnails.height, {
             fit: 'cover',
             position: 'center',
@@ -162,58 +176,51 @@ class ThumbnailService {
   }
 
   /**
-   * Generate thumbnail for video (extract first frame) - handles both local and rclone paths
+   * Generate thumbnail for video (extract first frame) - handles both local and rclone paths.
+   * Pipes ffmpeg mjpeg output directly to sharp — no PNG temp file.
+   *
+   * Remote files are written to a temp file rather than piped to ffmpeg's stdin:
+   * MP4s without a "fast start" moov atom require ffmpeg to seek the input, which
+   * a stdin pipe can't do ("Invalid data found when processing input").
    */
   private async generateVideoThumbnail(
     mediaPath: string,
-    thumbnailPath: string
+    thumbnailPath: string,
+    storageMode: StorageMode,
+    serverId: string | null
   ): Promise<void> {
-    return new Promise((resolve, reject) => {
-      const processVideo = (input: string | Readable) => {
-        ffmpeg(input)
-          .screenshots({
-            count: 1,
-            folder: this.thumbnailDir,
-            filename: `${path.basename(thumbnailPath, '.webp')}.png`,
-            size: `${config.thumbnails.width}x${config.thumbnails.height}`,
-            timestamps: ['1%'], // Get first frame (1% into video)
-          })
-          .on('end', async () => {
-            try {
-              // Convert PNG to WebP for consistency
-              const pngPath = path.join(
-                this.thumbnailDir,
-                `${path.basename(thumbnailPath, '.webp')}.png`
-              );
-              await sharp(pngPath)
-                .webp({ quality: config.thumbnails.quality })
-                .toFile(thumbnailPath);
-              // Clean up PNG
-              await fs.unlink(pngPath);
-              resolve();
-            } catch (error) {
-              reject(error);
-            }
-          })
-          .on('error', (error) => {
-            console.error(`FFmpeg error for ${mediaPath}:`, error);
-            reject(error);
-          });
-      };
-
-      if (this.isRclonePath(mediaPath)) {
-        // For rclone paths, read buffer and convert to readable stream
-        this.getFileBuffer(mediaPath)
-          .then((buffer) => {
-            const stream = Readable.from(buffer);
-            processVideo(stream);
-          })
-          .catch(reject);
-      } else {
-        // For local paths, use path directly
-        processVideo(mediaPath);
+    let tempFile: string | null = null;
+    try {
+      let input = mediaPath;
+      if (storageMode !== 'local') {
+        const buffer = await this.getFileBuffer(mediaPath, storageMode, serverId);
+        tempFile = path.join(os.tmpdir(), `thumb-src-${crypto.randomUUID()}${path.extname(mediaPath) || '.mp4'}`);
+        await fs.writeFile(tempFile, buffer);
+        input = tempFile;
       }
-    });
+
+      await new Promise<void>((resolve, reject) => {
+        const sharpPipeline = sharp()
+          .resize(config.thumbnails.width, config.thumbnails.height, {
+            fit: 'cover',
+            position: 'center',
+          })
+          .webp({ quality: config.thumbnails.quality });
+
+        sharpPipeline.toFile(thumbnailPath).then(() => resolve()).catch(reject);
+
+        ffmpeg(input)
+          .frames(1)
+          .format('mjpeg')
+          .on('error', (err) => {
+            console.error(`FFmpeg error for ${mediaPath}:`, err);
+            reject(err);
+          })
+          .pipe(sharpPipeline);
+      });
+    } finally {
+      if (tempFile) await fs.unlink(tempFile).catch(() => {});
+    }
   }
 
   /**
@@ -222,22 +229,20 @@ class ThumbnailService {
   async getThumbnail(
     mediaId: string,
     mediaPath: string,
-    mediaType: 'image' | 'video'
+    mediaType: 'image' | 'video',
+    storageMode: StorageMode = 'local',
+    serverId: string | null = null
   ): Promise<string> {
     const thumbnailPath = this.getThumbnailPath(mediaId);
 
-    // Check if thumbnail exists in cache and is valid
+    // ponytail: skip getFileHash on cache hit — source files don't change in place on this app.
+    // Only verify the .webp still exists on disk; regenerate if missing.
     const cached = this.cache.get(mediaId);
     if (cached) {
       try {
-        const currentHash = await this.getFileHash(mediaPath);
-        if (cached.hash === currentHash) {
-          // Check if thumbnail file exists
-          await fs.access(cached.path);
-          return cached.path;
-        }
-      } catch (error) {
-        // Cache is invalid, regenerate
+        await fs.access(cached.path);
+        return cached.path;
+      } catch {
         this.cache.delete(mediaId);
       }
     }
@@ -245,13 +250,13 @@ class ThumbnailService {
     // Generate new thumbnail
     try {
       if (mediaType === 'image') {
-        await this.generateImageThumbnail(mediaPath, thumbnailPath);
+        await this.generateImageThumbnail(mediaPath, thumbnailPath, storageMode, serverId);
       } else {
-        await this.generateVideoThumbnail(mediaPath, thumbnailPath);
+        await this.generateVideoThumbnail(mediaPath, thumbnailPath, storageMode, serverId);
       }
 
       // Update cache
-      const hash = await this.getFileHash(mediaPath);
+      const hash = await this.getFileHash(mediaPath, storageMode);
       const cacheEntry: ThumbnailCache = {
         mediaId,
         path: thumbnailPath,

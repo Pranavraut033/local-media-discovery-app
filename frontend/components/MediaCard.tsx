@@ -6,16 +6,19 @@
 
 import { ImageViewer } from './ImageViewer';
 import { VideoPlayer } from './VideoPlayer';
+import { PlyrVideo } from './PlyrVideo';
 import { LikeButton, SaveButton, HideButton } from './InteractionButtons';
 import { useEffect, useRef, useState } from 'react';
 import { useLikeMutation, useSaveMutation, useViewMutation, useHideMutation, FeedItem } from '@/lib/hooks';
-import { getStreamUrl } from '@/lib/api';
+import { getStreamUrl, getThumbnailUrl } from '@/lib/api';
 import { Maximize2 } from 'lucide-react';
 
 
 interface MediaCardProps {
   media: FeedItem;
+  index?: number;
   onVisible?: () => void;
+  onVisibleIndexChange?: (index: number, visible: boolean) => void;
   onViewSource?: (
     sourceId: string,
     displayName: string,
@@ -23,14 +26,14 @@ interface MediaCardProps {
     parentFolderPath?: string,
     parentFolderName?: string
   ) => void;
-  onVideoExpand?: (src: string, title?: string) => void;
+  onOpenInReels?: (index: number) => void;
   mode?: 'feed' | 'reels';
   className?: string;
   enableHoverAutoplay?: boolean;
   enableMobileAutoplay?: boolean;
 }
 
-export function MediaCard({ media, onVisible, onViewSource, onVideoExpand, mode = 'feed', className = '', enableHoverAutoplay = true, enableMobileAutoplay = true }: MediaCardProps) {
+export function MediaCard({ media, index, onVisible, onVisibleIndexChange, onViewSource, onOpenInReels, mode = 'feed', className = '', enableHoverAutoplay = true, enableMobileAutoplay = true }: MediaCardProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const hasRecordedView = useRef(false);
   const [currentLiked, setCurrentLiked] = useState(media?.liked ?? false);
@@ -79,6 +82,7 @@ export function MediaCard({ media, onVisible, onViewSource, onVideoExpand, mode 
             viewMutation.mutate({ mediaId: media.id, sourceId: media.sourceId });
           }, 1000);
         }
+        if (index !== undefined) onVisibleIndexChange?.(index, entry.isIntersecting);
       },
       { threshold: 0.5 }
     );
@@ -89,8 +93,9 @@ export function MediaCard({ media, onVisible, onViewSource, onVideoExpand, mode 
 
     return () => {
       observer.disconnect();
+      if (index !== undefined) onVisibleIndexChange?.(index, false);
     };
-  }, [media?.id, media?.sourceId, onVisible, viewMutation]);
+  }, [media?.id, media?.sourceId, index, onVisible, onVisibleIndexChange, viewMutation]);
 
   if (!media) {
     return null;
@@ -145,26 +150,38 @@ export function MediaCard({ media, onVisible, onViewSource, onVideoExpand, mode 
             />
           </div>
         ) : isVideo ? (
-          <div className="relative w-full h-full">
-            <VideoPlayer
-              key={mediaSource}
-              src={mediaSource}
-              mode={mode}
-              className={isReelsMode ? 'w-full h-full' : 'w-full'}
-              shouldAutoPlayOnHover={enableHoverAutoplay}
-              shouldAutoPlayOnMobileVisible={enableMobileAutoplay}
-              isCardHovered={isHovered}
-            />
-            {!isReelsMode && onVideoExpand && (
+          <div className={`relative w-full h-full ${isReelsMode ? 'pt-14 md:pt-16 pb-24' : ''}`}>
+            {isReelsMode ? (
+              // Reserve space matching the reels top/bottom chrome (see Feed/DiscoverView)
+              // so Plyr's own control bar never sits under the floating nav buttons.
+              <PlyrVideo
+                key={mediaSource}
+                src={mediaSource}
+                poster={getThumbnailUrl(media.id)}
+                className="w-full h-full"
+              />
+            ) : (
+              <VideoPlayer
+                key={mediaSource}
+                src={mediaSource}
+                poster={getThumbnailUrl(media.id)}
+                mode={mode}
+                className="w-full"
+                shouldAutoPlayOnHover={enableHoverAutoplay}
+                shouldAutoPlayOnMobileVisible={enableMobileAutoplay}
+                isCardHovered={isHovered}
+              />
+            )}
+            {!isReelsMode && onOpenInReels && index !== undefined && (
               <button
                 onClick={(e) => {
                   e.stopPropagation();
-                  onVideoExpand(mediaSource, media.displayName);
+                  onOpenInReels(index);
                 }}
-                className="absolute top-2 right-2 z-10 flex h-8 w-8 items-center justify-center rounded-full bg-black/50 text-white opacity-0 group-hover:opacity-100 transition-opacity hover:bg-black/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400"
-                aria-label="Open in video player"
+                className="absolute top-2 right-2 z-10 flex h-10 w-10 items-center justify-center rounded-full bg-black/50 text-white opacity-0 pointer-coarse:opacity-70 group-hover:opacity-100 transition-opacity hover:bg-black/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400"
+                aria-label="Open in full-screen player"
               >
-                <Maximize2 size={15} />
+                <Maximize2 size={17} />
               </button>
             )}
           </div>
@@ -211,19 +228,19 @@ export function MediaCard({ media, onVisible, onViewSource, onVideoExpand, mode 
               liked={likedValue}
               onToggle={handleLike}
               isLoading={likeMutation.isPending}
-              className="flex-1 h-9"
+              className="flex-1 h-11"
             />
             <SaveButton
               saved={savedValue}
               onToggle={handleSave}
               isLoading={saveMutation.isPending}
-              className="flex-1 h-9"
+              className="flex-1 h-11"
             />
             <HideButton
               hidden={hiddenValue}
               onToggle={handleHide}
               isLoading={hideMutation.isPending}
-              className="flex-1 h-9"
+              className="flex-1 h-11"
             />
           </div>
         </div>
@@ -231,14 +248,14 @@ export function MediaCard({ media, onVisible, onViewSource, onVideoExpand, mode 
 
       {/* Info Bar - Reels Mode Only (Bottom with gradient veil) */}
       {isReelsMode && (
-        <div className="absolute bottom-0 inset-x-0 bg-linear-to-t from-black/90 via-black/40 to-transparent pt-12 px-4 pb-6 z-20">
+        <div className="pointer-events-none absolute bottom-0 inset-x-0 bg-linear-to-t from-black/90 via-black/40 to-transparent pt-8 px-4 pb-4 z-20">
           {/* Source Badge */}
-          <div className="mb-4">
+          <div className="mb-3">
             <div className="flex items-center gap-2">
               <button
                 type="button"
                 onClick={canOpenSource ? () => onViewSource?.(media.sourceId, sourceLabel, media.avatarSeed) : undefined}
-                className={`text-sm font-medium text-neutral-100 ${canOpenSource ? 'cursor-pointer hover:text-white transition-colors' : 'cursor-default'}`}
+                className={`pointer-events-auto text-sm font-medium text-neutral-100 ${canOpenSource ? 'cursor-pointer hover:text-white transition-colors' : 'cursor-default'}`}
               >
                 {sourceLabel}
               </button>
@@ -253,7 +270,7 @@ export function MediaCard({ media, onVisible, onViewSource, onVideoExpand, mode 
                   <button
                     type="button"
                     onClick={canOpenFolder ? () => onViewSource?.(media.sourceId, sourceLabel, media.avatarSeed, media.parentFolderPath, parentFolderName) : undefined}
-                    className={`text-sm font-medium text-neutral-100 ${canOpenFolder ? 'cursor-pointer hover:text-white transition-colors' : 'cursor-default'}`}
+                    className={`pointer-events-auto text-sm font-medium text-neutral-100 ${canOpenFolder ? 'cursor-pointer hover:text-white transition-colors' : 'cursor-default'}`}
                   >
                     {parentFolderName}
                   </button>
@@ -263,7 +280,7 @@ export function MediaCard({ media, onVisible, onViewSource, onVideoExpand, mode 
           </div>
 
           {/* File Info - Minimal */}
-          <details className="text-xs text-neutral-300">
+          <details className="pointer-events-auto text-xs text-neutral-300">
             <summary className="cursor-pointer text-neutral-400 hover:text-neutral-100 transition-colors">
               Details
             </summary>

@@ -17,7 +17,8 @@ import {
 } from '@/lib/hooks';
 import type { FeedItem } from '@/lib/hooks';
 import { MediaCard } from './MediaCard';
-import { PlyrVideoModal } from './PlyrVideoModal';
+import { KeyboardShortcutsGuide } from './KeyboardShortcutsGuide';
+import { ShutdownButton } from './ShutdownButton';
 import {
   Grid3x3,
   Layers,
@@ -27,6 +28,7 @@ import {
   Bookmark,
   Maximize,
   Minimize,
+  Keyboard,
 } from 'lucide-react';
 import Masonry from 'react-masonry-css';
 import { useFullscreen } from '@/lib/useFullscreen';
@@ -34,6 +36,7 @@ import {
   MEDIA_MASONRY_BREAKPOINTS,
   MEDIA_MASONRY_CLASS,
   MEDIA_MASONRY_COLUMN_CLASS,
+  SAFE_TOP_INSET_CLASS,
 } from '@/lib/layout';
 import type { FeedMode } from '@/components/Feed';
 
@@ -53,9 +56,9 @@ export function DiscoverView({ onViewSource }: DiscoverViewProps) {
   const [items, setItems] = useState<FeedItem[]>([]);
   const [currentBatchIds, setCurrentBatchIds] = useState<string[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
-  const [expandedVideo, setExpandedVideo] = useState<{ src: string; title?: string } | null>(null);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [isAtEnd, setIsAtEnd] = useState(false);
+  const [showShortcuts, setShowShortcuts] = useState(false);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
@@ -200,6 +203,17 @@ export function DiscoverView({ onViewSource }: DiscoverViewProps) {
 
   const currentMedia = items[currentIndex];
 
+  // Grid card's "open" button jumps straight to that item in the single-video
+  // view — same data, just a mode + index switch, no refetch.
+  const handleOpenInReels = useCallback((index: number) => {
+    setCurrentIndex(index);
+    setMode('reels');
+  }, []);
+
+  const toggleMode = useCallback(() => {
+    setMode((m) => (m === 'reels' ? 'feed' : 'reels'));
+  }, []);
+
   const handleLike = useCallback(async () => {
     if (currentMedia) {
       await likeMutation.mutateAsync({ mediaId: currentMedia.id, sourceId: currentMedia.sourceId });
@@ -212,6 +226,57 @@ export function DiscoverView({ onViewSource }: DiscoverViewProps) {
     }
   }, [currentMedia, saveMutation]);
 
+  // Global keyboard shortcuts — same scheme as Feed.tsx. Up/Down/Like/Save are
+  // reels-only; grid/fullscreen toggle and the shortcuts guide work in either view.
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
+        return;
+      }
+
+      if (e.key === '?') {
+        e.preventDefault();
+        setShowShortcuts((prev) => !prev);
+        return;
+      }
+      if (e.key === 'Escape' && showShortcuts) {
+        e.preventDefault();
+        setShowShortcuts(false);
+        return;
+      }
+      if (e.key === 'g' || e.key === 'G') {
+        e.preventDefault();
+        toggleMode();
+        return;
+      }
+      if (e.key === 'f' || e.key === 'F') {
+        e.preventDefault();
+        toggleFullscreen();
+        return;
+      }
+
+      if (mode !== 'reels') return;
+
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setCurrentIndex((p) => Math.max(p - 1, 0));
+      } else if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setCurrentIndex((p) => Math.min(p + 1, items.length - 1));
+      } else if (e.key === 'l' || e.key === 'L') {
+        e.preventDefault();
+        handleLike();
+      } else if (e.key === 's' || e.key === 'S') {
+        e.preventDefault();
+        handleSave();
+      }
+    };
+
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [mode, items.length, showShortcuts, handleLike, handleSave, toggleMode, toggleFullscreen]);
+
   const seenCount = sessionData?.seenCount ?? 0;
   const isBusy =
     isLoading || appendSession.isPending || resetSession.isPending;
@@ -219,7 +284,7 @@ export function DiscoverView({ onViewSource }: DiscoverViewProps) {
   // ── Loading state ──────────────────────────────────────────────────────────
   if (isLoading && items.length === 0) {
     return (
-      <div className="w-full h-screen flex items-center justify-center bg-neutral-950">
+      <div className="w-full h-dvh flex items-center justify-center bg-neutral-950">
         <div className="text-center space-y-6">
           <div className="w-14 h-14 border-4 border-white/20 border-t-white rounded-full animate-spin mx-auto" />
           <div className="space-y-2">
@@ -236,7 +301,7 @@ export function DiscoverView({ onViewSource }: DiscoverViewProps) {
   // ── Empty state ────────────────────────────────────────────────────────────
   if (!isLoading && items.length === 0) {
     return (
-      <div className="w-full h-screen flex items-center justify-center px-4 bg-neutral-950">
+      <div className="w-full h-dvh flex items-center justify-center px-4 bg-neutral-950">
         <div className="text-center space-y-4 max-w-md">
           <Shuffle size={40} className="text-neutral-500 mx-auto" />
           <h1 className="font-serif text-2xl tracking-tight text-neutral-100">
@@ -272,18 +337,25 @@ export function DiscoverView({ onViewSource }: DiscoverViewProps) {
 
   // ── Shared header controls ────────────────────────────────────────────────
   const headerControls = (
-    <div className="fixed top-0 inset-x-0 z-40 h-14 md:h-16 bg-linear-to-b from-black/70 to-transparent flex items-start justify-between px-4 md:px-8 pt-3">
-      <div className="flex items-center gap-2 pt-0.5">
-        <h1 className="font-serif text-xl md:text-2xl tracking-tight text-neutral-100">
+    <div className={`fixed inset-x-0 z-40 h-14 md:h-16 bg-linear-to-b from-black/70 to-transparent flex items-start justify-between px-4 md:px-8 pt-3 ${SAFE_TOP_INSET_CLASS}`}>
+      <div className="flex items-center gap-2 pt-0.5 min-w-0">
+        <h1 className="font-serif text-xl md:text-2xl tracking-tight text-neutral-100 truncate">
           Discover
         </h1>
         {seenCount > 0 && (
-          <span className="text-neutral-500 text-xs">{seenCount} seen</span>
+          <span className="hidden sm:inline text-neutral-500 text-xs shrink-0">{seenCount} seen</span>
         )}
       </div>
-      <div className="flex items-center gap-1.5">
-        {/* Batch size toggle */}
-        <div className="flex rounded-lg overflow-hidden border border-white/15 bg-black/40 backdrop-blur-md">
+      <div className="flex items-center gap-1 sm:gap-1.5 shrink-0">
+        {/* Batch size toggle — compact cycle button on narrow screens, full two-button toggle from sm up */}
+        <button
+          onClick={() => handleBatchSizeChange(batchSize === 50 ? 100 : 50)}
+          className="sm:hidden h-10 px-3 rounded-lg border border-white/15 bg-black/40 backdrop-blur-md text-xs font-medium text-white/80 hover:text-white flex items-center justify-center transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300"
+          aria-label={`Batch size ${batchSize}. Tap to switch to ${batchSize === 50 ? 100 : 50}`}
+        >
+          {batchSize}
+        </button>
+        <div className="hidden sm:flex rounded-lg overflow-hidden border border-white/15 bg-black/40 backdrop-blur-md">
           {([50, 100] as const).map((n) => (
             <button
               key={n}
@@ -310,7 +382,7 @@ export function DiscoverView({ onViewSource }: DiscoverViewProps) {
 
         {/* Mode toggle */}
         <button
-          onClick={() => setMode((m) => (m === 'reels' ? 'feed' : 'reels'))}
+          onClick={toggleMode}
           className="h-10 w-10 rounded-lg bg-black/40 text-white/80 hover:text-white backdrop-blur-md border border-white/15 flex items-center justify-center transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300"
           aria-label={mode === 'reels' ? 'Switch to grid' : 'Switch to reels'}
         >
@@ -324,6 +396,15 @@ export function DiscoverView({ onViewSource }: DiscoverViewProps) {
         >
           {isFullscreen ? <Minimize size={20} /> : <Maximize size={20} />}
         </button>
+
+        <button
+          onClick={() => setShowShortcuts(true)}
+          className="h-10 w-10 rounded-lg bg-black/40 text-white/80 hover:text-white backdrop-blur-md border border-white/15 flex items-center justify-center transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300"
+          aria-label="Show keyboard shortcuts"
+        >
+          <Keyboard size={20} />
+        </button>
+        <ShutdownButton />
       </div>
     </div>
   );
@@ -349,7 +430,7 @@ export function DiscoverView({ onViewSource }: DiscoverViewProps) {
   // ── Reels mode ────────────────────────────────────────────────────────────
   if (mode === 'reels') {
     return (
-      <div className="relative h-screen w-full overflow-hidden bg-neutral-950">
+      <div className="relative h-dvh w-full overflow-hidden bg-neutral-950">
         {headerControls}
 
         <div
@@ -357,7 +438,7 @@ export function DiscoverView({ onViewSource }: DiscoverViewProps) {
           onTouchStart={handleTouchStart}
           onTouchEnd={handleTouchEnd}
           onWheel={handleWheel}
-          className="absolute inset-0 h-full w-full overflow-hidden"
+          className="absolute inset-0 h-full w-full overflow-hidden overscroll-contain touch-none"
         >
           <div className="relative h-full w-full flex items-center justify-center">
             {isAtEnd ? (
@@ -394,7 +475,7 @@ export function DiscoverView({ onViewSource }: DiscoverViewProps) {
               <button
                 onClick={() => setCurrentIndex((p) => Math.max(p - 1, 0))}
                 disabled={currentIndex === 0}
-                className="text-white/60 hover:text-white disabled:opacity-30 transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300 rounded px-2 shrink-0"
+                className="text-white/60 hover:text-white disabled:opacity-30 transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300 rounded px-3 py-2 shrink-0"
               >
                 ← Prev
               </button>
@@ -402,7 +483,7 @@ export function DiscoverView({ onViewSource }: DiscoverViewProps) {
               <button
                 onClick={handleLike}
                 disabled={likeMutation.isPending}
-                className={`h-9 w-9 rounded-full backdrop-blur-md border transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300 flex items-center justify-center shrink-0 ${currentMedia?.liked
+                className={`h-11 w-11 rounded-full backdrop-blur-md border transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300 flex items-center justify-center shrink-0 ${currentMedia?.liked
                     ? 'bg-red-500/80 text-white border-red-400'
                     : 'bg-black/35 text-white/80 border-white/20 hover:text-white'
                   } disabled:opacity-50`}
@@ -413,7 +494,7 @@ export function DiscoverView({ onViewSource }: DiscoverViewProps) {
               <button
                 onClick={handleSave}
                 disabled={saveMutation.isPending}
-                className={`h-9 w-9 rounded-full backdrop-blur-md border transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300 flex items-center justify-center shrink-0 ${currentMedia?.saved
+                className={`h-11 w-11 rounded-full backdrop-blur-md border transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300 flex items-center justify-center shrink-0 ${currentMedia?.saved
                     ? 'bg-amber-400/80 text-neutral-950 border-amber-300'
                     : 'bg-black/35 text-white/80 border-white/20 hover:text-white'
                   } disabled:opacity-50`}
@@ -435,7 +516,7 @@ export function DiscoverView({ onViewSource }: DiscoverViewProps) {
               <button
                 onClick={() => setCurrentIndex((p) => Math.min(p + 1, items.length - 1))}
                 disabled={currentIndex >= items.length - 1}
-                className="text-white/60 hover:text-white disabled:opacity-30 transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300 rounded px-2 shrink-0"
+                className="text-white/60 hover:text-white disabled:opacity-30 transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300 rounded px-3 py-2 shrink-0"
               >
                 Next →
               </button>
@@ -452,13 +533,15 @@ export function DiscoverView({ onViewSource }: DiscoverViewProps) {
             busy={resetSession.isPending}
           />
         )}
+
+        <KeyboardShortcutsGuide isOpen={showShortcuts} onClose={() => setShowShortcuts(false)} />
       </div>
     );
   }
 
   // ── Grid / feed mode ──────────────────────────────────────────────────────
   return (
-    <div className="w-full h-screen flex flex-col bg-neutral-950 overflow-hidden">
+    <div className="w-full h-dvh flex flex-col bg-neutral-950 overflow-hidden">
       {headerControls}
 
       <div
@@ -471,13 +554,14 @@ export function DiscoverView({ onViewSource }: DiscoverViewProps) {
             className={MEDIA_MASONRY_CLASS}
             columnClassName={MEDIA_MASONRY_COLUMN_CLASS}
           >
-            {items.map((item) => (
+            {items.map((item, index) => (
               <div key={item.id} className="mb-2 md:mb-4 break-inside-avoid">
                 <MediaCard
                   media={item}
+                  index={index}
                   onVisible={() => { }}
                   onViewSource={onViewSource}
-                  onVideoExpand={(src, title) => setExpandedVideo({ src, title })}
+                  onOpenInReels={handleOpenInReels}
                   mode="feed"
                   enableHoverAutoplay
                   className="w-full rounded-2xl overflow-hidden"
@@ -492,13 +576,6 @@ export function DiscoverView({ onViewSource }: DiscoverViewProps) {
         </div>
       </div>
 
-      <PlyrVideoModal
-        isOpen={expandedVideo !== null}
-        src={expandedVideo?.src ?? ''}
-        title={expandedVideo?.title}
-        onClose={() => setExpandedVideo(null)}
-      />
-
       {showResetConfirm && (
         <ResetConfirmDialog
           seenCount={seenCount}
@@ -507,6 +584,8 @@ export function DiscoverView({ onViewSource }: DiscoverViewProps) {
           busy={resetSession.isPending}
         />
       )}
+
+      <KeyboardShortcutsGuide isOpen={showShortcuts} onClose={() => setShowShortcuts(false)} />
     </div>
   );
 }

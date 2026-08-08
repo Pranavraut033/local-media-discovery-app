@@ -1,49 +1,72 @@
 /**
- * BullMQ Queue Setup
- * Provides the indexing queue and connection to Redis.
- * Redis must be running locally (default: localhost:6379).
+ * In-process indexing queue.
+ * ponytail: single Node process supervises everything (see desktop/main.cjs) —
+ * jobs don't survive a process restart, but reindexing is idempotent so
+ * nothing is lost. Revisit with a persistent queue (Redis/BullMQ) if job
+ * durability across restarts ever matters.
  */
-import { Queue } from 'bullmq';
-import IORedis from 'ioredis';
-
 export interface IndexingJobData {
   jobId: string;
   userId: string;
-  type: 'local' | 'rclone';
+  type: 'local' | 'rclone' | 'remote';
   // local
   rootFolder?: string;
-  // rclone
+  // rclone (legacy)
   remoteName?: string;
   basePath?: string;
   remoteType?: string;
+  // remote (new generic path via remote_servers)
+  serverId?: string;
+  serverType?: string;
+  remotePath?: string;
 }
 
-export const redisConnection = new IORedis({
-  host: process.env.REDIS_HOST || '127.0.0.1',
-  port: parseInt(process.env.REDIS_PORT || '6379', 10),
-  maxRetriesPerRequest: null, // required by BullMQ
-  enableReadyCheck: false,
-  lazyConnect: true,
-});
+type JobProcessor = (data: IndexingJobData) => Promise<void>;
 
-export const INDEXING_QUEUE = 'indexing';
+const CONCURRENCY = 2;
+const MAX_ATTEMPTS = 3;
+const BACKOFF_BASE_MS = 2000;
 
-export const indexingQueue = new Queue<IndexingJobData>(INDEXING_QUEUE, {
-  connection: redisConnection,
-  defaultJobOptions: {
-    attempts: 3,
-    backoff: { type: 'exponential', delay: 2000 },
-    removeOnComplete: { count: 100 },
-    removeOnFail: { count: 50 },
-  },
-});
+let processJob: JobProcessor | null = null;
+const pending: IndexingJobData[] = [];
+const attemptsById = new Map<string, number>();
+let runningCount = 0;
+
+/** Registered once by the worker module at startup. */
+export function registerIndexingProcessor(fn: JobProcessor): void {
+  processJob = fn;
+}
 
 /**
- * Enqueue an indexing job and return the BullMQ job id.
+ * Enqueue an indexing job. Returns the same jobId the caller passed in
+ * (the caller already persisted an `indexing_jobs` row under this id).
  */
 export async function enqueueIndexingJob(data: IndexingJobData): Promise<string> {
-  const job = await indexingQueue.add(data.type, data, {
-    jobId: data.jobId,
-  });
-  return job.id!;
+  pending.push(data);
+  pump();
+  return data.jobId;
+}
+
+function pump(): void {
+  if (!processJob) return;
+  while (runningCount < CONCURRENCY && pending.length > 0) {
+    const data = pending.shift()!;
+    runningCount++;
+    processJob(data)
+      .catch((err) => {
+        const attempts = (attemptsById.get(data.jobId) ?? 0) + 1;
+        attemptsById.set(data.jobId, attempts);
+        if (attempts < MAX_ATTEMPTS) {
+          const delay = BACKOFF_BASE_MS * 2 ** (attempts - 1);
+          setTimeout(() => { pending.push(data); pump(); }, delay);
+        } else {
+          console.error(`[queue] job ${data.jobId} failed after ${attempts} attempts:`, err);
+          attemptsById.delete(data.jobId);
+        }
+      })
+      .finally(() => {
+        runningCount--;
+        pump();
+      });
+  }
 }

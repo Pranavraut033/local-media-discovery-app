@@ -3,7 +3,7 @@
  * Connects to the backend SSE endpoint and dispatches events to the indexing store.
  * Handles auth, reconnection, and cleanup.
  */
-import { getStoredToken } from './storage';
+import { useAuthStore } from './stores/auth.store';
 import { useIndexingStore } from './stores/indexing.store';
 import { getApiBase } from './api';
 
@@ -90,7 +90,7 @@ function handleEvent(type: string, data: Record<string, unknown>): void {
 export function connectSSE(): void {
   if (typeof window === 'undefined') return;
 
-  const token = getStoredToken();
+  const token = useAuthStore.getState().token;
   if (!token) return;
 
   shouldReconnect = true;
@@ -124,7 +124,7 @@ function openConnection(token: string): void {
     if (shouldReconnect) {
       if (reconnectTimer) clearTimeout(reconnectTimer);
       reconnectTimer = setTimeout(() => {
-        const t = getStoredToken();
+        const t = useAuthStore.getState().token;
         if (t && shouldReconnect) openConnection(t);
       }, 5000);
     }

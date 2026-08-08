@@ -14,12 +14,11 @@ import { Settings } from '@/components/Settings';
 import { SourceView } from '@/components/SourceView';
 import { DiscoverView } from '@/components/DiscoverView';
 import { NavigationBar, type NavTab } from '@/components/NavigationBar';
-import { getRootFolder } from '@/lib/storage';
 import type { FeedMode } from '@/components/Feed';
-import { useUIStore } from '@/lib/stores/ui.store';
+import { useUIStore, type AppView } from '@/lib/stores/ui.store';
+import { useFoldersStore } from '@/lib/stores/folders.store';
 import ScanningProgressDialog from '@/components/ScanningProgressDialog';
-
-type AppView = 'feed' | 'discover' | 'saved' | 'liked' | 'hidden' | 'source' | 'settings';
+import { getApiBase, authenticatedFetch } from '@/lib/api';
 
 interface SourceViewState {
   sourceId: string;
@@ -32,21 +31,53 @@ interface SourceViewState {
 export default function MainLayout() {
   const [rootFolderSet, setRootFolderSet] = useState(false);
   const [isChecking, setIsChecking] = useState(true);
-  const [currentView, setCurrentView] = useState<AppView>('feed');
+  // Resume the tab the user was last on; fall back to their configured default page.
+  const [currentView, setCurrentView] = useState<AppView>(() => {
+    const state = useUIStore.getState();
+    return state.currentView ?? state.preferences.defaultPage;
+  });
   const [sourceViewState, setSourceViewState] = useState<SourceViewState | null>(null);
   const [feedMode, setFeedMode] = useState<FeedMode>('feed');
 
   const feedSourceType = useUIStore((s) => s.preferences.feedSourceType);
 
-  // Check if root folder is already set (in localStorage for privacy)
+  // Persist every tab change so a refresh reopens the same screen. 'source' is a
+  // transient drill-down view whose extra state (sourceViewState) isn't persisted,
+  // so it's excluded — a refresh there falls back to the last real tab instead.
   useEffect(() => {
-    const checkRootFolder = () => {
+    if (currentView === 'source') return;
+    useUIStore.getState().setCurrentView(currentView);
+  }, [currentView]);
+
+  // Check if root folder is already set (in localStorage for privacy) and
+  // still exists on disk — if it was moved/deleted, fall back to folder selection.
+  useEffect(() => {
+    const checkRootFolder = async () => {
       try {
-        const rootFolder = getRootFolder();
-        setRootFolderSet(!!rootFolder);
+        const rootFolder = useFoldersStore.getState().rootFolder;
+        if (!rootFolder) {
+          setRootFolderSet(false);
+          return;
+        }
+
+        const apiBase = getApiBase();
+        const response = await authenticatedFetch(
+          `${apiBase}/api/config/root-folder/status?${new URLSearchParams({ path: rootFolder })}`
+        );
+
+        if (response.ok) {
+          const data = await response.json();
+          if (!data.exists) {
+            useFoldersStore.getState().clearRootFolder();
+            setRootFolderSet(false);
+            return;
+          }
+        }
+
+        setRootFolderSet(true);
       } catch (error) {
         console.error('Failed to check root folder:', error);
-        setRootFolderSet(false);
+        setRootFolderSet(true);
       } finally {
         setIsChecking(false);
       }
@@ -55,11 +86,15 @@ export default function MainLayout() {
     checkRootFolder();
   }, []);
 
-  const handleFolderSelected = () => {
-    // Selecting a local folder should always scope the feed to local-only content.
-    // This prevents stale 'all'/'remote' feedSourceType from a previous session
-    // from causing rclone fetches after a fresh local-folder selection.
-    useUIStore.getState().setPreferences({ feedSourceType: 'local' });
+  const handleFolderSelected = (source: 'local' | 'remote' = 'local') => {
+    // Local selection scopes the feed to local-only content, preventing a stale
+    // 'all'/'remote' feedSourceType from a previous session from causing remote
+    // fetches right after a fresh local-folder pick.
+    // Remote selection sets 'all' so existing local content (if any) keeps
+    // showing alongside the newly added server. 'all' also persists across
+    // refresh (unlike the in-memory rootFolderSet flag), which is what keeps
+    // the app on the feed instead of bouncing back to folder selection.
+    useUIStore.getState().setPreferences({ feedSourceType: source === 'remote' ? 'all' : 'local' });
     setRootFolderSet(true);
   };
 
@@ -101,6 +136,7 @@ export default function MainLayout() {
   };
 
   const handleRootFolderReset = () => {
+    useUIStore.getState().setPreferences({ feedSourceType: 'local' });
     setRootFolderSet(false);
     setCurrentView('feed');
   };

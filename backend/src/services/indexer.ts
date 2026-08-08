@@ -76,7 +76,15 @@ function getMediaKind(filePath: string): 'image' | 'video' | null {
   return null;
 }
 
-async function hashFile(filePath: string): Promise<string> {
+// Files larger than this are hashed by sampling (size + head + tail) instead of
+// reading every byte. Full-content hashing of large videos dominates indexing
+// time (multi-GB reads per file); sampling makes it a constant ~8MB read while
+// staying deterministic and collision-safe for real media. The scheme is shared
+// by every caller so dedup stays consistent across full and incremental scans.
+const HASH_SAMPLE_THRESHOLD_BYTES = 16 * 1024 * 1024; // 16 MB
+const HASH_SAMPLE_CHUNK_BYTES = 4 * 1024 * 1024; // 4 MB head + 4 MB tail
+
+function hashFullFile(filePath: string): Promise<string> {
   return new Promise((resolve, reject) => {
     const hash = createHash('sha256');
     const stream = fssync.createReadStream(filePath);
@@ -85,6 +93,48 @@ async function hashFile(filePath: string): Promise<string> {
     stream.on('error', reject);
     stream.on('end', () => resolve(hash.digest('hex')));
   });
+}
+
+async function hashSampledFile(filePath: string, sizeBytes: number): Promise<string> {
+  const handle = await fs.open(filePath, 'r');
+  try {
+    const hash = createHash('sha256');
+    // Bind the digest to the exact byte length so two files that share a head
+    // and tail but differ in size never collide.
+    hash.update(`size:${sizeBytes}\n`);
+
+    const head = Buffer.alloc(HASH_SAMPLE_CHUNK_BYTES);
+    const headRead = await handle.read(head, 0, HASH_SAMPLE_CHUNK_BYTES, 0);
+    hash.update(head.subarray(0, headRead.bytesRead));
+
+    const tail = Buffer.alloc(HASH_SAMPLE_CHUNK_BYTES);
+    const tailStart = sizeBytes - HASH_SAMPLE_CHUNK_BYTES;
+    const tailRead = await handle.read(tail, 0, HASH_SAMPLE_CHUNK_BYTES, tailStart);
+    hash.update(tail.subarray(0, tailRead.bytesRead));
+
+    return hash.digest('hex');
+  } finally {
+    await handle.close();
+  }
+}
+
+/**
+ * Content hash used for deduplication. Small files are hashed in full; files
+ * above HASH_SAMPLE_THRESHOLD_BYTES are sampled (size + head + tail) to avoid
+ * reading gigabytes per video. Deterministic: identical files always produce
+ * identical hashes regardless of which scheme applies.
+ */
+async function hashFile(filePath: string, sizeBytes?: number): Promise<string> {
+  let size = sizeBytes;
+  if (size === undefined) {
+    size = (await fs.stat(filePath)).size;
+  }
+
+  if (size <= HASH_SAMPLE_THRESHOLD_BYTES) {
+    return hashFullFile(filePath);
+  }
+
+  return hashSampledFile(filePath, size);
 }
 
 async function scanDirectory(
@@ -129,7 +179,7 @@ async function scanDirectory(
       const fileName = path.basename(fullPath);
       const extension = path.extname(fullPath).toLowerCase() || null;
       const mimeType = (mime.lookup(fullPath) || null) as string | null;
-      const contentHash = await hashFile(fullPath);
+      const contentHash = await hashFile(fullPath, stats.size);
 
       files.push({
         absolutePath: fullPath,
@@ -393,6 +443,92 @@ export async function fileExists(filePath: string): Promise<boolean> {
   }
 }
 
+/**
+ * Surgically add or update a single file in the index without a full rescan.
+ * Used by the file watcher on `add`/`change` events.
+ * Returns true if the file was indexed successfully.
+ */
+export async function addSingleFileToIndex(
+  db: Database.Database,
+  rootFolder: string,
+  userId: string,
+  filePath: string
+): Promise<boolean> {
+  const mediaKind = getMediaKind(filePath);
+  if (!mediaKind) return false;
+
+  let sizeBytes: number;
+  try {
+    sizeBytes = (await fs.stat(filePath)).size;
+  } catch {
+    return false;
+  }
+
+  let contentHash: string;
+  try {
+    contentHash = await hashFile(filePath, sizeBytes);
+  } catch {
+    return false;
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+  const relativePathFromRoot = normalizeRelativePath(path.relative(rootFolder, filePath));
+  const folderRelPath = normalizeRelativePath(path.dirname(relativePathFromRoot));
+  const folderId = deriveFolderId(userId, folderRelPath);
+  const pathId = derivePathId(userId, filePath);
+  const rawPathHash = createHash('sha256').update(filePath).digest('hex');
+  const fileName = path.basename(filePath);
+  const extension = path.extname(filePath).toLowerCase() || null;
+  const mimeType = (mime.lookup(filePath) || null) as string | null;
+  const fileKey = contentHash.slice(0, 16);
+  const folderName = folderRelPath === '' ? (path.basename(rootFolder) || 'root') : path.basename(folderRelPath);
+  const parentRelPath = folderRelPath === '' ? null : normalizeRelativePath(path.dirname(folderRelPath));
+  const parentFolderId = parentRelPath === null ? null : deriveFolderId(userId, parentRelPath);
+
+  db.transaction(() => {
+    db.prepare(`
+      INSERT INTO folders (id, user_id, parent_folder_id, storage_mode, absolute_path, relative_path_from_root, name, created_at, updated_at)
+      VALUES (?, ?, ?, 'local', ?, ?, ?, ?, ?)
+      ON CONFLICT(user_id, storage_mode, relative_path_from_root) DO NOTHING
+    `).run(folderId, userId, parentFolderId, folderRelPath === '' ? rootFolder : path.join(rootFolder, folderRelPath), folderRelPath, folderName, now, now);
+
+    db.prepare(`
+      INSERT INTO files (id, file_key, content_hash, size_bytes, mime_type, extension, media_kind, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(content_hash) DO NOTHING
+    `).run(contentHash, fileKey, contentHash, sizeBytes, mimeType, extension, mediaKind, now, now);
+
+    db.prepare(`
+      INSERT INTO file_paths (id, file_id, user_id, folder_id, storage_mode, file_name, absolute_path, relative_path_from_root, path_hash, first_seen_at, last_seen_at, is_present, status, created_at, updated_at)
+      VALUES (?, ?, ?, ?, 'local', ?, ?, ?, ?, ?, ?, 1, 'ready', ?, ?)
+      ON CONFLICT(user_id, absolute_path) DO UPDATE SET
+        file_id = excluded.file_id,
+        last_seen_at = excluded.last_seen_at,
+        is_present = 1,
+        status = 'ready',
+        updated_at = excluded.updated_at
+    `).run(pathId, contentHash, userId, folderId, fileName, filePath, relativePathFromRoot, rawPathHash, now, now, now, now);
+  })();
+
+  return true;
+}
+
+/**
+ * Surgically mark a single file path absent. Used by the file watcher on `unlink` events.
+ * Returns true if a row was actually updated.
+ */
+export function removeFileFromIndex(
+  db: Database.Database,
+  userId: string,
+  filePath: string
+): boolean {
+  const now = Math.floor(Date.now() / 1000);
+  const info = db.prepare(
+    `UPDATE file_paths SET is_present = 0, updated_at = ? WHERE absolute_path = ? AND user_id = ?`
+  ).run(now, filePath, userId);
+  return info.changes > 0;
+}
+
 // ---------------------------------------------------------------------------
 // Pending-first pipeline (used by BullMQ worker)
 // ---------------------------------------------------------------------------
@@ -556,9 +692,11 @@ export async function discoverAndCreatePendingLocal(
         upsertFolder.run(folderId, userId, parentFolderId, 'local', dirAbsPath, dirRelPath, folderName, now, now);
 
         for (const file of filesInDir) {
-          const tempId = makeTempFileId(file.absolutePath);
+          // makeTempFileId and pathHash both SHA256 the same input — compute once
+          const rawPathHash = createHash('sha256').update(file.absolutePath).digest('hex');
+          const tempId = 'p' + rawPathHash.slice(0, 31);
           const pathId = derivePathId(userId, file.absolutePath);
-          const pathHash = createHash('sha256').update(file.absolutePath).digest('hex');
+          const pathHash = rawPathHash;
 
           upsertTempFile.run(tempId, `t${tempId.slice(1, 15)}`, tempId, file.sizeBytes, file.mimeType, file.extension, file.mediaKind, now, now);
           upsertPendingPath.run(pathId, tempId, userId, folderId, file.fileName, file.absolutePath, file.relativePathFromRoot, pathHash, now, now, tempId, now, now);
@@ -598,6 +736,25 @@ export async function discoverAndCreatePendingLocal(
 /**
  * Hash each pending file and reconcile temp IDs to real content hashes.
  */
+// Number of files hashed concurrently during finalization. Hashing is I/O-bound,
+// so a small pool overlaps disk reads (and the OS readahead) across files while
+// the synchronous better-sqlite3 reconciliation writes naturally serialize.
+const FINALIZE_CONCURRENCY = 6;
+
+// Prepared once per finalization run, not once per file.
+interface ReconcileStmts {
+  markMissing: Database.Statement;
+  selectFile: Database.Statement;
+  updateLiked: Database.Statement;
+  updateSaved: Database.Statement;
+  updateHidden: Database.Statement;
+  updatePath: Database.Statement;
+  deleteFile: Database.Statement;
+  updateFileKey: Database.Statement;
+  updatePathStatus: Database.Statement;
+  insertFile: Database.Statement;
+}
+
 export async function finalizeLocalPendingFiles(
   db: Database.Database,
   pending: PendingLocalFile[],
@@ -606,64 +763,85 @@ export async function finalizeLocalPendingFiles(
   onProgress: (done: number, total: number, tempId: string, finalId: string) => void
 ): Promise<void> {
   const total = pending.length;
+  let nextIndex = 0;
+  let done = 0;
 
-  for (let i = 0; i < pending.length; i++) {
-    const file = pending[i];
+  // ponytail: prepare once, reuse across all N files — was N×8 prepare() calls
+  const stmts: ReconcileStmts = {
+    markMissing: db.prepare(`UPDATE file_paths SET is_present = 0, status = 'ready', updated_at = ? WHERE id = ?`),
+    selectFile: db.prepare(`SELECT id FROM files WHERE content_hash = ?`),
+    updateLiked: db.prepare(`UPDATE user_liked_files SET file_id = ? WHERE file_id = ?`),
+    updateSaved: db.prepare(`UPDATE user_saved_files SET file_id = ? WHERE file_id = ?`),
+    updateHidden: db.prepare(`UPDATE user_hidden_files SET file_id = ? WHERE file_id = ?`),
+    updatePath: db.prepare(`UPDATE file_paths SET file_id = ?, status = 'ready', temp_file_id = NULL, updated_at = ? WHERE id = ?`),
+    deleteFile: db.prepare(`DELETE FROM files WHERE id = ?`),
+    updateFileKey: db.prepare(`UPDATE files SET file_key = ?, content_hash = ?, updated_at = ? WHERE id = ?`),
+    updatePathStatus: db.prepare(`UPDATE file_paths SET status = 'ready', temp_file_id = NULL, updated_at = ? WHERE id = ?`),
+    insertFile: db.prepare(`INSERT INTO files (id, file_key, content_hash, size_bytes, mime_type, extension, media_kind, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(content_hash) DO NOTHING`),
+  };
 
-    let contentHash: string;
-    try {
-      contentHash = await hashFile(file.absolutePath);
-    } catch {
-      // File disappeared between discovery and finalization – mark as missing
-      db.prepare(`UPDATE file_paths SET is_present = 0, status = 'ready', updated_at = ? WHERE id = ?`)
-        .run(Math.floor(Date.now() / 1000), file.pathId);
-      onProgress(i + 1, total, file.tempFileId, '');
-      continue;
+  const worker = async (): Promise<void> => {
+    while (true) {
+      const i = nextIndex;
+      nextIndex += 1;
+      if (i >= pending.length) return;
+
+      const file = pending[i];
+
+      let contentHash: string;
+      try {
+        contentHash = await hashFile(file.absolutePath, file.sizeBytes);
+      } catch {
+        // File disappeared between discovery and finalization – mark as missing
+        stmts.markMissing.run(Math.floor(Date.now() / 1000), file.pathId);
+        done += 1;
+        onProgress(done, total, file.tempFileId, '');
+        continue;
+      }
+
+      reconcilePendingToFinal(db, file, contentHash, stmts);
+      done += 1;
+      onProgress(done, total, file.tempFileId, contentHash);
     }
+  };
 
-    reconcilePendingToFinal(db, file, contentHash);
-    onProgress(i + 1, total, file.tempFileId, contentHash);
-  }
+  const poolSize = Math.min(FINALIZE_CONCURRENCY, pending.length);
+  await Promise.all(Array.from({ length: poolSize }, () => worker()));
 }
 
-function reconcilePendingToFinal(db: Database.Database, file: PendingLocalFile, contentHash: string): void {
+function reconcilePendingToFinal(
+  db: Database.Database,
+  file: PendingLocalFile,
+  contentHash: string,
+  stmts: ReconcileStmts
+): void {
   const now = Math.floor(Date.now() / 1000);
   const fileKey = contentHash.slice(0, 16);
 
   const tx = db.transaction(() => {
-    // Check if real file already exists (deduplication)
-    const existing = db.prepare('SELECT id FROM files WHERE content_hash = ?').get(contentHash) as { id: string } | undefined;
+    const existing = stmts.selectFile.get(contentHash) as { id: string } | undefined;
 
     if (existing && existing.id !== file.tempFileId) {
       // Real file already exists (deduplicated). Re-home interactions and path pointer.
       const realId = existing.id;
-      db.prepare(`UPDATE user_liked_files SET file_id = ? WHERE file_id = ?`).run(realId, file.tempFileId);
-      db.prepare(`UPDATE user_saved_files SET file_id = ? WHERE file_id = ?`).run(realId, file.tempFileId);
-      db.prepare(`UPDATE user_hidden_files SET file_id = ? WHERE file_id = ?`).run(realId, file.tempFileId);
-      db.prepare(`UPDATE file_paths SET file_id = ?, status = 'ready', temp_file_id = NULL, updated_at = ? WHERE id = ?`)
-        .run(realId, now, file.pathId);
-      db.prepare(`DELETE FROM files WHERE id = ?`).run(file.tempFileId);
+      stmts.updateLiked.run(realId, file.tempFileId);
+      stmts.updateSaved.run(realId, file.tempFileId);
+      stmts.updateHidden.run(realId, file.tempFileId);
+      stmts.updatePath.run(realId, now, file.pathId);
+      stmts.deleteFile.run(file.tempFileId);
     } else if (existing && existing.id === file.tempFileId) {
       // Temp record IS the real record (hash coincided) – just mark ready.
-      db.prepare(`UPDATE files SET file_key = ?, content_hash = ?, updated_at = ? WHERE id = ?`)
-        .run(fileKey, contentHash, now, file.tempFileId);
-      db.prepare(`UPDATE file_paths SET status = 'ready', temp_file_id = NULL, updated_at = ? WHERE id = ?`)
-        .run(now, file.pathId);
+      stmts.updateFileKey.run(fileKey, contentHash, now, file.tempFileId);
+      stmts.updatePathStatus.run(now, file.pathId);
     } else {
       // Temp file exists, real hash is new – insert real record and migrate.
-      db.prepare(
-        `INSERT INTO files (id, file_key, content_hash, size_bytes, mime_type, extension, media_kind, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(content_hash) DO NOTHING`
-      ).run(contentHash, fileKey, contentHash, file.sizeBytes, file.mimeType, file.extension, file.mediaKind, now, now);
-
+      stmts.insertFile.run(contentHash, fileKey, contentHash, file.sizeBytes, file.mimeType, file.extension, file.mediaKind, now, now);
       const realId = contentHash;
-      db.prepare(`UPDATE user_liked_files SET file_id = ? WHERE file_id = ?`).run(realId, file.tempFileId);
-      db.prepare(`UPDATE user_saved_files SET file_id = ? WHERE file_id = ?`).run(realId, file.tempFileId);
-      db.prepare(`UPDATE user_hidden_files SET file_id = ? WHERE file_id = ?`).run(realId, file.tempFileId);
-      db.prepare(`UPDATE file_paths SET file_id = ?, status = 'ready', temp_file_id = NULL, updated_at = ? WHERE id = ?`)
-        .run(realId, now, file.pathId);
-      db.prepare(`DELETE FROM files WHERE id = ?`).run(file.tempFileId);
+      stmts.updateLiked.run(realId, file.tempFileId);
+      stmts.updateSaved.run(realId, file.tempFileId);
+      stmts.updateHidden.run(realId, file.tempFileId);
+      stmts.updatePath.run(realId, now, file.pathId);
+      stmts.deleteFile.run(file.tempFileId);
     }
   });
 

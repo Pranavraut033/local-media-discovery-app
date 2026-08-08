@@ -10,12 +10,18 @@ import { createHmac, timingSafeEqual } from 'crypto';
 export interface StreamTokenPayload {
   /** File ID from the backend DB (used as cache key on the media server). */
   mediaId: string;
-  /** Absolute path on the machine running the backend / media-server. */
+  /** Absolute local FS path — used for local storage mode only. */
   path: string;
   /** Lowercase extension including dot, e.g. ".mp4" */
   ext: string;
   /** Media kind. */
   type: 'image' | 'video';
+  /** Storage mode — defaults to 'local' when absent (old tokens). */
+  storageMode?: 'local' | 'rclone' | 'webdav';
+  /** remote_servers.id — present only for remote storage modes. */
+  serverId?: string;
+  /** Provider-specific remote path (e.g. "mysftp:photos/a.mp4", "/dav/a.mp4"). */
+  remotePath?: string;
 }
 
 interface InternalPayload extends StreamTokenPayload {
@@ -66,7 +72,11 @@ export function verifyStreamToken(token: string, secret: string): StreamTokenPay
     throw new Error('Token expired');
   }
 
-  const { mediaId, path, ext, type } = decoded;
-  if (!mediaId || !path || !ext || !type) throw new Error('Incomplete token payload');
-  return { mediaId, path, ext, type };
+  const { mediaId, path, ext, type, storageMode, serverId, remotePath } = decoded;
+  if (!mediaId || !ext || !type) throw new Error('Incomplete token payload');
+  // For remote modes, path may be empty but remotePath + serverId must be present.
+  const isRemote = storageMode === 'rclone' || storageMode === 'webdav';
+  if (isRemote && (!serverId || !remotePath)) throw new Error('Incomplete remote token payload');
+  if (!isRemote && !path) throw new Error('Incomplete token payload');
+  return { mediaId, path: path || '', ext, type, storageMode, serverId, remotePath };
 }

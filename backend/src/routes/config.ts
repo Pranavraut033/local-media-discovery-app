@@ -20,6 +20,8 @@ interface RecentRootFolderRow {
   path: string;
   name: string;
   lastIndexedAt: number;
+  serverId: string | null;
+  serverType: string | null;
 }
 
 export default async function configRoutes(fastify: FastifyInstance): Promise<void> {
@@ -74,8 +76,34 @@ export default async function configRoutes(fastify: FastifyInstance): Promise<vo
     }
   );
 
-  // Get recently indexed local root folders for the authenticated user.
-  // These come from DB (folders table) and are scoped per-user.
+  // Check whether a previously-selected root folder still exists on disk.
+  // Used by the frontend to detect folders that were moved/deleted outside the app
+  // so it can fall back to folder selection instead of showing an empty feed.
+  fastify.get<{ Querystring: { path?: string } }>(
+    '/api/config/root-folder/status',
+    {
+      onRequest: [fastify.authenticate],
+    },
+    async (request, reply) => {
+      const { path: folderPath } = request.query;
+
+      if (!folderPath || typeof folderPath !== 'string') {
+        return reply.code(400).send({ error: 'Invalid folder path' });
+      }
+
+      try {
+        const stats = await fs.stat(folderPath);
+        return reply.send({ exists: stats.isDirectory() });
+      } catch {
+        return reply.send({ exists: false });
+      }
+    }
+  );
+
+  // Get recently indexed root folders for the authenticated user — local AND
+  // remote (rclone/webdav). Remote rows carry serverId/serverType so the
+  // frontend can re-trigger indexing via /api/servers/:id/add-source instead
+  // of the local-only /api/config/root-folder.
   fastify.get(
     '/api/config/recent-folders',
     {
@@ -90,14 +118,19 @@ export default async function configRoutes(fastify: FastifyInstance): Promise<vo
           .prepare(
             `
               SELECT
-                absolute_path AS path,
-                name,
-                MAX(updated_at) AS lastIndexedAt
-              FROM folders
-              WHERE user_id = ?
-                AND storage_mode = 'local'
-                AND relative_path_from_root = ''
-              GROUP BY absolute_path, name
+                f.absolute_path AS path,
+                f.name AS name,
+                MAX(f.updated_at) AS lastIndexedAt,
+                f.server_id AS serverId,
+                rs.server_type AS serverType
+              FROM folders f
+              LEFT JOIN remote_servers rs ON rs.id = f.server_id
+              WHERE f.user_id = ?
+                AND (
+                  f.relative_path_from_root = ''
+                  OR f.relative_path_from_root = '__server_root_' || f.server_id
+                )
+              GROUP BY f.absolute_path, f.name, f.server_id
               ORDER BY lastIndexedAt DESC
               LIMIT 10
             `

@@ -25,7 +25,10 @@ import eventsRoutes from './routes/events.js';
 import discoverRoutes from './routes/discover.js';
 import { initThumbnailService } from './services/thumbnails.js';
 import { startIndexingWorker } from './workers/indexer.worker.js';
-import { rcloneMountService } from './services/rclone-mount.js';
+import { rcloneMountManager } from './services/rclone-mount.js';
+import { startRcd, stopRcd } from './services/rclone-rcd.js';
+import serversRoutes, { mountRemoteFor } from './routes/servers.js';
+import { listAllRcloneServers } from './services/remote/servers-db.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -108,23 +111,48 @@ await fastify.register(rcloneRoutes);
 await fastify.register(remoteRcloneConfigRoutes);
 await fastify.register(eventsRoutes);
 await fastify.register(discoverRoutes);
+await fastify.register(serversRoutes);
 
-// Start BullMQ indexing worker (in-process)
+// Start in-process indexing worker
 startIndexingWorker();
 
-// Auto-start rclone mount (non-fatal if rclone not configured)
-rcloneMountService.startOnInit();
+// Start rcd sidecar — control plane for remote_servers (listing, thumbnails,
+// config create/update/delete) for every configured remote. Awaited so
+// remote-server requests right after boot don't race a null client.
+await startRcd();
+
+// Bring up a FUSE mount for every configured rclone-type remote server.
+// Non-fatal — a server whose mount fails to start here gets retried lazily
+// on its next ensureRunning() call (e.g. from servers.ts create/update).
+for (const server of listAllRcloneServers(getDatabase())) {
+  rcloneMountManager.ensureRunning(server.id, mountRemoteFor(server.connection)).catch((err) => {
+    console.error(`[rclone-mount:${server.id}] Non-fatal init error:`, err);
+  });
+}
 
 // Health check
 fastify.get('/api/health', async () => {
   return { status: 'ok', timestamp: Date.now() };
 });
 
+// fluent-ffmpeg's capability probe (and thumbnail extraction) spawns ffmpeg/ffprobe
+// from a setImmediate callback, outside any try/catch we control. In some sandboxed
+// Electron/macOS environments child_process.spawn throws EBADF synchronously there,
+// which would otherwise crash the entire backend on the first video thumbnail request.
+process.on('uncaughtException', (error: NodeJS.ErrnoException) => {
+  if (error.syscall === 'spawn' && (error.code === 'EBADF' || error.code === 'ENOENT')) {
+    fastify.log.error({ err: error }, 'Ignoring fatal spawn error from ffmpeg/ffprobe');
+    return;
+  }
+  throw error;
+});
+
 // Graceful shutdown
 process.on('SIGINT', async () => {
   console.log('Shutting down gracefully...');
   await stopWatcher();
-  await rcloneMountService.shutdown();
+  stopRcd();
+  await rcloneMountManager.shutdownAll();
   closeDatabase();
   fastify.close(() => {
     console.log('Server closed');
@@ -135,7 +163,8 @@ process.on('SIGINT', async () => {
 process.on('SIGTERM', async () => {
   console.log('Shutting down gracefully (SIGTERM)...');
   await stopWatcher();
-  await rcloneMountService.shutdown();
+  stopRcd();
+  await rcloneMountManager.shutdownAll();
   closeDatabase();
   fastify.close(() => {
     console.log('Server closed');

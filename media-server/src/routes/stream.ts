@@ -6,11 +6,13 @@
  * Flow:
  *  1. Verify the stream token (HMAC-SHA256, signed by the backend).
  *  2. If the file is cached on SSD: decrypt and serve the requested range.
- *  3. If NOT cached: stream directly from the rclone VFS mount path (POSIX
- *     file read, fully range-capable) AND enqueue a background cache-fill so
- *     the next request will be served from fast local storage.
+ *  3. If NOT cached:
+ *     - Local, and rclone-mode remote (read from its FUSE mount): stream
+ *       directly from the filesystem path (POSIX file read).
+ *     - Webdav-without-rclone: fetch range from the WebDAV server directly.
  *
  * Live requests are never queued — users always get data immediately.
+ * Background prefetch fills the cache so next request is served from SSD.
  */
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import fs from 'fs';
@@ -19,7 +21,8 @@ import path from 'path';
 import { verifyStreamToken } from '../tokens.js';
 import { config } from '../config.js';
 import { getCachedFileInfo, createDecryptRangeStream, markCacheAccessed } from '../services/cache.js';
-import { enqueueDownload, DownloadPriority } from '../services/queue.js';
+import { openRemoteRange } from '../services/remote/fetcher.js';
+import { acquireLiveLane, releaseLiveLane } from '../services/queue.js';
 
 interface StreamQuery {
   token?: string;
@@ -60,6 +63,25 @@ function parseRange(
   return { start, end };
 }
 
+function readStreamOrFail(
+  fastify: FastifyInstance,
+  mountPath: string,
+  options?: { start: number; end: number }
+): fs.ReadStream {
+  const stream = options ? fs.createReadStream(mountPath, options) : fs.createReadStream(mountPath);
+
+  // rclone's VFS can report a file via stat() but fail to actually open it
+  // (stale/incomplete directory listing). Without this handler, the
+  // ReadStream's 'error' event is unhandled and crashes the whole process,
+  // taking down every other in-flight stream.
+  stream.on('error', (err) => {
+    fastify.log.error({ err, mountPath }, 'Failed to read file from mount');
+    stream.destroy();
+  });
+
+  return stream;
+}
+
 export default async function streamRoute(fastify: FastifyInstance): Promise<void> {
   fastify.get<{ Querystring: StreamQuery }>(
     '/stream',
@@ -79,8 +101,12 @@ export default async function streamRoute(fastify: FastifyInstance): Promise<voi
         return reply.code(401).send({ error: 'Invalid or expired token' });
       }
 
-      const { mediaId, path: mountPath, ext, type } = payload;
+      const { mediaId, path: mountPath, ext, type, storageMode, serverId, remotePath } = payload;
       const contentType = MIME_MAP[ext] || 'application/octet-stream';
+      // rclone-mode files are read from the FUSE mount via the local-file branch below
+      // (their `path` is already the resolved mount path) — only webdav (no mount)
+      // needs the live remote-fetch path here.
+      const isRemote = storageMode === 'webdav';
 
       // ── 1. Try cached path first ──────────────────────────────────────────
       const cached = await getCachedFileInfo(mediaId);
@@ -104,6 +130,12 @@ export default async function streamRoute(fastify: FastifyInstance): Promise<voi
           const { start, end } = range;
           const chunkSize = end - start + 1;
           const stream = createDecryptRangeStream(cached, start, end);
+          // Proactively tear down the decrypt stream when the client (Plyr)
+          // disconnects early — otherwise it keeps reading/decrypting from the
+          // cache file with nobody consuming it, across many swipes.
+          request.raw.on('close', () => {
+            if (!stream.destroyed) stream.destroy();
+          });
 
           return reply
             .code(206)
@@ -117,6 +149,9 @@ export default async function streamRoute(fastify: FastifyInstance): Promise<voi
 
         // Full file from cache.
         const stream = createDecryptRangeStream(cached, 0, plaintextSize - 1);
+        request.raw.on('close', () => {
+          if (!stream.destroyed) stream.destroy();
+        });
         return reply
           .code(200)
           .header('Content-Length', String(plaintextSize))
@@ -126,7 +161,67 @@ export default async function streamRoute(fastify: FastifyInstance): Promise<voi
           .send(stream);
       }
 
-      // ── 2. Not cached — serve directly from mount path ───────────────────
+      // ── 2. Not cached ─────────────────────────────────────────────────────
+
+      if (isRemote && serverId && remotePath) {
+        // Remote file (webdav-without-rclone only — rclone-mode reaches the
+        // local-file branch below instead): ranged fetch over HTTP, which
+        // supports Range natively.
+        //
+        // The remote can't serve many concurrent live ranges, so this request
+        // holds a "live lane" (pausing background cache-fills) for as long as
+        // it streams, and aborts its upstream fetch the instant the client
+        // disconnects (e.g. the frontend's hover-preempt `video.load()`) —
+        // otherwise the next hovered video would wait for this one to finish
+        // even though nobody is reading it anymore.
+        const rangeHeader = request.headers.range;
+        const abortController = new AbortController();
+        const onClientClose = () => abortController.abort();
+        request.raw.on('close', onClientClose);
+        acquireLiveLane();
+
+        let cleaned = false;
+        const cleanup = () => {
+          if (cleaned) return;
+          cleaned = true;
+          request.raw.off('close', onClientClose);
+          releaseLiveLane();
+        };
+
+        try {
+          if (rangeHeader) {
+            // Fetch the requested range directly — no need for total size upfront.
+            const match = rangeHeader.match(/^bytes=(\d*)-(\d*)$/);
+            const start = match?.[1] ? parseInt(match[1], 10) : undefined;
+            const end = match?.[2] ? parseInt(match[2], 10) : undefined;
+            const { stream, size } = await openRemoteRange(serverId, remotePath, start, end, abortController.signal);
+            stream.once('close', cleanup);
+            stream.once('error', cleanup);
+            const chunkSize = size ?? ((start !== undefined && end !== undefined) ? end - start + 1 : undefined);
+            const replyWithRange = reply
+              .code(206)
+              .header('Accept-Ranges', 'bytes')
+              .header('Content-Type', contentType);
+            if (chunkSize) replyWithRange.header('Content-Length', String(chunkSize));
+            return replyWithRange.send(stream);
+          }
+
+          const { stream, size } = await openRemoteRange(serverId, remotePath, undefined, undefined, abortController.signal);
+          stream.once('close', cleanup);
+          stream.once('error', cleanup);
+          const r = reply.code(200).header('Content-Type', contentType).header('Accept-Ranges', 'bytes');
+          if (size) r.header('Content-Length', String(size));
+          return r.send(stream);
+        } catch (err) {
+          cleanup();
+          fastify.log.error({ err, remotePath }, '[stream] remote fetch failed');
+          return reply.code(502).send({ error: 'Remote fetch failed' });
+        }
+      }
+
+      // ── 3. Local file — stream directly from filesystem ───────────────────
+      // ponytail: no auto-cache on stream — random feed items are one-shot, caching them
+      // wastes budget. Only the /prefetch endpoint caches (near items the user is about to see).
       let fileStat: fs.Stats;
       try {
         fileStat = await fsp.stat(mountPath);
@@ -140,12 +235,23 @@ export default async function streamRoute(fastify: FastifyInstance): Promise<voi
       const fileSize = fileStat.size;
       const rangeHeader = request.headers.range;
 
-      // Kick off a background cache-fill (non-blocking, won't slow this response).
-      enqueueDownload(mediaId, mountPath, DownloadPriority.NEAR);
+      // A live read from the mount (local disk, or the rclone FUSE mount also
+      // used by background /prefetch cache-fills) must always win over a
+      // queued background download — hold the live lane for the duration of
+      // the stream so queued work pauses/aborts immediately instead of
+      // contending for I/O on the shared mount (mirrors the webdav branch).
+      acquireLiveLane();
+      let liveLaneReleased = false;
+      const releaseLiveLaneOnce = () => {
+        if (liveLaneReleased) return;
+        liveLaneReleased = true;
+        releaseLiveLane();
+      };
 
       if (rangeHeader) {
         const range = parseRange(rangeHeader, fileSize);
         if (!range) {
+          releaseLiveLaneOnce();
           return reply
             .code(416)
             .header('Content-Range', `bytes */${fileSize}`)
@@ -154,7 +260,15 @@ export default async function streamRoute(fastify: FastifyInstance): Promise<voi
 
         const { start, end } = range;
         const chunkSize = end - start + 1;
-        const stream = fs.createReadStream(mountPath, { start, end });
+        const stream = readStreamOrFail(fastify, mountPath, { start, end });
+        stream.once('close', releaseLiveLaneOnce);
+        stream.once('error', releaseLiveLaneOnce);
+        // Proactively abort the read when the client (Plyr) disconnects early
+        // — otherwise the ReadStream/fd lingers server-side with nobody
+        // consuming it, across many swipes.
+        request.raw.on('close', () => {
+          if (!stream.destroyed) stream.destroy();
+        });
 
         return reply
           .code(206)
@@ -166,7 +280,12 @@ export default async function streamRoute(fastify: FastifyInstance): Promise<voi
           .send(stream);
       }
 
-      const stream = fs.createReadStream(mountPath);
+      const stream = readStreamOrFail(fastify, mountPath);
+      stream.once('close', releaseLiveLaneOnce);
+      stream.once('error', releaseLiveLaneOnce);
+      request.raw.on('close', () => {
+        if (!stream.destroyed) stream.destroy();
+      });
       return reply
         .code(200)
         .header('Content-Length', String(fileSize))

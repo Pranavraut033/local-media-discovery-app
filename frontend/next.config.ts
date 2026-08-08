@@ -1,10 +1,12 @@
 import type { NextConfig } from "next";
 
+const isDev = process.env.ELECTRON_DEV === '1';
+
 const nextConfig: NextConfig = {
-  output: 'export',
+  ...(isDev ? {} : { output: 'export' }),
   reactCompiler: true,
   images: {
-    unoptimized: true, // Required for static export
+    unoptimized: true,
   },
   // Allow cross-origin requests from local network devices during development
   allowedDevOrigins: [

@@ -6,7 +6,8 @@ import chokidar, { type FSWatcher } from 'chokidar';
 import type Database from 'better-sqlite3';
 import path from 'path';
 import { config } from '../config.js';
-import { indexMediaFiles } from './indexer.js';
+import { addSingleFileToIndex, removeFileFromIndex } from './indexer.js';
+import { invalidateFeedCache } from './feed.js';
 
 interface WatcherOptions {
   rootFolder: string;
@@ -16,71 +17,12 @@ interface WatcherOptions {
 }
 
 let watcher: FSWatcher | null = null;
-let debounceTimer: NodeJS.Timeout | null = null;
-let reindexInProgress = false;
-let reindexQueued = false;
 
-/**
- * Determine if a file is a supported media type
- */
 function getMediaType(filePath: string): 'image' | 'video' | null {
   const ext = path.extname(filePath).toLowerCase();
-
-  if (config.supportedMedia.images.includes(ext)) {
-    return 'image';
-  }
-
-  if (config.supportedMedia.videos.includes(ext)) {
-    return 'video';
-  }
-
+  if (config.supportedMedia.images.includes(ext)) return 'image';
+  if (config.supportedMedia.videos.includes(ext)) return 'video';
   return null;
-}
-
-async function runReindex(
-  db: Database.Database,
-  rootFolder: string,
-  userId: string,
-  onIndexComplete?: (result: { added: number; removed: number }) => void
-): Promise<void> {
-  if (reindexInProgress) {
-    reindexQueued = true;
-    return;
-  }
-
-  reindexInProgress = true;
-  try {
-    const result = await indexMediaFiles(db, rootFolder, userId);
-    if (onIndexComplete) {
-      onIndexComplete({
-        added: result.newFiles,
-        removed: result.removedFiles,
-      });
-    }
-  } catch (error) {
-    console.error('Watcher reindex error:', error);
-  } finally {
-    reindexInProgress = false;
-    if (reindexQueued) {
-      reindexQueued = false;
-      await runReindex(db, rootFolder, userId, onIndexComplete);
-    }
-  }
-}
-
-function debounceReindex(
-  db: Database.Database,
-  rootFolder: string,
-  userId: string,
-  onIndexComplete?: (result: { added: number; removed: number }) => void
-): void {
-  if (debounceTimer) {
-    clearTimeout(debounceTimer);
-  }
-
-  debounceTimer = setTimeout(() => {
-    void runReindex(db, rootFolder, userId, onIndexComplete);
-  }, 1500);
 }
 
 /**
@@ -105,49 +47,42 @@ export function startWatcher(options: WatcherOptions): void {
     },
   });
 
-  // Handle file additions
+  // ponytail: surgical per-file ops — was a full library rescan on every event
   watcher.on('add', (filePath: string) => {
-    const mediaType = getMediaType(filePath);
-    if (!mediaType) return;
-
-    console.log(`Detected add: ${filePath}`);
-    debounceReindex(db, rootFolder, userId, onIndexComplete);
-  });
-
-  // Handle file removals
-  watcher.on('unlink', (filePath: string) => {
-    const mediaType = getMediaType(filePath);
-    if (!mediaType) return;
-
-    console.log(`Detected remove: ${filePath}`);
-    debounceReindex(db, rootFolder, userId, onIndexComplete);
+    if (!getMediaType(filePath)) return;
+    void addSingleFileToIndex(db, rootFolder, userId, filePath).then((indexed) => {
+      if (indexed) {
+        invalidateFeedCache(userId);
+        onIndexComplete?.({ added: 1, removed: 0 });
+      }
+    });
   });
 
   watcher.on('change', (filePath: string) => {
-    const mediaType = getMediaType(filePath);
-    if (!mediaType) return;
-
-    console.log(`Detected change: ${filePath}`);
-    debounceReindex(db, rootFolder, userId, onIndexComplete);
+    if (!getMediaType(filePath)) return;
+    void addSingleFileToIndex(db, rootFolder, userId, filePath).then((indexed) => {
+      if (indexed) invalidateFeedCache(userId);
+    });
   });
 
-  // Handle directory additions/removals
-  watcher.on('addDir', (dirPath: string) => {
-    if (dirPath === rootFolder) {
-      return;
+  watcher.on('unlink', (filePath: string) => {
+    if (!getMediaType(filePath)) return;
+    const removed = removeFileFromIndex(db, userId, filePath);
+    if (removed) {
+      invalidateFeedCache(userId);
+      onIndexComplete?.({ added: 0, removed: 1 });
     }
-
-    console.log(`Detected directory add: ${dirPath}`);
-    debounceReindex(db, rootFolder, userId, onIndexComplete);
   });
 
+  // Directory events: file add/unlink events fire for contents — nothing extra needed.
   watcher.on('unlinkDir', (dirPath: string) => {
-    if (dirPath === rootFolder) {
-      return;
-    }
-
-    console.log(`Detected directory remove: ${dirPath}`);
-    debounceReindex(db, rootFolder, userId, onIndexComplete);
+    if (dirPath === rootFolder) return;
+    // Mark all paths under this dir absent in one query
+    const now = Math.floor(Date.now() / 1000);
+    const changes = db.prepare(
+      `UPDATE file_paths SET is_present = 0, updated_at = ? WHERE user_id = ? AND absolute_path LIKE ?`
+    ).run(now, userId, `${dirPath}${path.sep}%`).changes;
+    if (changes > 0) invalidateFeedCache(userId);
   });
 
   // Handle errors
@@ -166,14 +101,6 @@ export async function stopWatcher(): Promise<void> {
     watcher = null;
     console.log('File watcher stopped');
   }
-
-  if (debounceTimer) {
-    clearTimeout(debounceTimer);
-    debounceTimer = null;
-  }
-
-  reindexInProgress = false;
-  reindexQueued = false;
 }
 
 /**

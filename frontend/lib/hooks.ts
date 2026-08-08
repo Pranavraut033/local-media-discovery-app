@@ -4,7 +4,7 @@
  */
 import { useQuery, useMutation, useQueryClient, useInfiniteQuery } from '@tanstack/react-query';
 import React, { useEffect, useRef, useCallback } from 'react';
-import { getApiBase, authenticatedFetch, prefetchMediaFiles } from '@/lib/api';
+import { getApiBase, authenticatedFetch, prefetchMediaFiles, cancelPrefetch } from '@/lib/api';
 
 const API_BASE = getApiBase();
 
@@ -226,32 +226,33 @@ const normalizeMediaResponse = (response: MediaResponse): MediaResponse => ({
   },
 });
 
-const normalizeSavedResponse = (response: SavedResponse): SavedResponse => ({
-  ...response,
-  savedMedia: (response.savedMedia || []).map((item) => ({
-    ...normalizeFeedItem(item),
-    viewCount: toNumber(item.viewCount, 0),
-    lastViewed: item.lastViewed ?? null,
-  })),
-});
+type MediaListItem = FeedItem & { viewCount: number; lastViewed: number | null };
 
-const normalizeLikedResponse = (response: LikedResponse): LikedResponse => ({
-  ...response,
-  likedMedia: (response.likedMedia || []).map((item) => ({
-    ...normalizeFeedItem(item),
-    viewCount: toNumber(item.viewCount, 0),
-    lastViewed: item.lastViewed ?? null,
-  })),
-});
+/** Shared shape of saved/liked/hidden responses: `{ success, [key]: MediaListItem[] }`. */
+function normalizeMediaListResponse<T extends Record<K, MediaListItem[]>, K extends string>(
+  response: T,
+  key: K,
+  itemOptions?: { hidden?: boolean }
+): T {
+  const items = response[key] || [];
+  return {
+    ...response,
+    [key]: items.map((item) => ({
+      ...normalizeFeedItem(item, itemOptions),
+      viewCount: toNumber(item.viewCount, 0),
+      lastViewed: item.lastViewed ?? null,
+    })),
+  };
+}
 
-const normalizeHiddenResponse = (response: HiddenResponse): HiddenResponse => ({
-  ...response,
-  hiddenMedia: (response.hiddenMedia || []).map((item) => ({
-    ...normalizeFeedItem(item, { hidden: true }),
-    viewCount: toNumber(item.viewCount, 0),
-    lastViewed: item.lastViewed ?? null,
-  })),
-});
+const normalizeSavedResponse = (response: SavedResponse): SavedResponse =>
+  normalizeMediaListResponse(response, 'savedMedia');
+
+const normalizeLikedResponse = (response: LikedResponse): LikedResponse =>
+  normalizeMediaListResponse(response, 'likedMedia');
+
+const normalizeHiddenResponse = (response: HiddenResponse): HiddenResponse =>
+  normalizeMediaListResponse(response, 'hiddenMedia', { hidden: true });
 
 const normalizeSourceMediaResponse = (response: unknown): SourceMediaResponse => {
   const payload = isRecord(response) ? response : {};
@@ -555,20 +556,22 @@ export const useSources = () => {
 // Mutation Hooks
 // ============================================================================
 
-/**
- * Like/unlike a media item
- */
-export const useLikeMutation = () => {
+/** Shared optimistic-update flow for the like/save toggles: cancel → snapshot → patch → rollback on error. */
+function useInteractionMutation(config: {
+  endpoint: string;
+  field: 'liked' | 'saved';
+  invalidateKeys: string[];
+}) {
   const queryClient = useQueryClient();
 
   return useMutation({
     mutationFn: async ({ mediaId, sourceId }: { mediaId: string; sourceId: string }): Promise<InteractionResponse> => {
-      const response = await authenticatedFetch(`${API_BASE}/api/like`, {
+      const response = await authenticatedFetch(`${API_BASE}${config.endpoint}`, {
         method: 'POST',
         body: JSON.stringify({ mediaId, sourceId }),
       });
       if (!response.ok) {
-        throw new Error('Failed to like media');
+        throw new Error(`Failed to update ${config.field} state`);
       }
       return response.json();
     },
@@ -577,9 +580,9 @@ export const useLikeMutation = () => {
 
       const snapshots = collectMutationSnapshots(queryClient);
       const targetItem = findItemInMutationCaches(queryClient, mediaId);
-      const nextLiked = !(targetItem?.liked ?? false);
+      const next = !(targetItem?.[config.field] ?? false);
 
-      patchItemInAllCollections(queryClient, mediaId, { liked: nextLiked });
+      patchItemInAllCollections(queryClient, mediaId, { [config.field]: next });
 
       return { snapshots, targetItem };
     },
@@ -587,58 +590,26 @@ export const useLikeMutation = () => {
       restoreMutationSnapshots(queryClient, context?.snapshots);
     },
     onSuccess: (data, { mediaId }) => {
-      if (data.liked !== undefined) {
-        patchItemInAllCollections(queryClient, mediaId, { liked: data.liked });
+      if (data[config.field] !== undefined) {
+        patchItemInAllCollections(queryClient, mediaId, { [config.field]: data[config.field] });
       }
 
-      queryClient.invalidateQueries({ queryKey: ['feed'] });
-      queryClient.invalidateQueries({ queryKey: ['liked'] });
+      config.invalidateKeys.forEach((key) => queryClient.invalidateQueries({ queryKey: [key] }));
     },
   });
-};
+}
+
+/**
+ * Like/unlike a media item
+ */
+export const useLikeMutation = () =>
+  useInteractionMutation({ endpoint: '/api/like', field: 'liked', invalidateKeys: ['feed', 'liked'] });
 
 /**
  * Save/unsave a media item
  */
-export const useSaveMutation = () => {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: async ({ mediaId, sourceId }: { mediaId: string; sourceId: string }): Promise<InteractionResponse> => {
-      const response = await authenticatedFetch(`${API_BASE}/api/save`, {
-        method: 'POST',
-        body: JSON.stringify({ mediaId, sourceId }),
-      });
-      if (!response.ok) {
-        throw new Error('Failed to save media');
-      }
-      return response.json();
-    },
-    onMutate: async ({ mediaId }): Promise<MutationSnapshotContext> => {
-      await Promise.all(MUTATION_QUERY_ROOTS.map((root) => queryClient.cancelQueries({ queryKey: [root] })));
-
-      const snapshots = collectMutationSnapshots(queryClient);
-      const targetItem = findItemInMutationCaches(queryClient, mediaId);
-      const nextSaved = !(targetItem?.saved ?? false);
-
-      patchItemInAllCollections(queryClient, mediaId, { saved: nextSaved });
-
-      return { snapshots, targetItem };
-    },
-    onError: (_err, _variables, context) => {
-      restoreMutationSnapshots(queryClient, context?.snapshots);
-    },
-    onSuccess: (data, { mediaId }) => {
-      if (data.saved !== undefined) {
-        patchItemInAllCollections(queryClient, mediaId, { saved: data.saved });
-      }
-
-      queryClient.invalidateQueries({ queryKey: ['feed'] });
-      queryClient.invalidateQueries({ queryKey: ['saved'] });
-      queryClient.invalidateQueries({ queryKey: ['liked'] });
-    },
-  });
-};
+export const useSaveMutation = () =>
+  useInteractionMutation({ endpoint: '/api/save', field: 'saved', invalidateKeys: ['feed', 'saved', 'liked'] });
 
 /**
  * Record a view
@@ -851,126 +822,21 @@ export const useMediaPreload = (mediaIds: string[], config: PreloadConfig = {}) 
       }
     }
     if (tokens.length > 0) {
+      // The media-server's download queue has a single lane (concurrency 1)
+      // and no per-item cancellation — as the reels index advances, each new
+      // window shift enqueues another batch on top of whatever's still
+      // pending from earlier (now-stale) windows, and that backlog grows
+      // over a session of 15-20+ swipes. Cancel prior pending/in-flight
+      // background fills before enqueuing the next window so only the
+      // current window's work sits in the queue. Already-cached items are
+      // unaffected — clearQueue() only drops pending/in-flight jobs, not
+      // completed cache entries.
+      cancelPrefetch();
       prefetchMediaFiles(tokens);
     }
   }, [mediaIds, prefetchDistance, queryClient]);
 
   return { preloadedIds: preloadedRef.current };
-};
-
-/**
- * Hook for batch thumbnail preloading
- */
-export const useBatchThumbnailPreload = (mediaIds: string[], enabled: boolean = true) => {
-  const queryClient = useQueryClient();
-  const preloadedRef = useRef(new Set<string>());
-
-  useEffect(() => {
-    if (!enabled || mediaIds.length === 0) return;
-
-    const idsToPreload = mediaIds.filter((id) => !preloadedRef.current.has(id));
-    if (idsToPreload.length === 0) return;
-
-    const batchSize = 20;
-    const preloadBatch = async () => {
-      for (let i = 0; i < idsToPreload.length; i += batchSize) {
-        const batch = idsToPreload.slice(i, i + batchSize);
-
-        try {
-          await authenticatedFetch(`${API_BASE}/api/thumbnails/batch`, {
-            method: 'POST',
-            body: JSON.stringify({ ids: batch }),
-            signal: AbortSignal.timeout(10000),
-          });
-
-          batch.forEach((id) => preloadedRef.current.add(id));
-        } catch (error) {
-          console.debug('Batch thumbnail preload failed:', error);
-        }
-      }
-    };
-
-    preloadBatch();
-  }, [mediaIds, enabled, queryClient]);
-
-  return { preloadedIds: preloadedRef.current };
-};
-
-/**
- * Hook for image error handling and fallback
- */
-export const useImageErrorHandler = (src: string) => {
-  const [imageSrc, setImageSrc] = React.useState(src);
-  const [error, setError] = React.useState(false);
-
-  const handleError = useCallback(() => {
-    setError(true);
-  }, []);
-
-  React.useEffect(() => {
-    setImageSrc(src);
-    setError(false);
-  }, [src]);
-
-  return { imageSrc, error, handleError };
-};
-
-/**
- * Helper: throttle function for performance
- */
-function throttle<T extends (...args: any[]) => any>(
-  func: T,
-  limit: number
-): (...args: Parameters<T>) => void {
-  let inThrottle: boolean;
-  return function (this: any, ...args: Parameters<T>) {
-    if (!inThrottle) {
-      func.apply(this, args);
-      inThrottle = true;
-      setTimeout(() => (inThrottle = false), limit);
-    }
-  };
-}
-
-/**
- * Hook for virtual scrolling optimization
- */
-export const useVirtualScrolling = (
-  items: any[],
-  itemHeight: number,
-  bufferSize: number = 5
-) => {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [visibleRange, setVisibleRange] = React.useState({ start: 0, end: bufferSize });
-
-  useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
-
-    const handleScroll = () => {
-      const scrollTop = container.scrollTop;
-      const containerHeight = container.clientHeight;
-
-      const start = Math.max(0, Math.floor(scrollTop / itemHeight) - bufferSize);
-      const end = Math.min(
-        items.length,
-        Math.ceil((scrollTop + containerHeight) / itemHeight) + bufferSize
-      );
-
-      setVisibleRange({ start, end });
-    };
-
-    const throttledScroll = throttle(handleScroll, 100);
-    container.addEventListener('scroll', throttledScroll);
-
-    return () => container.removeEventListener('scroll', throttledScroll);
-  }, [items.length, itemHeight, bufferSize]);
-
-  return {
-    containerRef,
-    visibleItems: items.slice(visibleRange.start, visibleRange.end),
-    visibleRange,
-  };
 };
 
 // ============================================================================

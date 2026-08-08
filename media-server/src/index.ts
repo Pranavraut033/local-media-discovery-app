@@ -19,20 +19,7 @@ loadOrCreateKey();
 ensureCacheDir();
 
 const fastify = Fastify({
-  logger:
-    process.env.NODE_ENV === 'production'
-      ? { level: 'warn' }
-      : {
-        transport: {
-          target: 'pino-pretty',
-          options: {
-            translateTime: 'HH:MM:ss',
-            ignore: 'pid,hostname',
-            colorize: true,
-            singleLine: true,
-          },
-        },
-      },
+  logger: process.env.NODE_ENV === 'production' ? { level: 'warn' } : { level: 'info' },
 });
 
 await fastify.register(cors, {

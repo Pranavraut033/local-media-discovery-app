@@ -17,6 +17,7 @@ interface DiscoverRow {
   saved: number;
   depth: number;
   storage_mode: string;
+  server_id: string | null;
 }
 
 interface SessionRow {
@@ -69,7 +70,8 @@ export function getDiscoverFeed(db: DB, userId: string, limit: number): Discover
         WHEN fp.relative_path_from_root = '' THEN 0
         ELSE LENGTH(fp.relative_path_from_root) - LENGTH(REPLACE(fp.relative_path_from_root, '/', ''))
       END AS depth,
-      fp.storage_mode
+      fp.storage_mode,
+      fp.server_id
     FROM file_paths fp
     JOIN files f ON f.id = fp.file_id
     WHERE

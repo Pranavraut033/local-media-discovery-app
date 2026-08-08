@@ -5,11 +5,14 @@
  * verify without having access to the database.
  *
  * Token payload:
- *   mediaId  — file ID (used as cache key on the media server)
- *   path     — absolute path on this machine (rclone VFS mount path)
- *   ext      — lowercase extension with leading dot, e.g. ".mp4"
- *   type     — "image" | "video"
- *   exp      — unix epoch (iat + 7200 s)
+ *   mediaId      — file ID (used as cache key on the media server)
+ *   path         — absolute local FS path (local files only; empty for remote)
+ *   ext          — lowercase extension with leading dot, e.g. ".mp4"
+ *   type         — "image" | "video"
+ *   storageMode  — "local" | "rclone" | "webdav" (defaults to "local" for old tokens)
+ *   serverId     — remote_servers.id (remote only)
+ *   remotePath   — provider-specific path (remote only, e.g. "mysftp:photos/a.mp4")
+ *   exp          — unix epoch (iat + 7200 s)
  */
 import { createHmac, timingSafeEqual } from 'crypto';
 
@@ -18,6 +21,12 @@ export interface StreamTokenPayload {
   path: string;
   ext: string;
   type: 'image' | 'video';
+  /** Defaults to 'local' when absent (old tokens). */
+  storageMode?: 'local' | 'rclone' | 'webdav';
+  /** remote_servers.id — present only for remote storage modes */
+  serverId?: string;
+  /** Provider-specific path — present only for remote storage modes */
+  remotePath?: string;
 }
 
 interface InternalPayload extends StreamTokenPayload {

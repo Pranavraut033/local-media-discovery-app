@@ -6,18 +6,20 @@
 
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useInfiniteFeed, useLikeMutation, useSaveMutation, useMediaPreload } from '@/lib/hooks';
+import { cancelPrefetch } from '@/lib/api';
 import { useQueryClient } from '@tanstack/react-query';
 import type { FeedItem } from '@/lib/hooks';
 import { MediaCard } from './MediaCard';
-import { PlyrVideoModal } from './PlyrVideoModal';
-import { Grid3x3, Layers, Heart, Bookmark, Maximize, Minimize } from 'lucide-react';
-import { getViewMode, setViewMode, getLastViewedMedia, setLastViewedMedia } from '@/lib/storage';
+import { KeyboardShortcutsGuide } from './KeyboardShortcutsGuide';
+import { ShutdownButton } from './ShutdownButton';
+import { Grid3x3, Layers, Heart, Bookmark, Maximize, Minimize, Keyboard } from 'lucide-react';
 import Masonry from 'react-masonry-css';
 import { useFullscreen } from '@/lib/useFullscreen';
 import {
   MEDIA_MASONRY_BREAKPOINTS,
   MEDIA_MASONRY_CLASS,
   MEDIA_MASONRY_COLUMN_CLASS,
+  SAFE_TOP_INSET_CLASS,
 } from '@/lib/layout';
 import { useIndexingStore } from '@/lib/stores/indexing.store';
 import { useUIStore } from '@/lib/stores/ui.store';
@@ -37,12 +39,12 @@ interface FeedProps {
 }
 
 export function Feed({ initialMode, onViewSource, onModeChange }: FeedProps) {
-  const [mode, setMode] = useState<FeedMode>(() => initialMode || getViewMode());
+  const [mode, setMode] = useState<FeedMode>(() => initialMode || useUIStore.getState().viewMode);
   const [allItems, setAllItems] = useState<FeedItem[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [isResuming, setIsResuming] = useState(true);
   const [feedSeed] = useState(() => `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`);
-  const [expandedVideo, setExpandedVideo] = useState<{ src: string; title?: string } | null>(null);
+  const [showShortcuts, setShowShortcuts] = useState(false);
   const feedSourceType = useUIStore((s) => s.preferences.feedSourceType);
   const jobs = useIndexingStore((s) => s.jobs);
   const queryClient = useQueryClient();
@@ -87,10 +89,30 @@ export function Feed({ initialMode, onViewSource, onModeChange }: FeedProps) {
 
   const currentMedia = allItems[currentIndex];
 
-  // Preload next media items for better performance
-  const mediaIds = allItems.map(item => item.id);
-  useMediaPreload(mediaIds, {
-    prefetchDistance: 5,
+  // Grid (feed) mode has no single "current" item — currentIndex never moves
+  // there — so track which cards are actually on screen via each MediaCard's
+  // IntersectionObserver and use the topmost visible one as the preload anchor.
+  // Reels mode keeps using currentIndex (one card at a time, already accurate).
+  const [visibleIndices, setVisibleIndices] = useState<Set<number>>(new Set());
+  const handleVisibleIndexChange = useCallback((index: number, visible: boolean) => {
+    setVisibleIndices((prev) => {
+      if (visible === prev.has(index)) return prev;
+      const next = new Set(prev);
+      if (visible) next.add(index); else next.delete(index);
+      return next;
+    });
+  }, []);
+  const previewBaseIndex = mode === 'feed' && visibleIndices.size > 0
+    ? Math.min(...visibleIndices)
+    : currentIndex;
+
+  // Preload only the next 3 items from the anchor — not the whole list from index 0.
+  const nearMediaIds = useMemo(
+    () => allItems.slice(previewBaseIndex, previewBaseIndex + 3).map((item) => item.id),
+    [allItems, previewBaseIndex]
+  );
+  useMediaPreload(nearMediaIds, {
+    prefetchDistance: 3,
     enableThumbnails: true,
     enableMetadata: true,
   });
@@ -196,7 +218,10 @@ export function Feed({ initialMode, onViewSource, onModeChange }: FeedProps) {
   // Resume position from last session
   useEffect(() => {
     if (isResuming && allItems.length > 0) {
-      const lastViewed = getLastViewedMedia();
+      const uiState = useUIStore.getState();
+      const lastViewed = uiState.lastViewedMediaId
+        ? { mediaId: uiState.lastViewedMediaId }
+        : null;
       if (lastViewed) {
         const index = allItems.findIndex(item => item.id === lastViewed.mediaId);
         if (index !== -1) {
@@ -207,6 +232,16 @@ export function Feed({ initialMode, onViewSource, onModeChange }: FeedProps) {
     }
   }, [allItems, isResuming]);
 
+  // Cancel background downloads when this view is hidden or unmounted (page switch, tab hide).
+  useEffect(() => {
+    const handleHide = () => { if (document.hidden) cancelPrefetch(); };
+    document.addEventListener('visibilitychange', handleHide);
+    return () => {
+      document.removeEventListener('visibilitychange', handleHide);
+      cancelPrefetch();
+    };
+  }, []);
+
   // Let the layout react to feed/reels mode for global chrome visibility.
   useEffect(() => {
     onModeChange?.(mode);
@@ -215,7 +250,7 @@ export function Feed({ initialMode, onViewSource, onModeChange }: FeedProps) {
   // Save current position when index changes
   useEffect(() => {
     if (!isResuming && allItems[currentIndex]) {
-      setLastViewedMedia(allItems[currentIndex].id);
+      useUIStore.getState().setLastViewedMedia(allItems[currentIndex].id);
     }
   }, [currentIndex, allItems, isResuming]);
 
@@ -337,14 +372,75 @@ export function Feed({ initialMode, onViewSource, onModeChange }: FeedProps) {
   const toggleMode = useCallback(() => {
     setMode((prev) => {
       const newMode = prev === 'reels' ? 'feed' : 'reels';
-      setViewMode(newMode);
+      useUIStore.getState().setViewMode(newMode);
       return newMode;
     });
   }, []);
 
+  // Grid card's "open" button jumps straight to that item in the single-video
+  // view — same query/cache, just a mode + index switch, no refetch.
+  const handleOpenInReels = useCallback((index: number) => {
+    setCurrentIndex(index);
+    setMode('reels');
+    useUIStore.getState().setViewMode('reels');
+  }, []);
+
+  // Global keyboard shortcuts. Up/Down/Like/Save are reels-only (they act on
+  // "currentMedia", which only tracks something meaningful there); grid/fullscreen
+  // toggle and the shortcuts guide work in either view. Space/M/Left/Right (seek,
+  // play, mute) are handled inside PlyrVideo itself, which owns the player.
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
+        return;
+      }
+
+      if (e.key === '?') {
+        e.preventDefault();
+        setShowShortcuts((prev) => !prev);
+        return;
+      }
+      if (e.key === 'Escape' && showShortcuts) {
+        e.preventDefault();
+        setShowShortcuts(false);
+        return;
+      }
+      if (e.key === 'g' || e.key === 'G') {
+        e.preventDefault();
+        toggleMode();
+        return;
+      }
+      if (e.key === 'f' || e.key === 'F') {
+        e.preventDefault();
+        toggleFullscreen();
+        return;
+      }
+
+      if (mode !== 'reels') return;
+
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        handlePrevious();
+      } else if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        handleNext();
+      } else if (e.key === 'l' || e.key === 'L') {
+        e.preventDefault();
+        handleLike();
+      } else if (e.key === 's' || e.key === 'S') {
+        e.preventDefault();
+        handleSave();
+      }
+    };
+
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [mode, showShortcuts, handlePrevious, handleNext, handleLike, handleSave, toggleMode, toggleFullscreen]);
+
   if (isLoading && allItems.length === 0) {
     return (
-      <div className="w-full h-screen flex items-center justify-center bg-neutral-950">
+      <div className="w-full h-dvh flex items-center justify-center bg-neutral-950">
         <div className="text-center space-y-6">
           <div className="w-14 h-14 border-4 border-white/20 border-t-white rounded-full animate-spin mx-auto"></div>
           <div className="space-y-2">
@@ -366,7 +462,7 @@ export function Feed({ initialMode, onViewSource, onModeChange }: FeedProps) {
           ? `Hashing ${activeJob.done} / ${activeJob.total}`
           : 'Queued…';
       return (
-        <div className="w-full h-screen flex items-center justify-center px-4 bg-neutral-950">
+        <div className="w-full h-dvh flex items-center justify-center px-4 bg-neutral-950">
           <div className="text-center space-y-6 max-w-md w-full">
             <div className="w-14 h-14 border-4 border-white/20 border-t-white rounded-full animate-spin mx-auto" />
             <div className="space-y-2">
@@ -388,7 +484,7 @@ export function Feed({ initialMode, onViewSource, onModeChange }: FeedProps) {
     }
 
     return (
-      <div className="w-full h-screen flex items-center justify-center px-4 bg-neutral-950">
+      <div className="w-full h-dvh flex items-center justify-center px-4 bg-neutral-950">
         <div className="text-center space-y-4 max-w-md">
           <h1 className="font-serif text-3xl tracking-tight text-neutral-100">No media yet</h1>
           <p className="text-neutral-400">No media found. Please index your media first.</p>
@@ -400,9 +496,9 @@ export function Feed({ initialMode, onViewSource, onModeChange }: FeedProps) {
   // Reels Mode (Cinematic, immersive vertical pager)
   if (mode === 'reels') {
     return (
-      <div className="relative h-screen w-full overflow-hidden bg-neutral-950">
+      <div className="relative h-dvh w-full overflow-hidden bg-neutral-950">
         {/* Top Chrome - Gradient fade with controls */}
-        <div className="fixed top-0 inset-x-0 z-40 h-16 bg-linear-to-b from-black/70 to-transparent flex items-start justify-between px-4 pt-2">
+        <div className={`fixed inset-x-0 z-40 h-16 bg-linear-to-b from-black/70 to-transparent flex items-start justify-between px-4 pt-2 ${SAFE_TOP_INSET_CLASS}`}>
           <span className="text-neutral-100 text-xs font-medium pt-2">
             {currentIndex + 1} / {allItems.length}
           </span>
@@ -421,6 +517,14 @@ export function Feed({ initialMode, onViewSource, onModeChange }: FeedProps) {
             >
               {isFullscreen ? <Minimize size={20} /> : <Maximize size={20} />}
             </button>
+            <button
+              onClick={() => setShowShortcuts(true)}
+              className="h-10 w-10 rounded-lg bg-black/40 text-white/80 hover:text-white backdrop-blur-md border border-white/15 flex items-center justify-center transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300"
+              aria-label="Show keyboard shortcuts"
+            >
+              <Keyboard size={20} />
+            </button>
+            <ShutdownButton />
           </div>
         </div>
 
@@ -430,7 +534,7 @@ export function Feed({ initialMode, onViewSource, onModeChange }: FeedProps) {
           onTouchStart={handleTouchStart}
           onTouchEnd={handleTouchEnd}
           onWheel={handleWheel}
-          className="absolute inset-0 h-full w-full overflow-hidden"
+          className="absolute inset-0 h-full w-full overflow-hidden overscroll-contain touch-none"
         >
           {/* Single Media Item (Full Height) */}
           <div className="relative h-full w-full flex items-center justify-center">
@@ -450,7 +554,7 @@ export function Feed({ initialMode, onViewSource, onModeChange }: FeedProps) {
             <button
               onClick={handlePrevious}
               disabled={currentIndex === 0}
-              className="text-white/60 hover:text-white disabled:opacity-30 transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300 rounded px-2 shrink-0"
+              className="text-white/60 hover:text-white disabled:opacity-30 transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300 rounded px-3 py-2 shrink-0"
               aria-label="Previous"
             >
               ← Prev
@@ -459,7 +563,7 @@ export function Feed({ initialMode, onViewSource, onModeChange }: FeedProps) {
             <button
               onClick={handleLike}
               disabled={likeMutation.isPending}
-              className={`h-9 w-9 rounded-full backdrop-blur-md border transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300 flex items-center justify-center shrink-0 ${currentMedia?.liked
+              className={`h-11 w-11 rounded-full backdrop-blur-md border transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300 flex items-center justify-center shrink-0 ${currentMedia?.liked
                 ? 'bg-red-500/80 text-white border-red-400'
                 : 'bg-black/35 text-white/80 border-white/20 hover:text-white'
                 } disabled:opacity-50`}
@@ -474,7 +578,7 @@ export function Feed({ initialMode, onViewSource, onModeChange }: FeedProps) {
             <button
               onClick={handleSave}
               disabled={saveMutation.isPending}
-              className={`h-9 w-9 rounded-full backdrop-blur-md border transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300 flex items-center justify-center shrink-0 ${currentMedia?.saved
+              className={`h-11 w-11 rounded-full backdrop-blur-md border transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300 flex items-center justify-center shrink-0 ${currentMedia?.saved
                 ? 'bg-amber-400/80 text-neutral-950 border-amber-300'
                 : 'bg-black/35 text-white/80 border-white/20 hover:text-white'
                 } disabled:opacity-50`}
@@ -496,7 +600,7 @@ export function Feed({ initialMode, onViewSource, onModeChange }: FeedProps) {
             <button
               onClick={handleNext}
               disabled={currentIndex === allItems.length - 1}
-              className="text-white/60 hover:text-white disabled:opacity-30 transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300 rounded px-2 shrink-0"
+              className="text-white/60 hover:text-white disabled:opacity-30 transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300 rounded px-3 py-2 shrink-0"
               aria-label="Next"
             >
               Next →
@@ -510,15 +614,17 @@ export function Feed({ initialMode, onViewSource, onModeChange }: FeedProps) {
             <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
           </div>
         )}
+
+        <KeyboardShortcutsGuide isOpen={showShortcuts} onClose={() => setShowShortcuts(false)} />
       </div>
     );
   }
 
   // Feed Mode (Masonry grid with Ethos Narrative chrome)
   return (
-    <div className="w-full h-screen flex flex-col bg-neutral-950 overflow-hidden">
+    <div className="w-full h-dvh flex flex-col bg-neutral-950 overflow-hidden">
       {/* Top Chrome - Gradient chrome with title and controls */}
-      <div className="fixed top-0 inset-x-0 z-40 h-14 md:h-16 bg-linear-to-b from-black/70 to-transparent flex items-start justify-between px-4 md:px-8 pt-3">
+      <div className={`fixed inset-x-0 z-40 h-14 md:h-16 bg-linear-to-b from-black/70 to-transparent flex items-start justify-between px-4 md:px-8 pt-3 ${SAFE_TOP_INSET_CLASS}`}>
         <h1 className="font-serif text-xl md:text-2xl tracking-tight text-neutral-100">Feed</h1>
         <div className="flex items-center gap-2">
           <button
@@ -535,6 +641,14 @@ export function Feed({ initialMode, onViewSource, onModeChange }: FeedProps) {
           >
             {isFullscreen ? <Minimize size={20} /> : <Maximize size={20} />}
           </button>
+          <button
+            onClick={() => setShowShortcuts(true)}
+            className="h-10 w-10 rounded-lg bg-black/40 text-white/80 hover:text-white backdrop-blur-md border border-white/15 flex items-center justify-center transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300"
+            aria-label="Show keyboard shortcuts"
+          >
+            <Keyboard size={20} />
+          </button>
+          <ShutdownButton />
         </div>
       </div>
 
@@ -549,16 +663,18 @@ export function Feed({ initialMode, onViewSource, onModeChange }: FeedProps) {
             className={MEDIA_MASONRY_CLASS}
             columnClassName={MEDIA_MASONRY_COLUMN_CLASS}
           >
-            {allItems.map((item) => (
+            {allItems.map((item, index) => (
               <div
                 key={item.id}
                 className="mb-2 md:mb-4 break-inside-avoid"
               >
                 <MediaCard
                   media={item}
+                  index={index}
                   onVisible={() => { }}
+                  onVisibleIndexChange={handleVisibleIndexChange}
                   onViewSource={onViewSource}
-                  onVideoExpand={(src, title) => setExpandedVideo({ src, title })}
+                  onOpenInReels={handleOpenInReels}
                   mode="feed"
                   enableHoverAutoplay={true}
                   className="w-full rounded-2xl overflow-hidden"
@@ -577,12 +693,7 @@ export function Feed({ initialMode, onViewSource, onModeChange }: FeedProps) {
         </div>
       </div>
 
-      <PlyrVideoModal
-        isOpen={expandedVideo !== null}
-        src={expandedVideo?.src ?? ''}
-        title={expandedVideo?.title}
-        onClose={() => setExpandedVideo(null)}
-      />
+      <KeyboardShortcutsGuide isOpen={showShortcuts} onClose={() => setShowShortcuts(false)} />
     </div>
   );
 }
