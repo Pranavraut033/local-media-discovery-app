@@ -16,6 +16,7 @@ interface PlyrVideoProps {
 export function PlyrVideo({ src, poster, className = '' }: PlyrVideoProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const playerRef = useRef<Plyr | null>(null);
+  const progressBarRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const videoEl = videoRef.current;
@@ -50,7 +51,9 @@ export function PlyrVideo({ src, poster, className = '' }: PlyrVideoProps) {
           'fullscreen',
         ],
         settings: ['captions', 'speed', 'loop'],
-        keyboard: { focused: true, global: false },
+        // Plyr's own keyboard shortcuts default to a 10s arrow-key seek and
+        // would fire alongside our custom handler below; keep it fully off.
+        keyboard: { focused: false, global: false },
         clickToPlay: true,
         speed: { selected: 1, options: [0.5, 0.75, 1, 1.25, 1.5, 2] },
         autoplay: true,
@@ -70,12 +73,45 @@ export function PlyrVideo({ src, poster, className = '' }: PlyrVideoProps) {
     };
   }, [src]);
 
-  // Left/Right seek ±5s, Space play/pause, M mute. Kept local to this player
-  // (not Plyr's own keyboard shortcuts, which bind ArrowUp/Down to volume
-  // globally and would fight with the reels prev/next navigation in
-  // Feed/DiscoverView).
+  // Persistent top progress bar — updates directly via ref, bypassing React
+  // state, since timeupdate fires several times a second.
   useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
+    const videoEl = videoRef.current;
+    if (!videoEl) return;
+
+    const update = () => {
+      const bar = progressBarRef.current;
+      if (!bar || !videoEl.duration) return;
+      bar.style.width = `${(videoEl.currentTime / videoEl.duration) * 100}%`;
+    };
+
+    videoEl.addEventListener('timeupdate', update);
+    videoEl.addEventListener('loadedmetadata', update);
+    return () => {
+      videoEl.removeEventListener('timeupdate', update);
+      videoEl.removeEventListener('loadedmetadata', update);
+    };
+  }, [src]);
+
+  // Left/Right tap = seek ±5s. Left/Right hold (>500ms) = fast playback
+  // instead of seeking: 1.5x, bumped to 2x past 10s of holding. Space
+  // play/pause, M mute. Kept local to this player (not Plyr's own keyboard
+  // shortcuts, which bind ArrowUp/Down to volume globally and would fight
+  // with the reels prev/next navigation in Feed/DiscoverView).
+  useEffect(() => {
+    let holdTimer: ReturnType<typeof setTimeout> | null = null;
+    let speedUpTimer: ReturnType<typeof setTimeout> | null = null;
+    let holding = false;
+    let activeKey: string | null = null;
+
+    const clearTimers = () => {
+      if (holdTimer) clearTimeout(holdTimer);
+      if (speedUpTimer) clearTimeout(speedUpTimer);
+      holdTimer = null;
+      speedUpTimer = null;
+    };
+
+    const handleKeyDown = (e: KeyboardEvent) => {
       const player = playerRef.current;
       if (!player) return;
       const target = e.target as HTMLElement | null;
@@ -85,8 +121,15 @@ export function PlyrVideo({ src, poster, className = '' }: PlyrVideoProps) {
 
       if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
         e.preventDefault();
-        const delta = e.key === 'ArrowRight' ? 5 : -5;
-        player.currentTime = Math.min(Math.max(player.currentTime + delta, 0), player.duration || Infinity);
+        if (e.repeat) return; // ignore OS key-repeat; we track our own hold timing
+        activeKey = e.key;
+        holdTimer = setTimeout(() => {
+          holding = true;
+          player.speed = 1.5;
+          speedUpTimer = setTimeout(() => {
+            player.speed = 2;
+          }, 10000);
+        }, 500);
       } else if (e.key === ' ') {
         e.preventDefault();
         player.togglePlay();
@@ -95,8 +138,29 @@ export function PlyrVideo({ src, poster, className = '' }: PlyrVideoProps) {
         player.muted = !player.muted;
       }
     };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
+
+    const handleKeyUp = (e: KeyboardEvent) => {
+      const player = playerRef.current;
+      if (!player || e.key !== activeKey) return;
+
+      clearTimers();
+      if (holding) {
+        player.speed = 1;
+      } else {
+        const delta = e.key === 'ArrowRight' ? 5 : -5;
+        player.currentTime = Math.min(Math.max(player.currentTime + delta, 0), player.duration || Infinity);
+      }
+      holding = false;
+      activeKey = null;
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+      clearTimers();
+    };
   }, []);
 
   return (
@@ -110,6 +174,11 @@ export function PlyrVideo({ src, poster, className = '' }: PlyrVideoProps) {
         playsInline
         preload="auto"
       />
+      {/* Persistent playback progress, always visible above Plyr's own
+          controls (which fade out) so position is readable at a glance. */}
+      <div className="absolute top-0 left-0 right-0 z-20 h-1 bg-white/20">
+        <div ref={progressBarRef} className="h-full bg-amber-400" style={{ width: '0%' }} />
+      </div>
       {/* Plyr sizes itself off the video's intrinsic aspect ratio (padding-bottom
           hack) by default, which makes a portrait video taller than its container
           and pushes the controls off-screen. Force it to fill the host instead. */}
