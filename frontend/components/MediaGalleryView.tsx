@@ -146,8 +146,8 @@ export function MediaGalleryView({ items, title, icon, onBack, onViewSource, emp
   }, [mode, showShortcuts, handlePrevious, handleNext, handleLike, handleSave, toggleMode, toggleFullscreen]);
 
   const headerControls = (
-    <div className={`fixed inset-x-0 z-40 h-14 md:h-16 bg-linear-to-b from-black/70 to-transparent flex items-start justify-between px-4 md:px-8 pt-3 ${SAFE_TOP_INSET_CLASS}`}>
-      <div className="flex items-center gap-3 pt-0.5 min-w-0">
+    <div className={`fixed inset-x-0 z-40 h-14 md:h-16 bg-linear-to-b from-black/70 to-transparent flex items-start justify-between px-4 md:px-8 pt-3 pointer-events-none ${SAFE_TOP_INSET_CLASS}`}>
+      <div className="pointer-events-auto flex items-center gap-3 pt-0.5 min-w-0">
         {onBack && (
           <button
             onClick={onBack}
@@ -165,7 +165,7 @@ export function MediaGalleryView({ items, title, icon, onBack, onViewSource, emp
           <span className="hidden sm:inline text-neutral-500 text-xs shrink-0">({items.length})</span>
         )}
       </div>
-      <div className="flex items-center gap-1 sm:gap-1.5 shrink-0">
+      <div className="pointer-events-auto flex items-center gap-1 sm:gap-1.5 shrink-0">
         {headerExtra}
         <button
           onClick={toggleMode}
@@ -225,8 +225,8 @@ export function MediaGalleryView({ items, title, icon, onBack, onViewSource, emp
           </div>
         </div>
 
-        <div className="fixed bottom-0 left-0 right-0 z-40 px-4 pb-[max(env(safe-area-inset-bottom),1rem)] pt-4">
-          <div className="mx-auto max-w-xl flex h-14 items-center gap-2 rounded-full bg-black/45 px-3 backdrop-blur-lg border border-white/15">
+        <div className="fixed bottom-0 left-0 right-0 z-40 px-4 pb-[max(env(safe-area-inset-bottom),1rem)] pt-4 pointer-events-none">
+          <div className="pointer-events-auto mx-auto max-w-xl flex h-14 items-center gap-2 rounded-full bg-black/45 px-3 backdrop-blur-lg border border-white/15">
             <button
               onClick={handlePrevious}
               disabled={clampedIndex === 0}

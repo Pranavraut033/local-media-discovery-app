@@ -501,11 +501,11 @@ export function Feed({ initialMode, onViewSource, onModeChange }: FeedProps) {
     return (
       <div className="relative h-dvh w-full overflow-hidden bg-neutral-950">
         {/* Top Chrome - Gradient fade with controls */}
-        <div className={`fixed inset-x-0 z-40 h-16 bg-linear-to-b from-black/70 to-transparent flex items-start justify-between px-4 pt-2 ${SAFE_TOP_INSET_CLASS}`}>
-          <span className="text-neutral-100 text-xs font-medium pt-2">
+        <div className={`fixed inset-x-0 z-40 h-16 bg-linear-to-b from-black/70 to-transparent flex items-start justify-between px-4 pt-2 pointer-events-none ${SAFE_TOP_INSET_CLASS}`}>
+          <span className="pointer-events-auto text-neutral-100 text-xs font-medium pt-2">
             {currentIndex + 1} / {allItems.length}
           </span>
-          <div className="flex gap-2">
+          <div className="pointer-events-auto flex gap-2">
             <button
               onClick={toggleMode}
               className="h-10 w-10 rounded-lg bg-black/40 text-white/80 hover:text-white backdrop-blur-md border border-white/15 flex items-center justify-center transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300"
@@ -552,8 +552,8 @@ export function Feed({ initialMode, onViewSource, onModeChange }: FeedProps) {
         </div>
 
         {/* Bottom Navigation - Context aware */}
-        <div className="fixed bottom-0 left-0 right-0 z-40 px-4 pb-[max(env(safe-area-inset-bottom),1rem)] pt-4">
-          <div className="mx-auto max-w-xl flex h-14 items-center gap-2 rounded-full bg-black/45 px-3 backdrop-blur-lg border border-white/15">
+        <div className="fixed bottom-0 left-0 right-0 z-40 px-4 pb-[max(env(safe-area-inset-bottom),1rem)] pt-4 pointer-events-none">
+          <div className="pointer-events-auto mx-auto max-w-xl flex h-14 items-center gap-2 rounded-full bg-black/45 px-3 backdrop-blur-lg border border-white/15">
             <button
               onClick={handlePrevious}
               disabled={currentIndex === 0}
@@ -627,9 +627,9 @@ export function Feed({ initialMode, onViewSource, onModeChange }: FeedProps) {
   return (
     <div className="w-full h-dvh flex flex-col bg-neutral-950 overflow-hidden">
       {/* Top Chrome - Gradient chrome with title and controls */}
-      <div className={`fixed inset-x-0 z-40 h-14 md:h-16 bg-linear-to-b from-black/70 to-transparent flex items-start justify-between px-4 md:px-8 pt-3 ${SAFE_TOP_INSET_CLASS}`}>
-        <h1 className="font-serif text-xl md:text-2xl tracking-tight text-neutral-100">Feed</h1>
-        <div className="flex items-center gap-2">
+      <div className={`fixed inset-x-0 z-40 h-14 md:h-16 bg-linear-to-b from-black/70 to-transparent flex items-start justify-between px-4 md:px-8 pt-3 pointer-events-none ${SAFE_TOP_INSET_CLASS}`}>
+        <h1 className="pointer-events-auto font-serif text-xl md:text-2xl tracking-tight text-neutral-100">Feed</h1>
+        <div className="pointer-events-auto flex items-center gap-2">
           <button
             onClick={toggleMode}
             className="h-10 w-10 rounded-lg bg-black/40 text-white/80 hover:text-white backdrop-blur-md border border-white/15 flex items-center justify-center transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300"

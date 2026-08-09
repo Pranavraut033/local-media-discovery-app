@@ -24,8 +24,8 @@ export function NavigationBar({ activeTab, onTabChange }: NavigationBarProps) {
   ];
 
   return (
-    <nav className="fixed bottom-0 left-0 right-0 z-40 px-4 pb-[max(env(safe-area-inset-bottom),1rem)]">
-      <div className="mx-auto max-w-md flex h-14 items-center justify-between rounded-full bg-black/45 px-4 backdrop-blur-lg border border-white/15">
+    <nav className="fixed bottom-0 left-0 right-0 z-40 px-4 pb-[max(env(safe-area-inset-bottom),1rem)] pointer-events-none">
+      <div className="pointer-events-auto mx-auto max-w-md flex h-14 items-center justify-between rounded-full bg-black/45 px-4 backdrop-blur-lg border border-white/15">
         {tabs.map((tab) => {
           const Icon = tab.icon;
           const isActive = activeTab === tab.id;

@@ -339,8 +339,8 @@ export function DiscoverView({ onViewSource }: DiscoverViewProps) {
 
   // ── Shared header controls ────────────────────────────────────────────────
   const headerControls = (
-    <div className={`fixed inset-x-0 z-40 h-14 md:h-16 bg-linear-to-b from-black/70 to-transparent flex items-start justify-between px-4 md:px-8 pt-3 ${SAFE_TOP_INSET_CLASS}`}>
-      <div className="flex items-center gap-2 pt-0.5 min-w-0">
+    <div className={`fixed inset-x-0 z-40 h-14 md:h-16 bg-linear-to-b from-black/70 to-transparent flex items-start justify-between px-4 md:px-8 pt-3 pointer-events-none ${SAFE_TOP_INSET_CLASS}`}>
+      <div className="pointer-events-auto flex items-center gap-2 pt-0.5 min-w-0">
         <h1 className="font-serif text-xl md:text-2xl tracking-tight text-neutral-100 truncate">
           Discover
         </h1>
@@ -348,7 +348,7 @@ export function DiscoverView({ onViewSource }: DiscoverViewProps) {
           <span className="hidden sm:inline text-neutral-500 text-xs shrink-0">{seenCount} seen</span>
         )}
       </div>
-      <div className="flex items-center gap-1 sm:gap-1.5 shrink-0">
+      <div className="pointer-events-auto flex items-center gap-1 sm:gap-1.5 shrink-0">
         {/* Batch size toggle — compact cycle button on narrow screens, full two-button toggle from sm up */}
         <button
           onClick={() => handleBatchSizeChange(batchSize === 50 ? 100 : 50)}
@@ -472,8 +472,8 @@ export function DiscoverView({ onViewSource }: DiscoverViewProps) {
 
         {/* Bottom bar */}
         {!isAtEnd && (
-          <div className="fixed bottom-0 left-0 right-0 z-40 px-4 pb-[max(env(safe-area-inset-bottom),1rem)] pt-4">
-            <div className="mx-auto max-w-xl flex h-14 items-center gap-2 rounded-full bg-black/45 px-3 backdrop-blur-lg border border-white/15">
+          <div className="fixed bottom-0 left-0 right-0 z-40 px-4 pb-[max(env(safe-area-inset-bottom),1rem)] pt-4 pointer-events-none">
+            <div className="pointer-events-auto mx-auto max-w-xl flex h-14 items-center gap-2 rounded-full bg-black/45 px-3 backdrop-blur-lg border border-white/15">
               <button
                 onClick={() => setCurrentIndex((p) => Math.max(p - 1, 0))}
                 disabled={currentIndex === 0}
