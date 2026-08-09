@@ -1,6 +1,6 @@
 {
   "name": "local-media-discovery-app",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Local-first media discovery application",
   "main": "desktop/main.cjs",
   "private": true,
