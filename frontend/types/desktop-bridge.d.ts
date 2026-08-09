@@ -10,6 +10,8 @@ declare global {
       getAutoPin?: () => Promise<{ pin: string | null }>;
       createAutoPin?: () => Promise<{ pin: string }>;
       quitApp?: () => Promise<void>;
+      showInFolder?: (filePath: string) => Promise<void>;
+      openFile?: (filePath: string) => Promise<void>;
     };
   }
 }

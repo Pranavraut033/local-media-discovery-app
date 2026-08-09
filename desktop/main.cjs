@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, safeStorage } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, safeStorage, shell } = require('electron');
 const path = require('path');
 
 const fs = require('fs');
@@ -546,6 +546,23 @@ ipcMain.handle('desktop:get-auto-pin', async () => {
 
 ipcMain.handle('desktop:quit-app', async () => {
   app.quit();
+});
+
+ipcMain.handle('desktop:show-in-folder', async (_event, filePath) => {
+  if (typeof filePath !== 'string' || !filePath) {
+    throw new Error('A file path is required.');
+  }
+  shell.showItemInFolder(filePath);
+});
+
+ipcMain.handle('desktop:open-file', async (_event, filePath) => {
+  if (typeof filePath !== 'string' || !filePath) {
+    throw new Error('A file path is required.');
+  }
+  const error = await shell.openPath(filePath);
+  if (error) {
+    throw new Error(error);
+  }
 });
 
 ipcMain.handle('desktop:create-auto-pin', async () => {

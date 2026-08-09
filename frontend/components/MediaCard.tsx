@@ -11,7 +11,8 @@ import { LikeButton, SaveButton, HideButton } from './InteractionButtons';
 import { useEffect, useRef, useState } from 'react';
 import { useLikeMutation, useSaveMutation, useViewMutation, useHideMutation, FeedItem } from '@/lib/hooks';
 import { getStreamUrl, getThumbnailUrl } from '@/lib/api';
-import { Maximize2 } from 'lucide-react';
+import { isDesktopRuntime, showInFolder, openFileExternally } from '@/lib/desktop';
+import { Maximize2, FolderOpen, ExternalLink } from 'lucide-react';
 
 
 interface MediaCardProps {
@@ -65,6 +66,9 @@ export function MediaCard({ media, index, onVisible, onVisibleIndexChange, onVie
   const canOpenFolder = Boolean(onViewSource && parentFolderName && media.parentFolderPath);
 
   const isReelsMode = mode === 'reels';
+  // rclone-backed items store a "remote:path" string as their path, not a real
+  // filesystem location, so Finder/external-open only make sense for local files.
+  const canRevealLocally = isVideo && isDesktopRuntime() && media.storageMode === 'local';
 
   // Use Intersection Observer to detect when media is visible
   useEffect(() => {
@@ -172,17 +176,47 @@ export function MediaCard({ media, index, onVisible, onVisibleIndexChange, onVie
                 isCardHovered={isHovered}
               />
             )}
-            {!isReelsMode && onOpenInReels && index !== undefined && (
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onOpenInReels(index);
-                }}
-                className="absolute top-2 right-2 z-10 flex h-10 w-10 items-center justify-center rounded-full bg-black/50 text-white opacity-0 pointer-coarse:opacity-70 group-hover:opacity-100 transition-opacity hover:bg-black/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400"
-                aria-label="Open in full-screen player"
-              >
-                <Maximize2 size={17} />
-              </button>
+            {!isReelsMode && (onOpenInReels || canRevealLocally) && (
+              <div className="absolute top-2 right-2 z-10 flex flex-col gap-2 opacity-0 pointer-coarse:opacity-70 group-hover:opacity-100 transition-opacity">
+                {onOpenInReels && index !== undefined && (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onOpenInReels(index);
+                    }}
+                    className="flex h-10 w-10 items-center justify-center rounded-full bg-black/50 text-white hover:bg-black/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400"
+                    aria-label="Open in full-screen player"
+                  >
+                    <Maximize2 size={17} />
+                  </button>
+                )}
+                {canRevealLocally && (
+                  <>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        showInFolder(media.path);
+                      }}
+                      className="flex h-10 w-10 items-center justify-center rounded-full bg-black/50 text-white hover:bg-black/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400"
+                      aria-label="Show in Finder"
+                      title="Show in Finder"
+                    >
+                      <FolderOpen size={17} />
+                    </button>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        openFileExternally(media.path);
+                      }}
+                      className="flex h-10 w-10 items-center justify-center rounded-full bg-black/50 text-white hover:bg-black/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400"
+                      aria-label="Open in external player"
+                      title="Open in external player"
+                    >
+                      <ExternalLink size={17} />
+                    </button>
+                  </>
+                )}
+              </div>
             )}
           </div>
         ) : (
@@ -249,6 +283,32 @@ export function MediaCard({ media, index, onVisible, onVisibleIndexChange, onVie
       {/* Info Bar - Reels Mode Only (Bottom with gradient veil) */}
       {isReelsMode && (
         <div className="pointer-events-none absolute bottom-0 inset-x-0 bg-linear-to-t from-black/90 via-black/40 to-transparent pt-8 px-4 pb-4 z-20">
+          {canRevealLocally && (
+            <div className="pointer-events-auto flex justify-end gap-2 mb-3">
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  showInFolder(media.path);
+                }}
+                className="flex h-10 w-10 items-center justify-center rounded-full bg-black/50 text-white hover:bg-black/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400"
+                aria-label="Show in Finder"
+                title="Show in Finder"
+              >
+                <FolderOpen size={17} />
+              </button>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  openFileExternally(media.path);
+                }}
+                className="flex h-10 w-10 items-center justify-center rounded-full bg-black/50 text-white hover:bg-black/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400"
+                aria-label="Open in external player"
+                title="Open in external player"
+              >
+                <ExternalLink size={17} />
+              </button>
+            </div>
+          )}
           {/* Source Badge */}
           <div className="mb-3">
             <div className="flex items-center gap-2">

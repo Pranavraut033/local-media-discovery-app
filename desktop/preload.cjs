@@ -6,4 +6,6 @@ contextBridge.exposeInMainWorld('desktopBridge', {
   getAutoPin: async () => ipcRenderer.invoke('desktop:get-auto-pin'),
   createAutoPin: async () => ipcRenderer.invoke('desktop:create-auto-pin'),
   quitApp: async () => ipcRenderer.invoke('desktop:quit-app'),
+  showInFolder: async (filePath) => ipcRenderer.invoke('desktop:show-in-folder', filePath),
+  openFile: async (filePath) => ipcRenderer.invoke('desktop:open-file', filePath),
 });
