@@ -554,6 +554,7 @@ class RcloneMountService {
     if (this.isOwner) {
       await this.unmountAndKill();
       await this.cleanStaleSiblings();
+      fs.rmSync(this.cacheDir, { recursive: true, force: true });
       this.releaseOwnership();
     }
 
