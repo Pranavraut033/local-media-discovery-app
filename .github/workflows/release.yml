@@ -9,8 +9,15 @@ permissions:
   contents: write
 
 jobs:
-  release:
-    runs-on: ubuntu-latest
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: macos-latest
+            pack: desktop:pack:mac
+          - os: windows-latest
+            pack: desktop:pack:win
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
@@ -18,11 +25,35 @@ jobs:
         with:
           node-version: 20
 
-      - run: npm run install:all
-      - run: npm run build
+      - name: Build and package Electron app
+        shell: bash
+        run: npm run ${{ matrix.pack }}
+
+      - name: Upload installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.os }}
+          path: |
+            desktop/dist/*.dmg
+            desktop/dist/*.zip
+            desktop/dist/*.exe
+            desktop/dist/*.blockmap
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
 
       - name: Create draft GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           draft: true
           body_path: CHANGELOG.md
+          files: artifacts/**
