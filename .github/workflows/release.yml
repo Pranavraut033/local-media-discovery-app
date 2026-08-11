@@ -40,11 +40,11 @@ jobs:
 
       - name: Rebuild native modules for Electron
         shell: bash
-        run: npm run desktop:rebuild-native
+        run: npx electron-rebuild --version=$(node -p "require('./node_modules/electron/package.json').version") --module-dir=backend --only=better-sqlite3,bcrypt --force
 
       - name: Package Electron app
         shell: bash
-        run: npx electron-builder ${{ matrix.electron-builder-args }}
+        run: npx electron-builder ${{ matrix.electron-builder-args }} --publish never
 
       - name: Upload installers
         uses: actions/upload-artifact@v4
@@ -74,3 +74,15 @@ jobs:
           draft: true
           body_path: CHANGELOG.md
           files: artifacts/**
+
+  cleanup-failed-release:
+    needs: [build, release]
+    if: always() && needs.release.result == 'failure'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Delete orphaned draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release delete "${{ github.ref_name }}" --yes || true
