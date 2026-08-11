@@ -11,12 +11,13 @@ permissions:
 jobs:
   build:
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: macos-latest
-            pack: desktop:pack:mac
+            electron-builder-args: --mac dmg zip
           - os: windows-latest
-            pack: desktop:pack:win
+            electron-builder-args: --win nsis
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -25,9 +26,25 @@ jobs:
         with:
           node-version: 20
 
-      - name: Build and package Electron app
+      - name: Install dependencies
         shell: bash
-        run: npm run ${{ matrix.pack }}
+        run: npm run install:all
+
+      - name: Build TypeScript projects
+        shell: bash
+        run: npm run build
+
+      - name: Prune backend to production deps
+        shell: bash
+        run: cd backend && npm prune --production
+
+      - name: Rebuild native modules for Electron
+        shell: bash
+        run: npm run desktop:rebuild-native
+
+      - name: Package Electron app
+        shell: bash
+        run: npx electron-builder ${{ matrix.electron-builder-args }}
 
       - name: Upload installers
         uses: actions/upload-artifact@v4
